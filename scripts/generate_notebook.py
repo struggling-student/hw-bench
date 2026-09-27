@@ -406,6 +406,9 @@ some variability. The base environment did not provide counter-based HBM traffic
 cache hit rate, throttling, or energy measurements, so no attribution is claimed.'''))
 """)
 
+for index, cell in enumerate(cells):
+    cell["id"] = f"hwbench-cell-{index:03d}"
+
 notebook = nbf.v4.new_notebook(cells=cells, metadata={"kernelspec": {
     "display_name": "Python 3", "language": "python", "name": "python3"},
     "language_info": {"name": "python"}})
