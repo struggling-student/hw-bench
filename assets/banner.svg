@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="HW Bench banner: measured CPU and memory Roofline curves">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#091525"/>
+      <stop offset="0.58" stop-color="#122642"/>
+      <stop offset="1" stop-color="#10393d"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#66b8ed"/>
+      <stop offset="1" stop-color="#56d7bb"/>
+    </linearGradient>
+    <clipPath id="rounded"><rect width="1200" height="320" rx="18"/></clipPath>
+  </defs>
+  <g clip-path="url(#rounded)">
+    <rect width="1200" height="320" fill="url(#background)"/>
+    <g fill="none" stroke="#a9d2e2" stroke-opacity=".08" stroke-width="1">
+      <path d="M0 80H1200M0 160H1200M0 240H1200M200 0V320M400 0V320M600 0V320M800 0V320M1000 0V320"/>
+    </g>
+    <circle cx="1090" cy="-10" r="230" fill="#48d7bf" opacity=".055"/>
+    <circle cx="1010" cy="300" r="190" fill="#6aaef5" opacity=".055"/>
+
+    <rect x="54" y="46" width="272" height="28" rx="14" fill="#75bedb" fill-opacity=".11" stroke="#75bedb" stroke-opacity=".35"/>
+    <text x="190" y="65" text-anchor="middle" fill="#aee5f3" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700" letter-spacing="1.5">MEASURED HARDWARE ROOFLINES</text>
+    <text x="54" y="150" fill="#f3f8fc" font-family="Inter, system-ui, sans-serif" font-size="64" font-weight="800" letter-spacing="-2">HW Bench</text>
+    <text x="56" y="194" fill="#bdd1df" font-family="Inter, system-ui, sans-serif" font-size="21">CPU compute · DDR · HBM · Cache Mode</text>
+    <text x="56" y="226" fill="#91afc1" font-family="Inter, system-ui, sans-serif" font-size="15">Reproducible CRESCO8 Xeon Max characterization</text>
+
+    <g font-family="Inter, system-ui, sans-serif" font-size="13" font-weight="700">
+      <rect x="54" y="259" width="105" height="30" rx="8" fill="#61b0e6" fill-opacity=".13" stroke="#61b0e6" stroke-opacity=".55"/>
+      <text x="106" y="279" text-anchor="middle" fill="#b7e2ff">AVX-512</text>
+      <rect x="171" y="259" width="75" height="30" rx="8" fill="#a98ae8" fill-opacity=".14" stroke="#a98ae8" stroke-opacity=".55"/>
+      <text x="208" y="279" text-anchor="middle" fill="#dccaff">AMX</text>
+      <rect x="258" y="259" width="80" height="30" rx="8" fill="#ef897a" fill-opacity=".13" stroke="#ef897a" stroke-opacity=".55"/>
+      <text x="298" y="279" text-anchor="middle" fill="#ffc3b9">HBM</text>
+      <rect x="350" y="259" width="91" height="30" rx="8" fill="#5dd8b4" fill-opacity=".13" stroke="#5dd8b4" stroke-opacity=".55"/>
+      <text x="395" y="279" text-anchor="middle" fill="#b4f1db">Plotly</text>
+    </g>
+
+    <g transform="translate(704 38)">
+      <rect width="438" height="244" rx="16" fill="#071524" fill-opacity=".63" stroke="#bed5e5" stroke-opacity=".16"/>
+      <text x="24" y="31" fill="#93b5c7" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="700" letter-spacing="1.6">PERFORMANCE / INTENSITY</text>
+      <g fill="none" stroke="#b7d4df" stroke-opacity=".14" stroke-width="1">
+        <path d="M48 56V202H408M48 166H408M48 130H408M48 94H408M120 56V202M192 56V202M264 56V202M336 56V202"/>
+      </g>
+      <path d="M48 194L218 69H407" fill="none" stroke="#e98276" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M48 211L259 104H407" fill="none" stroke="#68b8ec" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M48 201L229 80H407" fill="none" stroke="#60d4b4" stroke-width="3" stroke-dasharray="8 7" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M48 69H407" fill="none" stroke="#e6edf4" stroke-opacity=".62" stroke-width="2" stroke-dasharray="4 6"/>
+      <g fill="#071524" stroke="#e98276" stroke-width="2.5">
+        <circle cx="104" cy="153" r="5"/><circle cx="155" cy="115" r="5"/><circle cx="205" cy="79" r="5"/>
+      </g>
+      <g font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="700">
+        <text x="335" y="63" fill="#d8e5ef">compute roof</text>
+        <text x="352" y="91" fill="#ffb6ab">HBM</text>
+        <text x="351" y="120" fill="#addcff">DDR</text>
+        <text x="352" y="188" fill="#92b6c7">FLOP/byte →</text>
+      </g>
+    </g>
+  </g>
+</svg>
