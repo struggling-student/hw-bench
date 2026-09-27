@@ -7,7 +7,9 @@
   at the top of `stream.c` — do not strip or edit it. In short: free to use, modify,
   and redistribute; results must follow the STREAM Run Rules to be called "STREAM
   benchmark results," and results from modified code must be labelled as such.
-- Not modified from upstream. `scripts/membench/build_stream.sh` compiles it with
-  `-DSTREAM_ARRAY_SIZE=N` at several sizes (see that script for the array-size
-  rationale) — this repo's runs are `numactl`-bound, single-node microbenchmarks used
-  to characterize CRESCO8's HBM/DDR NUMA nodes, not STREAM Run Rules submissions.
+- Not modified from upstream. This file is retained for provenance from the earlier
+  hardware-only prototype; it is **not** the kernel compiled by the current campaign.
+  The measured, `numactl`-bound Triad is implemented in
+  `benchmarks/stream/stream_triad.cpp` and built by `scripts/build_benchmarks.sh`.
+  Its results are labelled STREAM-*model* Triad measurements, not STREAM Run Rules
+  submissions.
