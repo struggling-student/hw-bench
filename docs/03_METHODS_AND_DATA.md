@@ -1,74 +1,32 @@
-# 03 — Methods and data
+# Methods and data
 
-## Placement and workload design
+## Measurement definitions
 
-The topology parser determines each physical socket's CPU list and local memory
-nodes. Native kernels use one worker per physical core, `OMP_PROC_BIND=close`,
-`OMP_PLACES=cores`, and `numactl --physcpubind`/`--membind` for first touch.
-Two-socket measurements launch two simultaneous processes, each bound to its own
-socket and local memory. The accepted BF16 oneDNN path is the measured exception:
-GNU OpenMP binding variables are unset inside the container after a controlled
-probe showed inverse scaling with them, while `numactl` restrictions remain.
+| Experiment | Work and timing |
+|---|---|
+| Triad | `A = B + 3C`; two FP64 reads and one write: 24 modeled bytes and two FLOPs per element. Allocation size is the total across all arrays. |
+| AVX-512 | Twelve independent FP32/FP64 vector FMA accumulators; every FMA counts multiply plus add. Long work blocks amortize OpenMP re-entry and checks. |
+| Native AMX | Four destination tiles, two BF16 operand tiles; `2 × 16 × 16 × 32` FLOPs per dot instruction. All destination values are checked against their expected result. |
+| oneDNN GEMM | `2MNK` FLOPs, warmed BF16 matrices at sizes 4096, 6144, and 8192. Untimed primitive execution verifies AMX; timed regions omit verbose logging. Four output entries are checked against FP32 dot references, and all outputs must be finite. |
+| FP64 intensity sweep | Eight independent AVX-512 chains; modeled source read plus destination write. `2NK` FLOPs over `16N` modeled bytes. |
+| Pointer chase | One randomized cyclic permutation of 64-byte nodes, seed 7, 1 GiB total allocation, one core. A full cycle is traversed before timing. ns/load is elapsed time divided by dependent loads, including loop and translation overhead. |
 
-| Measurement | Kernel and data model | Important settings |
-| --- | --- | --- |
-| Bandwidth | Validated Triad `A = B + s×C`; two 8-byte reads plus one 8-byte write per element | 8 GiB per socket for scaling; two warm-ups, first timed pass, five steady passes; 1, 2, 4, 8, 14, 28, 56 cores |
-| Cache capacity | Same Triad, with **total** active bytes across all arrays | 8, 16, 32, 48, 64, 96, 128 GiB per socket; one and two sockets |
-| AVX-512 | FP32 and FP64 FMA on twelve independent register accumulator chains | Disassembly must contain ZMM FMA; multiply and add each count as one FLOP |
-| AMX BF16 | Warmed PyTorch/oneDNN 6144³ GEMM, `2MNK` FLOPs | 4096³ probe retained; oneDNN verbose must name an AMX implementation |
-| AMX INT8 | Native tile-resident dot product | Disassembly must contain `tdpbssd`; result reported in integer OP/s |
-| Intensity | Corrected FP64 kernel with eight independent AVX-512 chains | `K = 1…256` FMAs/element, explicit modeled source/destination bytes and checksum |
+Five duration-based samples follow warm-up. Native work loops complete whole work blocks, so end times can slightly exceed the planned one-second interval. Actual elapsed time determines the rate. CPU and memory masks follow discovered topology and first touch. Native kernels report the actual OpenMP worker count. The oneDNN path retains numactl restrictions and omits inner GNU OpenMP placement variables.
 
-The available oneDNN INT8 API reported only a generic implementation, so it was
-not accepted as AMX proof; the native tile kernel supplies the INT8 ceiling.
-Cache Mode's “first” pass comes after allocation initialization and first touch;
-it is **not** a pristine cold-cache measurement. The 64 GiB HBM capacity marker is
-a hardware capacity reference, not a claimed abrupt bandwidth change point.
+All participants in a concurrent test finish initialization and warm-up before a readiness barrier. The leader publishes a future start using `CLOCK_MONOTONIC`. Per-sample work and start/end times are retained. Aggregate rate is summed work divided by `max(end) − min(start)`, with shared-window overlap of at least 95%. Adding separately timed participant rates is not permitted.
 
-The optional Flat concurrent-tier run divides one socket into 28 DDR-bound and
-28 HBM-bound cores, with 8 GiB **per process**. Its summed rate is a diagnostic
-and is not used as a standard Roofline bandwidth ceiling.
+## Data and selection
 
-## Normalization and statistics
+`measurements.csv` retains individual samples with portable source paths, campaign IDs, memory socket/locality, implementation, matrix shape, modeled traffic, load counts, timing intervals, compiler evidence, and acceptance reasons. `selection_audit.csv` records source-level admission decisions. INT8 remains raw archival evidence and is not normalized into the floating-point study.
 
-`hwbench.process` reads all raw JSON, excludes non-target-host records, keeps
-successful individual repetitions, and constructs simultaneous dual-process
-aggregates. It writes:
+Compiler metadata and retained disassembly are read from each campaign's system directory. Failed correctness, invalid timings, worker mismatches, missing ISA evidence, wrong hosts, legacy affinity defects, and dependency-limited sweeps are excluded from thesis statistics. Independent campaigns are never deduplicated; an explicit successful `retry_of` can supersede a source while retaining both records.
 
-- `data/processed/measurements.csv`: one row per timed sample, with mode, scope,
-  socket, target, threads, bytes, arithmetic intensity, affinity, frequency sample,
-  and a raw-source path relative to `data/raw/`.
-- `data/processed/summary.csv`: grouped count, mean, median, standard deviation,
-  minimum, maximum, coefficient of variation, and a >5% variance flag.
-- `data/processed/validation.json`: campaign checks and preserved anomalies.
+`configs/analysis.json` pins a primary memory/sweep campaign per mode and any benchmark-specific compute follow-ups. `summary.csv` summarizes accepted groups without mixing campaign, socket, placement, shape, or implementation. `data/processed/thesis/` contains the exact memory, compute, locality, scaling, knees, concurrent-tier, and theoretical-reference tables used by the notebooks.
 
-Roofline ceilings use medians to reduce sensitivity to isolated timing noise.
-For the single-socket architecture-wide view, the highest accepted full-core
-median across the measured sockets/modes is used for each compute path, while
-the memory diagonal comes from the named mode/working-set case. The two-socket
-view uses measured simultaneous dual-socket values, never `2 ×` a single-socket
-value. Plot hover labels give the exact bandwidth and knee.
+Statistics are medians and sample standard deviations of five windows within a run. They describe short-term variation, not confidence intervals over independent machine reboots or allocations. Variation above 5% is retained and flagged. The measured sockets remain separate. No best-socket selection is used.
 
-## Equations and units
+## Rooflines and reference values
 
-The empirical envelope and its knee are
+`P(I) = min(P_compute, B × I)` and `I_knee = P_compute / B`. FLOPs, decimal GB/s, and binary GiB are kept distinct. Every pair matches mode, host, socket, and configuration; memory and compute campaign IDs remain explicit. The FP64 sweep is measured; FP32/BF16 have numerical envelopes only. Native AMX and achieved GEMM remain distinct compute references.
 
-```text
-P(I) = min(P_compute, B × I)
-I_knee = P_compute / B
-```
-
-`B` is sustainable GB/s from steady Triad measurements. Floating-point paths
-use GFLOP/s and FLOP/byte; INT8 uses GOP/s and OP/byte. The figure displays
-TFLOP/s or TOPS after dividing giga-units by 1,000. Operational intensity in
-the synthetic FP64 sweep uses its explicit modeled bytes, not a counter-based
-measurement of all physical DDR/HBM traffic. FP32/BF16/INT8 have measured
-envelopes but no matched intensity-sweep workload points.
-
-## Validation and accepted anomalies
-
-`hwbench.validate` checks both configurations are present, important bandwidth
-groups have at least five steady repetitions, AMX implementation evidence is
-retained, and throughput does not exceed an explicit max-turbo architectural
-bound. It flags high variance and suspicious DDR/HBM ordering. The detailed
-history and exclusion rationale are in the [validation appendix](VALIDATION.md).
+Architectural reference rates use 56 cores, documented operation rates, and explicit 1.90 GHz base or 3.50 GHz maximum-turbo clocks. Neither clock reference measures sustained active-core frequency. The envelope is benchmark-specific, not a strict bound on every application or all physical bus traffic.

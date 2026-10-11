@@ -2,7 +2,8 @@
 
 HW Bench characterizes CPU and memory hardware independently of any LLM runtime. It
 measures sustainable Triad bandwidth, register-resident AVX-512 FMA throughput,
-verified AMX BF16/INT8 throughput, and a controlled FP64 operational-intensity sweep.
+verified AMX BF16 throughput, achieved oneDNN GEMM performance, idle dependent-load
+latency, and a controlled FP64 operational-intensity sweep.
 It also measures two-socket scaling and the effect of a growing working set in Xeon
 Max HBM Cache Mode. LLM model execution, prompt workloads, and inference metrics
 belong to [LLM Bench](https://github.com/struggling-student/benchmark).
@@ -28,7 +29,7 @@ The measured topology was:
 Both nodes reported 112 physical cores and one thread per core. On Flat Mode, local
 CPU-to-HBM NUMA distance was 13 and remote distance 23. Each campaign records a full
 system snapshot in `data/raw/<mode>/<run>/system/`, and retrieval copies the parsed
-maps to `data/processed/topology_<mode>.json`. The topology is checked again on the
+maps alongside each campaign. The topology is checked again on the
 execution node before binding; the table above is an observation, not a hard-coded
 mapping.
 
@@ -58,7 +59,7 @@ which energy and counter measurements are possible.
 
 Every plotted envelope is an empirical **upper bound** built from separately measured
 bandwidth and compute kernels. Only FP64 has matched measured intensity-sweep points.
-AVX-512 FP32/FP64 and AMX BF16 use FLOP/s and FLOP/byte; INT8 uses OP/s and OP/byte.
-No FP32/BF16/INT8 sweep points, HBM hit rates, energy efficiency, or hardware-counter
+AVX-512 FP32/FP64 and AMX BF16 use FLOP/s and FLOP/byte.
+No FP32/BF16 sweep points, HBM hit rates, energy efficiency, or hardware-counter
 traffic are inferred from missing instrumentation. See [Methods and data](03_METHODS_AND_DATA.md)
 for the operation and traffic models.

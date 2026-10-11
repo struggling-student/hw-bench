@@ -13,5 +13,4 @@ interpret a CRESCO8 campaign.
 | [Validation appendix](VALIDATION.md) | Preserved failed/superseded runs and the explicit acceptance rules. |
 
 `data/raw/`, `data/processed/`, and generated `figures/` are local, git-ignored campaign
-artifacts. The executed [notebook](../notebooks/roofline_analysis.ipynb) is versioned,
-but rerunning it requires the local processed files.
+artifacts. The three executed [notebooks](../notebooks/README.md) are versioned; rebuilding them requires the selected local raw campaigns.

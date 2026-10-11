@@ -14,5 +14,9 @@ for mode,overrides in policy.get('benchmark_campaigns',{}).items():
 for mode,campaign in sorted(campaigns):
     destination=root/'data/raw'/mode/campaign;destination.mkdir(parents=True,exist_ok=True)
     subprocess.run(['rsync','-a',os.environ['HW_BENCH_LOGIN_ALIAS']+':'+os.environ['HW_BENCH_RESULTS_ROOT']+'/'+campaign+'/',str(destination)+'/'],check=True)
+    # Campaigns recorded before the platform record existed do not have one.
+    platform=destination/'system/platform.json'
+    if platform.exists():
+        target=root/'data/processed'/f'platform_{campaign}.json';target.parent.mkdir(parents=True,exist_ok=True);target.write_text(platform.read_text())
     print('Retrieved',campaign)
 PY

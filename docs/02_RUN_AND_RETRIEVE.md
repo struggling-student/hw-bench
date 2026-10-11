@@ -1,76 +1,32 @@
-# 02 — Run and retrieve
+# Run and retrieve
 
-## Local analysis environment
+## Local analysis
 
-Python 3.9 or newer is required for normalization, validation, Plotly, and Jupyter.
-The native benchmarks require Linux x86-64, a C++17 compiler with OpenMP and the
-appropriate AVX-512/AMX support, `numactl`, `objdump`, and the target instruction
-set. BF16 oneDNN measurements additionally require a site-provided PyTorch/oneDNN
-container. Intel MLC is optional and proprietary; it is not vendored.
+Install with `.venv/bin/python -m pip install -r requirements.txt`. Plotly static export needs Kaleido and Chrome/Chromium. `bash scripts/make_analysis.sh` normalizes local raw records, checks coverage and provenance, writes thesis tables, then executes the three canonical notebooks in independent kernels. Each figure cell exports SVG and PNG before displaying the same figure. Raw data and generated exports are git-ignored.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-pytest -q
-```
+## Cluster measurements
 
-## Run a configuration on a compute node
-
-Do not run these memory- and CPU-saturating campaigns on a gateway or login node.
-From an allocated, authorized compute node, after placing the required container
-path in the private environment:
+The native kernels require Linux x86-64, AVX-512/AMX, C++17, GNU OpenMP, numactl, and objdump. oneDNN measurements additionally require a compatible PyTorch container. Supply site values by copying `configs/cresco8.env.example` to a private location outside the repository.
 
 ```bash
-./scripts/run_all.sh cache /absolute/output/cache-run
-# On a node already configured in Flat Mode:
-./scripts/run_all.sh flat /absolute/output/flat-run
+source /private/path/hw-bench.env
+bash scripts/submit_cresco8.sh flat
+bash scripts/submit_cresco8.sh cache
 ```
 
-`run_all.sh` records the system snapshot (topology map and platform record; see
-[Scope and topology](01_SCOPE_AND_TOPOLOGY.md#platform-record)), builds and verifies the native binaries,
-then runs bandwidth, compute, and intensity sweeps. Cache and Flat are separate
-campaigns; it does not alter firmware settings. The Flat concurrent DDR+HBM diagnostic
-can be run with `scripts/run_concurrent_tiers.sh` after the Flat build. Each raw JSON
-keeps command, affinity, environment, timing, checksum, frequency sample, and
-stdout/stderr. Failed attempts remain available for audit.
+Both routes submit exclusive Slurm allocations with one node and 112 CPUs. Every submission creates unique source and output directories and verifies the requested memory mode on the compute node. There is no direct-node launch fallback. Never run saturating kernels on gateway/login nodes.
 
-## Site wrapper and retrieval
+Set `HW_BENCH_CAMPAIGN_PART=compute`, `memory`, `sweep`, or `memory-sweep` to run only the needed subsystem. The default is `all`. Record each returned job ID and output directory. A `COMPLETED` marker is written only after every requested measurement succeeds.
 
-For the measured site, copy `configs/cresco8.env.example` **outside this repository**
-and fill it only with site-approved paths, node/partition choices, and a private
-container location. Never commit that file or credentials. The wrapper submits the
-Cache campaign through Slurm and uses a separately configured compute-node route
-for the Flat node when that node is unavailable for a normal Slurm allocation.
-Check and follow the site's access policy before using that route. The wrapper
-does not contain any personal connection settings.
+After successful runs, update the explicit campaign selection in `configs/analysis.json`, then retrieve those exact directories:
 
 ```bash
-source /private/path/to/hw-bench.env
-./scripts/submit_cresco8.sh cache
-./scripts/submit_cresco8.sh flat
-./scripts/fetch_results.sh
+bash scripts/fetch_results.sh
+bash scripts/make_analysis.sh
 ```
 
-The retrieval script selects the newest run of each mode, copies complete raw
-directories into `data/raw/cache/` and `data/raw/flat/`, and writes local topology
-and platform JSON plus normalized CSV. If a different run is needed, copy that run explicitly
-and run the processor below; do not overwrite or delete prior raw records.
+Retrieval never deletes previous raw campaigns. Failed attempts remain separate and are not selected for thesis analysis. An existing failed record is never overwritten: submit a new campaign. Compute follow-ups replace the named benchmark families explicitly; no automatic newest-campaign selection occurs.
 
-## Rebuild analysis entirely offline
+## Synchronization and containers
 
-With both local raw campaigns present:
-
-```bash
-./scripts/make_analysis.sh
-```
-
-This regenerates `measurements.csv`, `summary.csv`, `validation.json`, the 14
-self-contained interactive HTML figures, `final_summary.json`, and executes the
-notebook. PNG export is optional and needs Kaleido plus a compatible browser:
-
-```bash
-HW_BENCH_EXPORT_PNG=1 ./scripts/make_analysis.sh
-```
-
-The notebook uses only local files; no SSH connection is needed for analysis.
+Native participants share readiness files and a future monotonic-clock start time. GEMM participants use a job/group-specific directory in the host `/tmp`, shared by the containers. Results directories are explicitly bound writable and source directories read-only. Participants time their actual start/end and work count; normalization requires matching scheduled starts and at least 95% shared-window overlap.

@@ -55,7 +55,15 @@ the dependency-limited records remain available for audit.
   normalized dataset, except that known launch failures are reported as preserved
   warnings.
 - oneDNN BF16 data requires an AMX implementation name in verbose output.
-- Native AMX binaries must contain `tdpbf16ps` and `tdpbssd` in retained disassembly.
+- Native AMX binaries must contain `tdpbf16ps` in retained disassembly.
 - Results above the model’s 3.5 GHz max-turbo architectural bound fail validation.
 - Important bandwidth groups require at least five steady timed repetitions.
 - Coefficient of variation above 5% is flagged in `summary.csv` for inspection.
+
+## Thesis-focused duration-based campaigns
+
+The newer campaigns retain legacy raw records but explicitly select current measurements. The first duration-based runs completed memory characterization and then failed at the concurrent GEMM test because the container could not access the synchronization directory. That failure is retained. The corrected path uses shared host `/tmp` readiness files and an explicit writable results bind.
+
+A staged compute follow-up with an incorrect clock conversion was cancelled before its results were selected. Its partial output is archival evidence only. Subsequent kernels retain the monotonic nanosecond clock and use longer arithmetic blocks to reduce OpenMP re-entry overhead. Native AMX and library GEMM are never merged.
+
+Successful memory/sweep and compute follow-ups are selected explicitly by campaign and benchmark. Validation requires completion markers, both socket baselines, five samples per cell, actual worker counts, numerical checks, instruction evidence, positive timing, matching host/mode, and synchronized aggregates. Legacy dual totals lacking shared windows are excluded. Raw records from failed attempts remain available for audit.
