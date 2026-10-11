@@ -7,3 +7,4 @@ PYTHON="${HW_BENCH_PYTHON:-${ROOT}/.venv/bin/python}"
 "${PYTHON}" -m hwbench.validate --measurements "${ROOT}/data/processed/measurements.csv" --raw "${ROOT}/data/raw/cache" --raw "${ROOT}/data/raw/flat" --output "${ROOT}/data/processed/validation.json"
 "${PYTHON}" -m hwbench.analysis
 "${PYTHON}" "${ROOT}/scripts/execute_notebooks.py"
+"${PYTHON}" "${ROOT}/scripts/check_artifacts.py" --clean-retired

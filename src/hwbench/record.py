@@ -15,7 +15,9 @@ from typing import Any
 
 def _frequency_khz() -> float | None:
     values: list[int] = []
-    for path in Path("/sys/devices/system/cpu").glob("cpu[0-9]*/cpufreq/scaling_cur_freq"):
+    for path in Path("/sys/devices/system/cpu").glob(
+        "cpu[0-9]*/cpufreq/scaling_cur_freq"
+    ):
         try:
             values.append(int(path.read_text().strip()))
         except (OSError, ValueError):
@@ -81,7 +83,15 @@ def main(argv: list[str] | None = None) -> int:
         "command": command,
         "environment": {
             key: os.environ.get(key)
-            for key in ("OMP_NUM_THREADS", "OMP_PROC_BIND", "OMP_PLACES", "KMP_AFFINITY", "HWBENCH_SYNC_DIR", "HWBENCH_PARTICIPANT", "HWBENCH_PARTICIPANTS")
+            for key in (
+                "OMP_NUM_THREADS",
+                "OMP_PROC_BIND",
+                "OMP_PLACES",
+                "KMP_AFFINITY",
+                "HWBENCH_SYNC_DIR",
+                "HWBENCH_PARTICIPANT",
+                "HWBENCH_PARTICIPANTS",
+            )
         },
         "cpu_frequency_khz_before": before,
         "cpu_frequency_khz_after": after,
@@ -91,7 +101,9 @@ def main(argv: list[str] | None = None) -> int:
         "result": parsed,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.output.write_text(
+        json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     if completed.returncode or parsed is None or not parsed.get("valid", False):
         print(completed.stderr, end="", file=os.sys.stderr)
         return completed.returncode or 1

@@ -1,10 +1,7 @@
-# AMX ceiling benchmark
+# BF16 measurements
 
-`amx_peak.cpp` is the fallback used because the CRESCO8 base image has no oneDNN
-development library. It requests Linux XTILEDATA permission, configures tiles in
-every OpenMP worker, and measures register/tile-resident BF16 dot-product
-instructions. The build script rejects binaries whose disassembly does not contain
-`tdpbf16ps`; raw campaign metadata retains that verification.
+The native AMX tile kernel is in `benchmarks/hardware.cpp`. It requests tile permission in every OpenMP worker, uses four independent accumulator tiles, verifies all destination elements, and reports the actual worker count. Retained disassembly must contain `tdpbf16ps`.
 
-Operations follow the GEMM convention (multiply + add = 2 operations): BF16 does
-`2*16*16*32` operations per tile instruction.
+`torch_amx.py` measures warmed BF16 oneDNN GEMM separately. Primitive execution during an untimed warm-up must identify an AMX implementation. Timed measurements omit oneDNN verbose logging and validate the resulting matrix against independent FP32 dot products. CPU and memory affinity remain enforced by numactl; inner GNU OpenMP placement overrides are omitted.
+
+Instruction throughput and achieved GEMM throughput are distinct references. Multiply and add count as two FLOPs in both.
