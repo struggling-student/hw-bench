@@ -459,7 +459,23 @@ def main():
                 seconds=0.3,
             )
         )
-        int8_gemm_verified()
+        if int8_gemm_verified():
+            execute(
+                dict(
+                    spec(
+                        0,
+                        "gemm",
+                        target=targets[0],
+                        shape=1024,
+                        label="smoke",
+                        m=64,
+                        gemm_n=1024,
+                        dtype="int8",
+                        pool=64 * MIB,
+                    ),
+                    seconds=0.3,
+                )
+            )
 
     # -------------------------------------------------------------------- isa
     if part == "isa":

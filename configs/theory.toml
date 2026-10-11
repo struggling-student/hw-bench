@@ -1,0 +1,86 @@
+# Theoretical peaks for the Intel Xeon CPU Max 9480 (CRESCO8 hbm nodes).
+# Every number carries its source and whether it is a vendor statement, a value
+# derived from one, or a measurement of this system. Nothing here is a result.
+
+[platform]
+cpu = "Intel Xeon CPU Max 9480"
+sockets = 2
+cores_per_socket = 56
+base_ghz = 1.9        # Intel ARK, processor base frequency
+max_turbo_ghz = 3.5   # Intel ARK, max turbo frequency
+smt = false           # one thread per core on CRESCO8 (topology.json: threads_per_core = 1)
+source = "https://www.intel.com/content/www/us/en/products/sku/232592/intel-xeon-cpu-max-9480-processor-112-5m-cache-1-90-ghz/specifications.html"
+
+# Peak operations per core per cycle, by execution path.
+# `ops` counts a multiply and an add as two operations.
+[isa.fp64]
+label = "AVX-512 FP64 FMA"
+dtype = "fp64"
+ops_per_cycle = 32
+status = "derived"
+basis = "2 FMA ports x 8 lanes x 2 operations"
+
+[isa.fp32]
+label = "AVX-512 FP32 FMA"
+dtype = "fp32"
+ops_per_cycle = 64
+status = "derived"
+basis = "2 FMA ports x 16 lanes x 2 operations"
+
+[isa.avx512_bf16]
+label = "AVX-512 BF16 (vdpbf16ps)"
+dtype = "bf16"
+ops_per_cycle = 128
+status = "derived"
+basis = "upper bound: 2 ports x 16 lanes x 2 products x 2 operations; the measured issue rate is lower and is reported separately"
+
+[isa.vnni_int8]
+label = "AVX-512 VNNI (vpdpbusd)"
+dtype = "int8"
+ops_per_cycle = 256
+status = "vendor"
+basis = "Intel Architecture Day 2021: 256 INT8 operations per cycle per core without AMX"
+source = "https://edc.intel.com/content/www/us/en/products/performance/benchmarks/architecture-day-2021/"
+
+[isa.amx_bf16]
+label = "AMX BF16 tile (tdpbf16ps)"
+dtype = "bf16"
+ops_per_cycle = 1024
+status = "vendor"
+basis = "Intel Architecture Day 2021: 1024 BF16 operations per cycle per core with AMX"
+source = "https://edc.intel.com/content/www/us/en/products/performance/benchmarks/architecture-day-2021/"
+
+[isa.amx_int8]
+label = "AMX INT8 tile (tdpbssd)"
+dtype = "int8"
+ops_per_cycle = 2048
+status = "vendor"
+basis = "Intel Architecture Day 2021: 2048 INT8 operations per cycle per core with AMX"
+source = "https://edc.intel.com/content/www/us/en/products/performance/benchmarks/architecture-day-2021/"
+
+# Memory peaks, per socket.
+[memory.ddr]
+label = "DDR5-4800, 8 channels"
+channels = 8
+mega_transfers = 4800
+bytes_per_transfer = 8
+gbs_per_socket = 307.2   # 8 x 8 B x 4.8 GT/s
+status = "derived"
+basis = "Intel ARK: DDR5 4800 MT/s at 1 DPC, 8 channels"
+source = "https://www.intel.com/content/www/us/en/products/sku/232592/intel-xeon-cpu-max-9480-processor-112-5m-cache-1-90-ghz/specifications.html"
+
+[memory.hbm]
+label = "HBM2e, 64 GB, 4 stacks"
+capacity_gib = 64
+stacks = 4
+gbs_per_socket = 1000    # "up to 1 TB/s": a rounded vendor figure, not a computed peak
+status = "vendor"
+basis = "Intel Xeon Max technical overview quotes up to 1 TB/s per socket; the per-pin rate is not published, so no bottom-up peak is derived"
+source = "https://intel.com/content/www/us/en/developer/articles/technical/xeon-scalable-processor-max-series.html"
+
+# Cache geometry, per core unless noted. L3 is shared by the 56 cores of a socket.
+[cache]
+l1d_kib = 48
+l2_mib = 2
+l3_mib_per_socket = 112.5
+source = "lscpu on hbm14 (L1d 5.3 MiB / 112 cores, L2 224 MiB / 112, L3 225 MiB / 2 sockets); Intel ARK for L3"
