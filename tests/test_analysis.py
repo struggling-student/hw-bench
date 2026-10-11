@@ -168,3 +168,37 @@ def test_scaling_uses_sum_of_isolated_sockets_and_separates_dtypes():
     assert result.loc["fp64", "isolated_sum"] == 7200
     assert result.loc["fp64", "efficiency"] == 1
     assert result.loc["fp32", "isolated_sum"] == 14400
+
+
+def _row(campaign, threads, notes="core_scaling", bw=100.0):
+    return dict(
+        campaign_id=campaign,
+        memory_mode="flat",
+        socket_scope="single",
+        socket=0,
+        memory_socket=0,
+        memory_target="hbm",
+        benchmark="stream_triad",
+        dtype=None,
+        m=None,
+        n=None,
+        k=1,
+        threads=threads,
+        working_set_bytes=8 * 2**30,
+        notes=notes,
+        phase="steady",
+        accepted=True,
+        bandwidth_gbs=bw,
+    )
+
+
+def test_superseding_campaign_replaces_only_the_configurations_it_measured():
+    df = pd.DataFrame([_row("base", 28), _row("base", 56), _row("long", 56, bw=500.0)])
+    policy = {"primary_campaigns": {"flat": "base"}, "supersede": {"flat": "long"}}
+    chosen = select_measurements(df, policy)
+    assert sorted(zip(chosen.campaign_id, chosen.threads)) == [
+        ("base", 28),
+        ("long", 56),
+    ]
+    policy.pop("supersede")
+    assert set(select_measurements(df, policy).campaign_id) == {"base"}

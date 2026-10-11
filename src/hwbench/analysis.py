@@ -48,6 +48,22 @@ NUMERIC = [
     "operations",
     "modeled_bytes",
 ]
+# Columns that identify one measured configuration independently of the campaign.
+CONFIGURATION = [
+    "memory_mode",
+    "socket_scope",
+    "socket",
+    "memory_socket",
+    "memory_target",
+    "benchmark",
+    "dtype",
+    "m",
+    "n",
+    "k",
+    "threads",
+    "working_set_bytes",
+    "notes",
+]
 MODEL_SPECS = {
     "base_ghz": 1.9,
     "max_turbo_ghz": 3.5,
@@ -87,7 +103,20 @@ def select_measurements(df, policy=None, include_rejected=False):
                 & selected.benchmark.eq(benchmark)
                 & selected.campaign_id.eq(override)
             )
-    return selected[mask].copy()
+    for mode, campaign in policy.get("supersede", {}).items():
+        mask |= selected.memory_mode.eq(mode) & selected.campaign_id.eq(campaign)
+    selected = selected[mask]
+    # A campaign named under "supersede" repeats configurations of the primary
+    # campaigns under better conditions (longer synchronized windows); it replaces
+    # exactly the configurations it measured and nothing else.
+    for mode, campaign in policy.get("supersede", {}).items():
+        in_mode = selected.memory_mode.eq(mode)
+        replacement = selected[in_mode & selected.campaign_id.eq(campaign)]
+        keys = pd.MultiIndex.from_frame(replacement[CONFIGURATION].fillna("-"))
+        configured = pd.MultiIndex.from_frame(selected[CONFIGURATION].fillna("-"))
+        superseded = in_mode & ~selected.campaign_id.eq(campaign) & configured.isin(keys)
+        selected = selected[~superseded]
+    return selected.copy()
 
 
 def stats(data, keys, metric):
@@ -313,8 +342,11 @@ def concurrent_table(df):
                 continue
             rows.append(
                 dict(
+                    campaign_id=";".join(sorted(a.campaign_id.unique())),
                     socket=socket,
                     case=label,
+                    cpu_bind=a.cpu_bind.iloc[0],
+                    working_set_gib=a.working_set_gib.iloc[0],
                     median_gbs=a.bandwidth_gbs.median(),
                     std_gbs=a.bandwidth_gbs.std(),
                     n_samples=len(a),

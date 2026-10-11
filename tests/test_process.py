@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from hwbench.process import rows_from_record
+from hwbench.process import _aggregate_dual, _deduplicate_retries, rows_from_record
 
 
 def test_stream_rows_preserve_first_and_steady_iterations() -> None:
@@ -31,8 +31,6 @@ def test_stream_rows_preserve_first_and_steady_iterations() -> None:
     assert [row["phase"] for row in rows] == ["first", "steady", "steady"]
     assert rows[-1]["bandwidth_gbs"] == 2400 / 0.5 / 1e9
 
-
-from hwbench.process import _aggregate_dual, _deduplicate_retries
 
 
 def record(campaign="one", scope="single", socket=0):
@@ -169,3 +167,15 @@ def test_compiler_metadata_is_read_from_each_campaign(tmp_path):
         "first": "compiler-a",
         "second": "compiler-b",
     }
+
+
+def test_rows_carry_requested_duration_and_kernel_source_hash():
+    r = record()
+    r["command"] = ["numactl", "hardware", "--seconds", "5", "--k", "1"]
+    campaign = {"source_sha256": {"benchmarks/hardware.cpp": "abc"}}
+    row = rows_from_record(r, Path("raw"), {}, campaign)[0]
+    assert row["requested_seconds"] == 5.0
+    assert row["source_sha256"] == "abc"
+    # A launcher that hashes its own source at run time overrides the campaign record.
+    r["result"]["source_sha256"] = "run-time"
+    assert rows_from_record(r, Path("raw"), {}, campaign)[0]["source_sha256"] == "run-time"

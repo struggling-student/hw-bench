@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from hwbench.topology import discover
+from hwbench.topology import discover  # noqa: E402
 
 
 def main():

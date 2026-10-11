@@ -38,6 +38,7 @@ FIELDS = [
     "phase",
     "warmup",
     "elapsed_seconds",
+    "requested_seconds",
     "start_ns",
     "end_ns",
     "planned_start_ns",
@@ -64,6 +65,7 @@ FIELDS = [
     "exclusion_reason",
     "retry_of",
     "source_file",
+    "source_sha256",
 ]
 
 
@@ -90,9 +92,7 @@ def _reasons(record, compiler):
         ]
         if not any("amx" in s for s in evidence):
             reasons.append("missing_amx_execution_evidence")
-        if not (
-            "numactl_only" in (r.get("implementation") or record.get("notes") or "")
-        ):
+        if "numactl_only" not in (r.get("implementation") or record.get("notes") or ""):
             reasons.append("superseded_onednn_affinity")
     if benchmark == "roofline_sweep" and "avx512_8_independent_chains" not in (
         r.get("implementation") or record.get("notes") or ""
@@ -107,8 +107,28 @@ def _reasons(record, compiler):
     return reasons
 
 
+# Source file whose hash identifies the code that produced a benchmark's numbers.
+KERNEL_SOURCES = {"amx_onednn_gemm": "benchmarks/amx/torch_amx.py"}
+DEFAULT_KERNEL_SOURCE = "benchmarks/hardware.cpp"
+
+
+def _requested_seconds(record: dict[str, Any]) -> float | None:
+    """Duration the launcher asked of each timed sample (``--seconds``)."""
+
+    command = record.get("command") or []
+    if "--seconds" in command:
+        try:
+            return float(command[command.index("--seconds") + 1])
+        except (IndexError, ValueError):
+            return None
+    return None
+
+
 def rows_from_record(
-    record: dict[str, Any], source: Path, compiler: dict[str, Any]
+    record: dict[str, Any],
+    source: Path,
+    compiler: dict[str, Any],
+    campaign: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     r = record.get("result") or {}
     if not r or r.get("dtype") == "int8":
@@ -168,6 +188,13 @@ def rows_from_record(
         notes=record.get("notes") or "",
         retry_of=record.get("retry_of"),
         source_file=str(source),
+        requested_seconds=_requested_seconds(record),
+        # A launcher that hashes itself at run time (torch_amx.py) is authoritative;
+        # otherwise fall back to the hash recorded when the campaign started.
+        source_sha256=r.get("source_sha256")
+        or ((campaign or {}).get("source_sha256") or {}).get(
+            KERNEL_SOURCES.get(r.get("benchmark"), DEFAULT_KERNEL_SOURCE)
+        ),
     )
     if "samples" in r:
         samples = r["samples"]
@@ -389,7 +416,11 @@ def main(argv=None):
                 (a for a in path.parents if (a / "system/topology.json").exists()), None
             )
             compiler = {}
+            campaign_meta = {}
             if campaign:
+                meta_path = campaign / "system/campaign.json"
+                if meta_path.exists():
+                    campaign_meta = json.loads(meta_path.read_text())
                 topology = json.loads((campaign / "system/topology.json").read_text())
                 record["_expected_host"] = topology["hostname"]
                 record["_campaign_id"] = campaign.name
@@ -415,7 +446,7 @@ def main(argv=None):
                     exclusion_reason=";".join(reasons),
                 )
             )
-            rows.extend(rows_from_record(record, source, compiler))
+            rows.extend(rows_from_record(record, source, compiler, campaign_meta))
     rows = _deduplicate_retries(rows)
     rows += _aggregate_dual(rows) + _aggregate_concurrent_tiers(rows)
     rows.sort(
