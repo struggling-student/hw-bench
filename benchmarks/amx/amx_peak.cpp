@@ -66,31 +66,6 @@ double run_bf16(std::uint64_t outer, int inner, double &checksum) {
   }
   return omp_get_wtime() - started;
 }
-
-double run_int8(std::uint64_t outer, int inner, double &checksum) {
-  const double started = omp_get_wtime();
-#pragma omp parallel reduction(+:checksum)
-  {
-    alignas(64) std::int8_t a[16][64];
-    alignas(64) std::int8_t b[16][64];
-    alignas(64) std::int32_t result[16][16]{};
-    std::memset(a, 1, sizeof(a)); std::memset(b, 1, sizeof(b));
-    const TileConfig config = make_config(64);
-    _tile_loadconfig(&config);
-    for (std::uint64_t block = 0; block < outer; ++block) {
-      _tile_loadd(4, a, 64); _tile_loadd(5, b, 64);
-      _tile_zero(0); _tile_zero(1); _tile_zero(2); _tile_zero(3);
-      for (int i = 0; i < inner; ++i) {
-        _tile_dpbssd(0, 4, 5); _tile_dpbssd(1, 4, 5);
-        _tile_dpbssd(2, 4, 5); _tile_dpbssd(3, 4, 5);
-      }
-      _tile_stored(0, result, 64);
-      checksum += result[block & 15][block & 15];
-    }
-    _tile_release();
-  }
-  return omp_get_wtime() - started;
-}
 }
 
 int main(int argc, char **argv) {
@@ -114,9 +89,6 @@ int main(int argc, char **argv) {
   if (mode == "bf16") {
     elapsed = run_bf16(outer, inner, checksum);
     ops_per_instruction = 2ULL * 16 * 16 * 32;
-  } else if (mode == "int8") {
-    elapsed = run_int8(outer, inner, checksum);
-    ops_per_instruction = 2ULL * 16 * 16 * 64;
   } else return 2;
   const std::uint64_t operations = outer * static_cast<std::uint64_t>(inner) * 4ULL
     * ops_per_instruction * static_cast<std::uint64_t>(omp_get_max_threads());

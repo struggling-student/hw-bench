@@ -6,26 +6,6 @@ MODE="${1:?usage: collect_system_info.sh MODE OUTPUT_DIR}"
 OUT="${2:?usage: collect_system_info.sh MODE OUTPUT_DIR}"
 mkdir -p "${OUT}"
 python3 -m hwbench.topology --expect-mode "${MODE}" --output "${OUT}/topology.json"
-python3 -m hwbench.platform_record --output "${OUT}/platform.json"
-if command -v lstopo-no-graphics >/dev/null; then
-  lstopo-no-graphics --no-io >"${OUT}/lstopo.txt" 2>&1 || true
-  lstopo-no-graphics --of xml "${OUT}/lstopo.xml" 2>/dev/null || true
-fi
-if command -v lstopo >/dev/null; then
-  lstopo --no-io --of png "${OUT}/lstopo.png" 2>/dev/null || true
-fi
-{
-  printf '=== os-release ===\n'
-  cat /etc/os-release 2>/dev/null || true
-  printf '\n=== slurm job ===\n'
-  [[ -z "${SLURM_JOB_ID:-}" ]] || scontrol show job "${SLURM_JOB_ID}" 2>&1 || true
-  printf '\n=== slurm node ===\n'
-  scontrol show node "$(hostname -s)" 2>&1 || true
-  printf '\n=== infiniband ===\n'
-  ibstat 2>&1 || true
-  printf '\n=== modules ===\n'
-  bash -lc 'module -t list' 2>&1 || true
-} >"${OUT}/site.txt" 2>&1
 {
   hostname
   uname -a

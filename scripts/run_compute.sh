@@ -9,7 +9,7 @@ mkdir -p "${OUT}/compute"
 TOPOLOGY="${OUT}/system/topology.json"
 export OMP_PROC_BIND=close OMP_PLACES=cores
 read -r -a THREAD_CANDIDATES <<<"${COMPUTE_THREADS:-1 2 4 8 14 28 56}"
-read -r -a KERNELS <<<"${COMPUTE_KERNELS:-avx512_fp32 avx512_fp64 amx_bf16 amx_int8}"
+read -r -a KERNELS <<<"${COMPUTE_KERNELS:-avx512_fp32 avx512_fp64 amx_bf16}"
 
 run_compute_one() {
   local socket=$1 threads=$2 kernel=$3 repetition=$4 scope=$5 pair=${6:-}
@@ -29,11 +29,6 @@ run_compute_one() {
       else
         binary="${BUILD_DIR}/amx_peak"; args=(--mode bf16 --outer 250000 --inner 256)
       fi ;;
-    amx_int8)
-      # torch._int_mm reports oneDNN's generic gemm_api rather than an AMX
-      # implementation name on this image, so it cannot meet our verification
-      # rule. Use the disassembly-verified native AMX INT8 ceiling instead.
-      binary="${BUILD_DIR}/amx_peak"; args=(--mode int8 --outer 125000 --inner 256) ;;
     *) die "unknown kernel ${kernel}" ;;
   esac
   file="${OUT}/compute/${scope}-socket${socket}-${kernel}-t${threads}-r${repetition}-$(stamp).json"

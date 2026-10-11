@@ -29,8 +29,8 @@ ceiling, and open circles are measured FP64 intensity-sweep points.** All bandwi
 steady-state STREAM-model Triad traffic. The companion HTML charts in `figures/` are
 self-contained and interactive.
 
-The four compute paths are intentionally separate: FP32/FP64/BF16 use FLOP/s and
-FLOP/byte; INT8 uses OP/s and OP/byte. A workload point measured for one path is **not**
+The three compute paths (FP64, FP32, BF16) are intentionally separate and all use
+FLOP/s and FLOP/byte. A workload point measured for one path is **not**
 presented as a measurement of another path.
 """)
 
@@ -82,7 +82,6 @@ display(Markdown(f'''| Measured path | One socket | Two sockets |
 | AVX-512 FP64 | {summary['avx512_fp64_peak_gflops_socket']/1000:.2f} TFLOP/s | {summary['avx512_fp64_peak_gflops_dual']/1000:.2f} TFLOP/s |
 | AVX-512 FP32 | {summary['avx512_fp32_peak_gflops_socket']/1000:.2f} TFLOP/s | {summary['avx512_fp32_peak_gflops_dual']/1000:.2f} TFLOP/s |
 | AMX BF16 | {summary['amx_bf16_peak_gflops_socket']/1000:.2f} TFLOP/s | {summary['amx_bf16_peak_gflops_dual']/1000:.2f} TFLOP/s |
-| AMX INT8 | {summary['amx_int8_peak_gops_socket']/1000:.2f} TOPS | {summary['amx_int8_peak_gops_dual']/1000:.2f} TOPS |
 
 Flat HBM / Flat DDR sustainable bandwidth: **{summary['flat_hbm_over_ddr']:.2f}×**.
 Cache Mode effective Triad bandwidth: **{summary['cache_effective_peak_gbs_socket']:.1f} GB/s**
@@ -122,15 +121,15 @@ access hit HBM.
 
 Hover an interactive curve for its bandwidth and knee (compute peak divided by
 bandwidth). Open circles appear only in FP64 because only the FP64 intensity kernel was
-measured. FP32, BF16, and INT8 panels are measured **ceilings**, not workload-validation
+measured. FP32 and BF16 panels are measured **ceilings**, not workload-validation
 plots. The dark compute peak is the best accepted full-socket value across the measured
 modes; thus the panels are architecture-wide envelopes rather than a promise that one
 individual application will achieve every ceiling simultaneously.
 """)
 code("""
 explain('Single-socket complete Roofline',
-        'Four compute paths against all four measured memory working-set cases.',
-        'Log–log panels use TFLOP/s and FLOP/byte, except INT8 (TOPS and OP/byte); open circles are FP64 sweep medians.',
+        'Three compute paths against all four measured memory working-set cases.',
+        'Log–log panels use TFLOP/s and FLOP/byte; open circles are FP64 sweep medians.',
         f"Flat HBM provides {summary['flat_hbm_over_ddr']:.2f}× Flat DDR Triad bandwidth, so its memory-bound line and knee shift accordingly.",
         'Compute peaks are best accepted values across modes; Cache lines are effective working-set cases, not attributable tier traffic.')
 figures['roofline_overview_single'].show()
@@ -142,7 +141,7 @@ intensity sweep was run, so this view correctly has no empirical workload marker
 """)
 code("""
 explain('Dual-socket complete Roofline',
-        'The same four paths and four memory cases, using full-node simultaneous measurements.',
+        'The same three paths and four memory cases, using full-node simultaneous measurements.',
         'Curve slopes are measured dual-socket GB/s; plateaus are measured dual-socket compute throughput.',
         f"The full node sustains {summary['flat_hbm_peak_gbs_dual']:.1f} GB/s Flat HBM and {summary['flat_ddr_peak_gbs_dual']:.1f} GB/s Flat DDR.",
         'There are no dual-socket intensity-sweep measurements; the figure is an envelope, not a measured workload scatter plot.')
@@ -153,18 +152,17 @@ md(r"""
 ### Where the memory limit meets each compute ceiling
 
 The knee is \(I_\mathrm{knee}=P_\mathrm{compute}/B\). Below it, the envelope is
-bandwidth-limited; above it, compute-limited. INT8 entries are OP/byte, while the
-floating-point entries are FLOP/byte. These knees inherit the benchmark-specific
+bandwidth-limited; above it, compute-limited. All entries are FLOP/byte. These knees inherit the benchmark-specific
 operation and traffic models; they are not universal application thresholds.
 """)
 code("""
 knees = knees_table(df)
 display(knees.rename(columns={'compute_path':'Path','memory_system':'Memory case',
-                              'measured_compute_gops':'Compute (GOP/s)',
+                              'measured_compute_gops':'Compute (GFLOP/s)',
                               'measured_bandwidth_gbs':'Bandwidth (GB/s)',
-                              'critical_intensity_ops_per_byte':'Knee (OP/byte)'})
-        .style.format({'Compute (GOP/s)':'{:.1f}', 'Bandwidth (GB/s)':'{:.1f}',
-                       'Knee (OP/byte)':'{:.2f}'})
+                              'critical_intensity_ops_per_byte':'Knee (FLOP/byte)'})
+        .style.format({'Compute (GFLOP/s)':'{:.1f}', 'Bandwidth (GB/s)':'{:.1f}',
+                       'Knee (FLOP/byte)':'{:.2f}'})
         .hide(axis='index'))
 """)
 
@@ -241,9 +239,7 @@ md("""
 
 AVX-512 FP32 and FP64 use twelve independent register-resident FMA accumulator chains;
 the measured operation count includes multiply and add. BF16 is a verified AMX oneDNN
-6144³ GEMM, while INT8 is a disassembly-verified native `tdpbssd` tile kernel. The
-AMX panels use **different units** (TFLOP/s versus TOPS) and deliberately have
-independent vertical scales. For BF16, accepted runs omit a harmful GNU OpenMP binding
+6144³ GEMM. For BF16, accepted runs omit a harmful GNU OpenMP binding
 combination while retaining explicit `numactl` placement; rejected probes remain in
 the raw data but do not set ceilings.
 """)
@@ -255,10 +251,10 @@ explain('AVX-512 throughput scaling',
         'Sustained AVX frequency can differ from nominal/base frequency; this kernel is a compute ceiling, not an application.')
 figures['avx512_scaling'].show()
 explain('AMX throughput scaling',
-        'Verified BF16 oneDNN GEMM and native INT8 tile-dot throughput versus physical cores.',
-        'The left panel is TFLOP/s; the right is TOPS, with independent vertical scales.',
-        f"Full-socket BF16 reaches {summary['amx_bf16_peak_gflops_socket']/1000:.2f} TFLOP/s and INT8 {summary['amx_int8_peak_gops_socket']/1000:.2f} TOPS.",
-        'The BF16 library GEMM and native INT8 tile kernel differ in scheduling and data reuse; cross-dtype numerical ratios are not workload speedups.')
+        'Verified BF16 oneDNN GEMM throughput versus physical cores.',
+        'The y-axis is TFLOP/s and each multiply-accumulate counts a multiply and an add.',
+        f"Full-socket BF16 reaches {summary['amx_bf16_peak_gflops_socket']/1000:.2f} TFLOP/s.",
+        'The BF16 library GEMM and the AVX-512 FMA kernels differ in scheduling and data reuse; cross-dtype ratios are not workload speedups.')
 figures['amx_scaling'].show()
 """)
 
@@ -287,16 +283,14 @@ explain('Cache FP64 working-set envelopes',
 figures['cache_roofline'].show()
 """)
 md("""
-The other three Flat Mode plots display measured bandwidth and compute ceilings without
-inventing FP32/BF16/INT8 intensity-sweep points. Their Cache Mode counterparts are
-present in the complete overview above. In particular, INT8 is reported as OP/s and
-OP/byte rather than treating integer operations as FLOPs.
+The other two Flat Mode plots display measured bandwidth and compute ceilings without
+inventing FP32/BF16 intensity-sweep points. Their Cache Mode counterparts are
+present in the complete overview above.
 """)
 code("""
 for name, dtype, peak, unit in (
     ('flat_fp32_roofline','FP32',summary['avx512_fp32_peak_gflops_socket']/1000,'TFLOP/s'),
-    ('flat_bf16_roofline','BF16',summary['amx_bf16_peak_gflops_socket']/1000,'TFLOP/s'),
-    ('flat_int8_roofline','INT8',summary['amx_int8_peak_gops_socket']/1000,'TOPS')):
+    ('flat_bf16_roofline','BF16',summary['amx_bf16_peak_gflops_socket']/1000,'TFLOP/s')):
     explain(f'Flat {dtype} ceiling',
             f'DDR and HBM bandwidth envelopes capped by the measured {dtype} compute ceiling.',
             'Log–log axes show intensity versus throughput; the dotted horizontal line is the compute peak.',
@@ -397,7 +391,7 @@ reduces its knee from
 {summary['avx512_fp64_peak_gflops_socket']/summary['flat_ddr_peak_gbs_socket']:.2f}
 to {summary['avx512_fp64_peak_gflops_socket']/summary['flat_hbm_peak_gbs_socket']:.2f}
 FLOP/byte. Larger Cache working sets exert more capacity pressure, reducing effective
-bandwidth; individual HBM hit rates were not measured. FP32, BF16, and INT8
+bandwidth; individual HBM hit rates were not measured. FP32 and BF16
 Rooflines are measured bandwidth/compute envelopes, not measured workload validation.
 
 **Hypothesis requiring counters.** Sustained-frequency changes, scheduling differences,

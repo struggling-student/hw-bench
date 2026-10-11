@@ -29,6 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--memory-target", required=True)
     parser.add_argument("--socket-scope", required=True)
     parser.add_argument("--socket")
+    parser.add_argument("--memory-socket", type=int)
     parser.add_argument("--cpu-bind", required=True)
     parser.add_argument("--mem-bind", required=True)
     parser.add_argument("--threads", type=int, required=True)
@@ -54,7 +55,10 @@ def main(argv: list[str] | None = None) -> int:
             parsed = candidate
             break
     record = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
+        "campaign_id": os.environ.get("HWBENCH_CAMPAIGN_ID"),
+        "memory_socket": args.memory_socket,
+        "synchronized": bool(os.environ.get("HWBENCH_SYNC_DIR")),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "hostname": platform.node(),
         "memory_mode": args.memory_mode,
@@ -72,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         "command": command,
         "environment": {
             key: os.environ.get(key)
-            for key in ("OMP_NUM_THREADS", "OMP_PROC_BIND", "OMP_PLACES", "KMP_AFFINITY")
+            for key in ("OMP_NUM_THREADS", "OMP_PROC_BIND", "OMP_PLACES", "KMP_AFFINITY", "HWBENCH_SYNC_DIR", "HWBENCH_PARTICIPANT", "HWBENCH_PARTICIPANTS")
         },
         "cpu_frequency_khz_before": before,
         "cpu_frequency_khz_after": after,

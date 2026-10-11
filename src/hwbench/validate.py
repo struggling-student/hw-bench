@@ -1,108 +1,83 @@
-"""Scientific sanity checks for a completed Roofline campaign."""
-
+"""Validate selected scientific evidence, coverage, and original raw integrity."""
 from __future__ import annotations
-
 import argparse
+import hashlib
 import json
+import math
 from pathlib import Path
-from typing import Any
-
 import pandas as pd
-
-MAX_TURBO_GHZ = 3.5
-MAX_OPS_CYCLE = {"fp32": 64, "fp64": 32, "bf16": 1024, "int8": 2048}
+from hwbench.analysis import ROOT,MODEL_SPECS,load_measurements,select_measurements,stats,scaling_table
 
 
-def validate(df: pd.DataFrame, raw_roots: list[Path]) -> dict[str, Any]:
-    errors: list[str] = []
-    warnings: list[str] = []
-    raw_records = []
-    unexpected_hosts: list[str] = []
-    for root in raw_roots:
+def validate(df,raw_roots,policy=None):
+    policy=policy or json.loads((ROOT/'configs/analysis.json').read_text())
+    data=select_measurements(df,policy);errors=[];warnings=[]
+    for mode,campaign in policy['primary_campaigns'].items():
+        roots=[root/campaign for root in raw_roots if root.name==mode]
+        if not roots or not any((r/'COMPLETED').exists() for r in roots):errors.append(f'Campaign is not complete: {campaign}')
+        source=df[df.campaign_id.eq(campaign)]
+        if source.empty:errors.append(f'Missing campaign: {campaign}')
+        rejected=source[~source.accepted]
+        if len(rejected):errors.append(f'{campaign}: {len(rejected)} rejected selected samples: '+', '.join(sorted(set(rejected.exclusion_reason))))
         expected_hosts=set()
-        for topology_path in root.rglob("system/topology.json"):
-            try: expected_hosts.add(json.loads(topology_path.read_text())["hostname"])
-            except (OSError, json.JSONDecodeError, KeyError): pass
-        for path in root.rglob("*.json"):
-            source = Path(root.name) / path.relative_to(root)
-            try:
-                record = json.loads(path.read_text())
-            except (OSError, json.JSONDecodeError):
-                continue
-            if "returncode" in record:
-                raw_records.append((source, record))
-                if expected_hosts and record.get("hostname") not in expected_hosts:
-                    unexpected_hosts.append(str(source))
-                    continue
-                if record.get("returncode") != 0 or not (record.get("result") or {}).get("valid"):
-                    if "can't open file" in record.get("stderr", "") and "torch_amx.py" in record.get("stderr", ""):
-                        warnings.append(f"preserved and superseded Flat launch failure: {source}")
-                    else:
-                        errors.append(f"failed raw record: {source}")
-                if (record.get("result") or {}).get("benchmark") == "amx_onednn_gemm":
-                    verbose = [line.lower() for line in record.get("stdout", "").splitlines()
-                               if line.lower().startswith(("onednn_verbose", "dnnl_verbose"))]
-                    if not any("amx" in line for line in verbose):
-                        errors.append(f"oneDNN AMX not verified: {source}")
-
-    for mode in ("cache", "flat"):
-        if mode not in set(df.memory_mode): errors.append(f"missing {mode} measurements")
-    if unexpected_hosts:
-        warnings.append(
-            f"preserved and excluded {len(unexpected_hosts)} records executed on a non-target host "
-            "during a superseded submission-wrapper attempt"
-        )
-    flat = df[(df.memory_mode == "flat") & (df.benchmark == "stream_triad") &
-              (df.phase == "steady") & (df.socket_scope == "single")]
-    if not flat.empty:
-        medians = flat.groupby("memory_target").bandwidth_gbs.median()
-        if "hbm" in medians and "ddr" in medians and medians.hbm <= medians.ddr:
-            warnings.append(f"Flat HBM ({medians.hbm:.1f}) is not faster than DDR ({medians.ddr:.1f})")
-
-    compute = df[df.benchmark.isin(["avx512_peak", "amx_onednn_gemm", "amx_peak"])]
-    for dtype, part in compute.groupby("dtype"):
-        for _, row in part.iterrows():
-            maximum = row.physical_cores * MAX_OPS_CYCLE[dtype] * MAX_TURBO_GHZ
-            if row.performance_gops > maximum * 1.03:
-                errors.append(f"{dtype} result above max-turbo architectural bound: {row.source_file}")
-
-    rejected_bf16 = compute[(compute.benchmark == "amx_onednn_gemm") &
-                            ~compute.notes.fillna("").str.contains("numactl_only")]
-    if not rejected_bf16.empty:
-        warnings.append(
-            "preserved BF16 oneDNN runs with OMP_PROC_BIND/OMP_PLACES are excluded from ceilings; "
-            "a controlled probe showed that this runtime combination serialized/scaled inversely"
-        )
-    old_sweep = df[(df.benchmark == "roofline_sweep") &
-                   ~df.notes.fillna("").str.contains("avx512_8_independent_chains")]
-    if not old_sweep.empty:
-        warnings.append(
-            "preserved dependency-limited intensity sweep is excluded from Roofline points; "
-            "the corrected sweep uses eight independent AVX-512 chains"
-        )
-
-    steady = df[(df.benchmark == "stream_triad") & (df.phase == "steady") &
-                (df.socket_scope != "dual_component")]
-    group = steady.groupby(["memory_mode", "socket_scope", "memory_target", "threads", "working_set_bytes"], dropna=False).size()
-    for key, count in group.items():
-        if count < 5: errors.append(f"fewer than five bandwidth repetitions for {key}: {count}")
-
-    return {"status": "failed" if errors else "passed", "raw_record_count": len(raw_records),
-            "normalized_row_count": len(df), "errors": errors, "warnings": warnings}
+        for root in roots:
+            topology_path=root/'system/topology.json'
+            if topology_path.exists():
+                topology=json.loads(topology_path.read_text());expected_hosts.add(topology['hostname'])
+                if topology['memory_mode']!=mode:errors.append(f'Topology mode mismatch: {campaign}')
+                if topology['threads_per_core']!=1:errors.append(f'Unexpected SMT layout: {campaign}')
+        if set(source.hostname.dropna())-expected_hosts:errors.append(f'Unexpected host: {campaign}')
+    keys=['campaign_id','memory_mode','socket_scope','socket','memory_socket','memory_target','benchmark','implementation','dtype','m','n','k','threads','working_set_bytes','notes']
+    for key,part in data.groupby(keys,dropna=False):
+        if len(part)!=policy['minimum_samples']:errors.append(f'Expected five samples for {key}: {len(part)}')
+        metric='latency_ns' if part.iloc[0].benchmark=='pointer_chase' else 'bandwidth_gbs' if part.iloc[0].benchmark=='stream_triad' else 'performance_gops'
+        values=part[metric]
+        if values.isna().any() or not all(math.isfinite(v) and v>0 for v in values):errors.append(f'Invalid {metric}: {key}')
+        if values.std()/values.mean()*100>policy['variance_warning_percent']:warnings.append(f'Variation above 5%: {key}')
+    for _,r in data[data.benchmark.isin(['avx512_peak','amx_peak','amx_onednn_gemm'])].iterrows():
+        bound=r.threads*MODEL_SPECS[r['dtype']]*MODEL_SPECS['max_turbo_ghz']
+        if r.performance_gops>bound*1.03:errors.append(f'Above architectural max-clock bound: {r.source_file}')
+        if r.elapsed_seconds<.95:errors.append(f'Compute window shorter than planned one-second interval: {r.source_file}')
+    # Coverage is explicit: a partial job cannot produce apparently complete notebooks.
+    for mode in ['flat','cache']:
+        a=data[data.memory_mode.eq(mode)&data.socket_scope.eq('single')]
+        targets=['ddr','hbm'] if mode=='flat' else ['effective_cache']
+        for socket in [0,1]:
+            for target in targets:
+                for threads in [1,2,4,8,14,28,56]:
+                    cell=a[a.socket.eq(socket)&a.benchmark.eq('stream_triad')&a.notes.eq('core_scaling')&a.memory_target.eq(target)&a.threads.eq(threads)]
+                    if len(cell)!=5:errors.append(f'Missing bandwidth cell: {mode}/{socket}/{target}/{threads}')
+                for locality in ['local','remote']:
+                    cell=a[a.socket.eq(socket)&a.benchmark.eq('pointer_chase')&a.memory_target.eq(target)&a.locality.eq(locality)]
+                    if len(cell)!=5:errors.append(f'Missing latency cell: {mode}/{socket}/{target}/{locality}')
+            if mode=='cache':
+                for size in [8,16,32,48,64,96,128]:
+                    cell=a[a.socket.eq(socket)&a.benchmark.eq('stream_triad')&a.threads.eq(56)&a.notes.isin(['core_scaling','capacity'])&(a.working_set_gib-size).abs().lt(.01)]
+                    if len(cell)!=5:errors.append(f'Missing Cache capacity cell: {socket}/{size}')
+            for benchmark in ['avx512_peak','amx_peak','amx_onednn_gemm']:
+                for threads in [1,2,4,8,14,28,56]:
+                    cell=a[a.socket.eq(socket)&a.benchmark.eq(benchmark)&a.notes.eq('compute_scaling')&a.threads.eq(threads)]
+                    if benchmark=='avx512_peak':
+                        for dtype in ['fp32','fp64']:
+                            if len(cell[cell.dtype.eq(dtype)])!=5:errors.append(f'Missing compute cell: {mode}/{socket}/{dtype}/{threads}')
+                    elif len(cell)!=5:errors.append(f'Missing compute cell: {mode}/{socket}/{benchmark}/{threads}')
+    try:
+        scaling=scaling_table(data)
+        if len(scaling)!=11:errors.append(f'Expected 11 scaling groups, found {len(scaling)}')
+    except ValueError as e:errors.append(str(e))
+    return dict(status='failed' if errors else 'passed',selected_samples=len(data),all_samples=len(df),
+                excluded_samples=int((~df.accepted).sum()),errors=sorted(set(errors)),warnings=sorted(set(warnings)))
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--measurements", type=Path, required=True)
-    parser.add_argument("--raw", type=Path, action="append", required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    frame = pd.read_csv(args.measurements)
-    report = validate(frame, args.raw)
-    args.output.write_text(json.dumps(report, indent=2) + "\n")
-    print(json.dumps(report, indent=2))
-    return 0 if report["status"] == "passed" else 1
+def main(argv=None):
+    p=argparse.ArgumentParser();p.add_argument('--measurements',type=Path,required=True)
+    p.add_argument('--raw',type=Path,action='append',required=True);p.add_argument('--output',type=Path,required=True);args=p.parse_args(argv)
+    report=validate(load_measurements(args.measurements),args.raw)
+    report['dataset_sha256']=hashlib.sha256(args.measurements.read_bytes()).hexdigest()
+    report['selection_sha256']=hashlib.sha256((ROOT/'configs/analysis.json').read_bytes()).hexdigest()
+    args.output.write_text(json.dumps(report,indent=2)+'\n')
+    print(f"Validation {report['status']}: {len(report['errors'])} errors, {len(report['warnings'])} variation warnings.")
+    for e in report['errors']:print(e)
+    return int(bool(report['errors']))
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__=='__main__':raise SystemExit(main())

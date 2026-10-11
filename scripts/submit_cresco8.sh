@@ -1,29 +1,30 @@
 #!/usr/bin/env bash
+# Site values are supplied by a private environment file outside the repository.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:?usage: submit_cresco8.sh cache|flat}"
-: "${HW_BENCH_LOGIN_ALIAS:?source a private cluster config}"
-: "${HW_BENCH_REMOTE_ROOT:?source a private cluster config}"
-: "${HW_BENCH_RESULTS_ROOT:?source a private cluster config}"
-: "${AMX_CONTAINER:?source a private cluster config}"
-rsync -a --delete --exclude=.git --exclude=.venv --exclude=data/raw --exclude=data/processed \
-  "${ROOT}/" "${HW_BENCH_LOGIN_ALIAS}:${HW_BENCH_REMOTE_ROOT}/"
-run_id="${MODE}-$(date -u +%Y%m%dT%H%M%SZ)"
-output="${HW_BENCH_RESULTS_ROOT}/${run_id}"
-ssh "${HW_BENCH_LOGIN_ALIAS}" "mkdir -p '${output}'"
+[[ "${MODE}" == cache || "${MODE}" == flat ]] || exit 2
+: "${HW_BENCH_LOGIN_ALIAS:?}" "${HW_BENCH_REMOTE_ROOT:?}" "${HW_BENCH_RESULTS_ROOT:?}" "${HW_BENCH_SLURM_ACCOUNT:?}" "${AMX_CONTAINER:?}"
 if [[ "${MODE}" == cache ]]; then
-  : "${HW_BENCH_CACHE_PARTITION:?}" "${HW_BENCH_CACHE_NODE:?}" "${HW_BENCH_SLURM_ACCOUNT:?}"
-  ssh "${HW_BENCH_LOGIN_ALIAS}" sbatch --parsable \
-    --job-name=hw-roofline-cache --partition="${HW_BENCH_CACHE_PARTITION}" \
-    --account="${HW_BENCH_SLURM_ACCOUNT}" --nodelist="${HW_BENCH_CACHE_NODE}" \
-    --nodes=1 --ntasks=1 --cpus-per-task=112 --exclusive --time=01:00:00 \
-    --output="${output}/slurm-%j.out" --error="${output}/slurm-%j.err" \
-    --wrap="export AMX_CONTAINER='${AMX_CONTAINER}'; bash '${HW_BENCH_REMOTE_ROOT}/scripts/run_all.sh' cache '${output}'"
-elif [[ "${MODE}" == flat ]]; then
-  : "${HW_BENCH_FLAT_NODE:?}" "${HW_BENCH_FLAT_STAGE_ROOT:?}"
-  ssh "${HW_BENCH_LOGIN_ALIAS}" \
-    "mkdir -p '${HW_BENCH_FLAT_STAGE_ROOT}'; rsync -a --delete --exclude=.git '${HW_BENCH_REMOTE_ROOT}/' '${HW_BENCH_FLAT_STAGE_ROOT}/'; ssh '${HW_BENCH_FLAT_NODE}' \"tmux kill-session -t hw-roofline-${run_id} 2>/dev/null || true; tmux new-session -d -s hw-roofline-${run_id} 'export AMX_CONTAINER=${AMX_CONTAINER}; bash ${HW_BENCH_FLAT_STAGE_ROOT}/scripts/run_all.sh flat ${output} >>${output}/direct.out 2>>${output}/direct.err'\""
+  NODE="${HW_BENCH_CACHE_NODE:?}"; PARTITION="${HW_BENCH_CACHE_PARTITION:?}"
 else
-  echo 'mode must be cache or flat' >&2; exit 2
+  NODE="${HW_BENCH_FLAT_NODE:?}"; PARTITION="${HW_BENCH_FLAT_PARTITION:?}"
 fi
-printf 'remote_result=%s\n' "${output}"
+# Use a unique staged source tree and result directory; never delete previous campaigns.
+RUN_ID="${MODE}-thesis-$(date -u +%Y%m%dT%H%M%SZ)"
+STAGE="${HW_BENCH_REMOTE_ROOT}/${RUN_ID}"
+OUTPUT="${HW_BENCH_RESULTS_ROOT}/${RUN_ID}"
+export RUN_ID STAGE OUTPUT NODE PARTITION ROOT
+python3 - <<'PY'
+import os,shlex,subprocess
+v=os.environ;alias=v['HW_BENCH_LOGIN_ALIAS']
+def remote(argv):return subprocess.check_output(['ssh',alias,shlex.join(argv)],text=True)
+remote(['mkdir','-p',v['STAGE'],v['OUTPUT']])
+subprocess.run(['rsync','-a','--exclude=.git','--exclude=.venv','--exclude=data','--exclude=figures','--exclude=build','--exclude=__pycache__',v['ROOT']+'/',alias+':'+v['STAGE']+'/'],check=True)
+body=shlex.join(['env','AMX_CONTAINER='+v['AMX_CONTAINER'],'HW_BENCH_CAMPAIGN_PART='+v.get('HW_BENCH_CAMPAIGN_PART','all'),'bash',v['STAGE']+'/scripts/run_all.sh',v['MODE'] if 'MODE' in v else v['RUN_ID'].split('-')[0],v['OUTPUT']])
+print(remote(['sbatch','--parsable','--job-name=hw-thesis-'+v['RUN_ID'].split('-')[0],
+ '--partition='+v['PARTITION'],'--account='+v['HW_BENCH_SLURM_ACCOUNT'],'--nodelist='+v['NODE'],
+ '--nodes=1','--ntasks=1','--cpus-per-task=112','--exclusive','--mem=0','--time=01:00:00',
+ '--output='+v['OUTPUT']+'/slurm-%j.out','--error='+v['OUTPUT']+'/slurm-%j.err','--wrap='+body]),end='')
+print('remote_result='+v['OUTPUT'])
+PY

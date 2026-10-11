@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
+# Retrieve exactly the campaigns selected for analysis; preserve every previous raw directory.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-: "${HW_BENCH_LOGIN_ALIAS:?source a private cluster config}"
-: "${HW_BENCH_RESULTS_ROOT:?source a private cluster config}"
-for mode in cache flat; do
-  remote_run="$(ssh "${HW_BENCH_LOGIN_ALIAS}" "find '${HW_BENCH_RESULTS_ROOT}' -mindepth 1 -maxdepth 1 -type d -name '${mode}-*' | sort | tail -1")"
-  [[ -n "${remote_run}" ]] || { echo "no ${mode} run under ${HW_BENCH_RESULTS_ROOT}" >&2; exit 1; }
-  local_run="${ROOT}/data/raw/${mode}/$(basename "${remote_run}")"
-  mkdir -p "${local_run}"
-  rsync -a "${HW_BENCH_LOGIN_ALIAS}:${remote_run}/" "${local_run}/"
-  cp "${local_run}/system/topology.json" "${ROOT}/data/processed/topology_${mode}.json"
-  # Runs recorded before the platform record existed do not have one.
-  if [[ -f "${local_run}/system/platform.json" ]]; then
-    cp "${local_run}/system/platform.json" "${ROOT}/data/processed/platform_${mode}.json"
-  fi
-done
-PYTHONPATH="${ROOT}/src" python3 -m hwbench.process \
-  --input "${ROOT}/data/raw/cache" --input "${ROOT}/data/raw/flat" \
-  --output "${ROOT}/data/processed/measurements.csv" \
-  --summary-output "${ROOT}/data/processed/summary.csv"
+: "${HW_BENCH_LOGIN_ALIAS:?}" "${HW_BENCH_RESULTS_ROOT:?}"
+export ROOT
+python3 - <<'PY'
+import json,os,subprocess
+from pathlib import Path
+root=Path(os.environ['ROOT']);policy=json.loads((root/'configs/analysis.json').read_text())
+for mode,campaign in policy['primary_campaigns'].items():
+    destination=root/'data/raw'/mode/campaign;destination.mkdir(parents=True,exist_ok=True)
+    subprocess.run(['rsync','-a',os.environ['HW_BENCH_LOGIN_ALIAS']+':'+os.environ['HW_BENCH_RESULTS_ROOT']+'/'+campaign+'/',str(destination)+'/'],check=True)
+    print('Retrieved',campaign)
+PY
