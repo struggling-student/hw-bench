@@ -12,10 +12,12 @@ from hwbench.analysis import ROOT,MODEL_SPECS,load_measurements,select_measureme
 def validate(df,raw_roots,policy=None):
     policy=policy or json.loads((ROOT/'configs/analysis.json').read_text())
     data=select_measurements(df,policy);errors=[];warnings=[]
-    for mode,campaign in policy['primary_campaigns'].items():
+    campaigns={(mode,c) for mode,c in policy['primary_campaigns'].items()}
+    for mode,overrides in policy.get('benchmark_campaigns',{}).items():campaigns.update((mode,c) for c in overrides.values())
+    for mode,campaign in sorted(campaigns):
         roots=[root/campaign for root in raw_roots if root.name==mode]
         if not roots or not any((r/'COMPLETED').exists() for r in roots):errors.append(f'Campaign is not complete: {campaign}')
-        source=df[df.campaign_id.eq(campaign)]
+        source=data[data.campaign_id.eq(campaign)]
         if source.empty:errors.append(f'Missing campaign: {campaign}')
         rejected=source[~source.accepted]
         if len(rejected):errors.append(f'{campaign}: {len(rejected)} rejected selected samples: '+', '.join(sorted(set(rejected.exclusion_reason))))
@@ -27,6 +29,8 @@ def validate(df,raw_roots,policy=None):
                 if topology['memory_mode']!=mode:errors.append(f'Topology mode mismatch: {campaign}')
                 if topology['threads_per_core']!=1:errors.append(f'Unexpected SMT layout: {campaign}')
         if set(source.hostname.dropna())-expected_hosts:errors.append(f'Unexpected host: {campaign}')
+    for mode,part in data.groupby('memory_mode'):
+        if part.hostname.nunique()!=1:errors.append(f'Roofline campaigns must use the same host: {mode}')
     keys=['campaign_id','memory_mode','socket_scope','socket','memory_socket','memory_target','benchmark','implementation','dtype','m','n','k','threads','working_set_bytes','notes']
     for key,part in data.groupby(keys,dropna=False):
         if len(part)!=policy['minimum_samples']:errors.append(f'Expected five samples for {key}: {len(part)}')

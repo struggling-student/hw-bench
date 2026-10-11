@@ -32,7 +32,11 @@ def select_measurements(df, policy=None):
     policy=policy or json.loads((ROOT/'configs/analysis.json').read_text())
     selected=df[df.accepted & df.phase.eq('steady')].copy()
     mask=pd.Series(False,index=selected.index)
-    for mode,campaign in policy['primary_campaigns'].items():mask |= selected.memory_mode.eq(mode)&selected.campaign_id.eq(campaign)
+    for mode,campaign in policy['primary_campaigns'].items():
+        overrides=policy.get('benchmark_campaigns',{}).get(mode,{})
+        mask |= selected.memory_mode.eq(mode)&selected.campaign_id.eq(campaign)&~selected.benchmark.isin(overrides)
+        for benchmark,override in overrides.items():
+            mask |= selected.memory_mode.eq(mode)&selected.benchmark.eq(benchmark)&selected.campaign_id.eq(override)
     return selected[mask].copy()
 
 
@@ -84,10 +88,10 @@ def knees_table(df):
     rows=[];mem=memory_table(df);comp=compute_table(df)
     for _,m in mem.iterrows():
         if (m.memory_mode=='flat' and not np.isclose(m.working_set_gib,8)) or (m.memory_mode=='cache' and not any(np.isclose(m.working_set_gib,v) for v in [16,96])):continue
-        paths=comp[comp.campaign_id.eq(m.campaign_id)&comp.socket.eq(m.socket)]
+        paths=comp[comp.memory_mode.eq(m.memory_mode)&comp.socket.eq(m.socket)]
         for _,c in paths.iterrows():
             if c.implementation=='onednn_numactl_only_omp_affinity_unset' and c.m!=6144:continue
-            rows.append(dict(campaign_id=m.campaign_id,memory_mode=m.memory_mode,socket=m.socket,memory_target=m.memory_target,
+            rows.append(dict(memory_campaign_id=m.campaign_id,compute_campaign_id=c.campaign_id,memory_mode=m.memory_mode,socket=m.socket,memory_target=m.memory_target,
                working_set_gib=m.working_set_gib,dtype=c['dtype'],implementation=c.implementation,
                compute_gflops=c['median'],bandwidth_gbs=m['median'],knee_flop_per_byte=c['median']/m['median']))
     return pd.DataFrame(rows)

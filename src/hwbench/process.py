@@ -75,6 +75,8 @@ def rows_from_record(record: dict[str, Any], source: Path, compiler: dict[str, A
                        bandwidth_gbs=traffic/elapsed/1e9 if traffic else None,arithmetic_intensity=ops/traffic if traffic else None,
                        latency_ns=elapsed*1e9/loads if loads else None)
             if r.get('benchmark')=='pointer_chase' and loads<=0:errors.append('invalid_load_count')
+            if record.get('process_start_ns') is not None and row.get('start_ns') is not None:
+                if row['start_ns']<record['process_start_ns'] or row['end_ns']>record['process_end_ns']:errors.append('sample_outside_process_clock_window')
             if row.get('start_ns') is not None and abs((row['end_ns']-row['start_ns'])/1e9-elapsed)>1e-6:errors.append('inconsistent_window')
         ws=row.get('working_set_bytes');row.update(working_set_gib=ws/2**30 if ws else None,total_working_set_bytes=ws,
                                                 accepted=not errors,exclusion_reason=';'.join(errors))

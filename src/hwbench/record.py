@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,9 @@ def main(argv: list[str] | None = None) -> int:
     if not command:
         parser.error("a command is required after --")
     before = _frequency_khz()
+    started_ns = time.monotonic_ns()
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    finished_ns = time.monotonic_ns()
     after = _frequency_khz()
     parsed: dict[str, Any] | None = None
     for line in reversed(completed.stdout.splitlines()):
@@ -60,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
         "memory_socket": args.memory_socket,
         "synchronized": bool(os.environ.get("HWBENCH_SYNC_DIR")),
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "process_start_ns": started_ns,
+        "process_end_ns": finished_ns,
         "hostname": platform.node(),
         "memory_mode": args.memory_mode,
         "memory_target": args.memory_target,
