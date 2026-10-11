@@ -27,7 +27,8 @@ path in the private environment:
 ./scripts/run_all.sh flat /absolute/output/flat-run
 ```
 
-`run_all.sh` records the system snapshot, builds and verifies the native binaries,
+`run_all.sh` records the system snapshot (topology map and platform record; see
+[Scope and topology](01_SCOPE_AND_TOPOLOGY.md#platform-record)), builds and verifies the native binaries,
 then runs bandwidth, compute, and intensity sweeps. Cache and Flat are separate
 campaigns; it does not alter firmware settings. The Flat concurrent DDR+HBM diagnostic
 can be run with `scripts/run_concurrent_tiers.sh` after the Flat build. Each raw JSON
@@ -53,7 +54,7 @@ source /private/path/to/hw-bench.env
 
 The retrieval script selects the newest run of each mode, copies complete raw
 directories into `data/raw/cache/` and `data/raw/flat/`, and writes local topology
-JSON plus normalized CSV. If a different run is needed, copy that run explicitly
+and platform JSON plus normalized CSV. If a different run is needed, copy that run explicitly
 and run the processor below; do not overwrite or delete prior raw records.
 
 ## Rebuild analysis entirely offline

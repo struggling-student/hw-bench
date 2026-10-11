@@ -32,6 +32,28 @@ maps to `data/processed/topology_<mode>.json`. The topology is checked again on 
 execution node before binding; the table above is an observation, not a hard-coded
 mapping.
 
+## Platform record
+
+The topology map says where memory is; the platform record says under which
+conditions it was measured. `scripts/collect_system_info.sh` writes both into each
+campaign's `system/` directory, and retrieval copies the record to
+`data/processed/platform_<mode>.json`. This repository is the single source for the
+platform configuration reported in the thesis. Every field is read without root, on
+the execution node itself; the login node differs (for example, it runs with NUMA
+balancing enabled), so it is never a substitute.
+
+| File | Contents |
+| --- | --- |
+| `topology.json` | Sockets, CPU/DDR and HBM NUMA nodes, distances, detected memory mode |
+| `platform.json` | Memory-side cache (size, line, direct-mapped/associative, write policy) and HMAT access attributes; EDAC DDR DIMMs and HBM channels per socket; SMT, cpufreq driver and governor, ISA flags, microcode; NUMA balancing, zone reclaim, tier demotion, transparent huge pages, `perf_event_paranoid`, kernel command line; RAPL and MSR readability and available PMU types; the job's cgroup cpuset; InfiniBand ports; local disks, `/tmp` and `/dev/shm` |
+| `lstopo.txt`, `lstopo.xml`, `lstopo.png` | hwloc topology without I/O devices; Cache Mode shows the HBM as a `MemCache` object |
+| `site.txt` | OS release, Slurm job and node records, `ibstat`, loaded modules |
+| `system.txt` | `lscpu`, `numactl --hardware`, memory, toolchain and library versions, OpenMP environment |
+
+An unreadable source is recorded as `false` or `null` rather than skipped: RAPL and
+MSR access being restricted to root is itself part of the record, because it bounds
+which energy and counter measurements are possible.
+
 ## What the Roofline means here
 
 Every plotted envelope is an empirical **upper bound** built from separately measured

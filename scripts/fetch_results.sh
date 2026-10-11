@@ -10,6 +10,10 @@ for mode in cache flat; do
   mkdir -p "${local_run}"
   rsync -a "${HW_BENCH_LOGIN_ALIAS}:${remote_run}/" "${local_run}/"
   cp "${local_run}/system/topology.json" "${ROOT}/data/processed/topology_${mode}.json"
+  # Runs recorded before the platform record existed do not have one.
+  if [[ -f "${local_run}/system/platform.json" ]]; then
+    cp "${local_run}/system/platform.json" "${ROOT}/data/processed/platform_${mode}.json"
+  fi
 done
 PYTHONPATH="${ROOT}/src" python3 -m hwbench.process \
   --input "${ROOT}/data/raw/cache" --input "${ROOT}/data/raw/flat" \
