@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""Verified oneDNN GEMM at LLM projection shapes, with weights streamed from memory.
+
+One process measures one (M, N, K) point.  Weights are a *pool* of identical
+N x K matrices at distinct addresses, sized well beyond the last-level cache and
+visited round-robin, so each call reads its weights from memory the way a decoder
+layer does.  ``y = x @ W^T`` with x of shape M x K, as in ``nn.Linear``.
+
+Modeled traffic per call is the weight matrix + activations in + result out;
+operations are 2*M*N*K.  The two together place the point on a roofline.
+
+INT8 is only measured when a probe shows that a oneDNN matmul with an ``amx``
+implementation really executes it (``--probe-int8``); otherwise it is reported as
+unavailable instead of being timed on a slow fallback.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import ctypes
+import hashlib
+import json
+import os
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+import torch
+
+ELEMENT_BYTES = {"bf16": 2, "int8": 1}
+OUTPUT_BYTES = {"bf16": 2, "int8": 4}
+
+
+def window(rep):
+    directory = os.environ.get("HWBENCH_SYNC_DIR")
+    if not directory:
+        return time.monotonic_ns()
+    root = Path(tempfile.gettempdir()) / (
+        "hwbench-sync-" + hashlib.sha256(directory.encode()).hexdigest()[:24]
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    participant = int(os.environ["HWBENCH_PARTICIPANT"])
+    count = int(os.environ["HWBENCH_PARTICIPANTS"])
+    prefix = f"rep{rep}"
+    (root / f"{prefix}-ready{participant}").write_text("1")
+    startfile = root / f"{prefix}-start"
+    timeout = time.monotonic() + 120
+    if participant == 0:
+        while not all((root / f"{prefix}-ready{i}").exists() for i in range(count)):
+            if time.monotonic() > timeout:
+                raise RuntimeError("participant readiness timeout")
+            time.sleep(0.002)
+        tmp = root / f"{prefix}-tmp"
+        tmp.write_text(str(time.monotonic_ns() + 250_000_000))
+        tmp.replace(startfile)
+    while not startfile.exists():
+        if time.monotonic() > timeout:
+            raise RuntimeError("shared window timeout")
+        time.sleep(0.002)
+    start = int(startfile.read_text())
+    while time.monotonic_ns() < start:
+        time.sleep(0.00002)
+    return start
+
+
+@contextlib.contextmanager
+def captured_output():
+    """Capture what native code writes to file descriptors 1 and 2."""
+
+    libc = ctypes.CDLL(None)
+    saved = {fd: os.dup(fd) for fd in (1, 2)}
+    sink = tempfile.TemporaryFile(mode="w+b")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    for fd in saved:
+        os.dup2(sink.fileno(), fd)
+    text = {"value": ""}
+    try:
+        yield text
+    finally:
+        libc.fflush(None)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        for fd, original in saved.items():
+            os.dup2(original, fd)
+            os.close(original)
+        sink.seek(0)
+        text["value"] = sink.read().decode(errors="replace")
+        sink.close()
+
+
+def amx_execution_lines(text):
+    return [
+        line
+        for line in text.splitlines()
+        if ",exec," in line.lower() and "matmul" in line.lower() and "amx" in line.lower()
+    ]
+
+
+def probe_int8():
+    """Which INT8 matmul paths exist, and does any run on AMX through oneDNN?"""
+
+    torch.manual_seed(7)
+    report = {
+        "torch": torch.__version__,
+        "onednn_quantized_ops": sorted(
+            name
+            for name in dir(torch.ops.onednn)
+            if any(tag in name.lower() for tag in ("q", "int8", "scaled"))
+        )
+        if hasattr(torch.ops, "onednn")
+        else [],
+        "candidates": [],
+        "accepted": False,
+    }
+    a = torch.randint(-3, 4, (256, 1024), dtype=torch.int8)
+    b = torch.randint(-3, 4, (1024, 512), dtype=torch.int8)
+    reference = a.float() @ b.float()
+    candidate = {"name": "torch._int_mm", "accepted": False}
+    try:
+        with torch.backends.mkldnn.verbose(torch.backends.mkldnn.VERBOSE_ON):
+            with captured_output() as output:
+                result = torch._int_mm(a, b)
+        text = output["value"]
+        lines = amx_execution_lines(text)
+        candidate.update(
+            dtype=str(result.dtype),
+            correct=bool(torch.equal(result.float(), reference)),
+            amx_lines=lines[:3],
+            verbose_head=text.splitlines()[:5],
+        )
+        candidate["accepted"] = bool(lines) and candidate["correct"]
+    except Exception as error:  # noqa: BLE001 - the probe must report, not fail
+        candidate["error"] = f"{type(error).__name__}: {error}"
+    report["candidates"].append(candidate)
+    accepted = [c for c in report["candidates"] if c["accepted"]]
+    report["accepted"] = bool(accepted)
+    report["path"] = accepted[0]["name"] if accepted else None
+    return report
+
+
+def build_pool(dtype, n, k, pool_bytes):
+    weight_bytes = n * k * ELEMENT_BYTES[dtype]
+    copies = max(2, -(-pool_bytes // weight_bytes))
+    if dtype == "bf16":
+        base = torch.randn((n, k), dtype=torch.float32).to(torch.bfloat16)
+    else:
+        base = torch.randint(-3, 4, (n, k), dtype=torch.int8)
+    pool = []
+    for _ in range(copies):
+        w = torch.empty((n, k), dtype=base.dtype)
+        w.copy_(base)
+        pool.append(w)
+    return pool, weight_bytes
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--dtype", choices=sorted(ELEMENT_BYTES))
+    p.add_argument("--m", type=int)
+    p.add_argument("--n", type=int)
+    p.add_argument("--k", type=int)
+    p.add_argument("--pool-bytes", type=int, default=1 << 30)
+    p.add_argument("--seconds", type=float, default=1)
+    p.add_argument("--repetitions", type=int, default=5)
+    p.add_argument("--warmups", type=int, default=3)
+    p.add_argument("--probe-int8", action="store_true")
+    args = p.parse_args()
+    threads = int(os.environ["OMP_NUM_THREADS"])
+    torch.set_num_threads(threads)
+    if args.probe_int8:
+        print(json.dumps(probe_int8()))
+        return 0
+    if not (args.dtype and args.m and args.n and args.k):
+        p.error("--dtype, --m, --n and --k are required")
+    if args.seconds <= 0 or args.repetitions < 1:
+        raise ValueError("invalid measurement dimensions")
+    torch.manual_seed(7)
+    m, n, k, dtype = args.m, args.n, args.k, args.dtype
+    pool, weight_bytes = build_pool(dtype, n, k, args.pool_bytes)
+    x = (
+        torch.randn((m, k), dtype=torch.float32).to(torch.bfloat16)
+        if dtype == "bf16"
+        else torch.randint(-3, 4, (m, k), dtype=torch.int8)
+    )
+
+    def multiply(w):
+        if dtype == "bf16":
+            return torch.nn.functional.linear(x, w)
+        return torch._int_mm(x, w.t())
+
+    # Only the verification warm-up prints primitive execution evidence.
+    with torch.backends.mkldnn.verbose(torch.backends.mkldnn.VERBOSE_ON):
+        result = multiply(pool[0])
+    for i in range(args.warmups):
+        result = multiply(pool[i % len(pool)])
+    call_bytes = weight_bytes + m * k * ELEMENT_BYTES[dtype] + m * n * OUTPUT_BYTES[dtype]
+    samples = []
+    cursor = 0
+    for rep in range(args.repetitions):
+        planned = window(rep)
+        deadline = planned + int(args.seconds * 1e9)
+        start = time.monotonic_ns()
+        count = 0
+        while True:
+            result = multiply(pool[cursor])
+            cursor = (cursor + 1) % len(pool)
+            count += 1
+            if time.monotonic_ns() >= deadline:
+                break
+        end = time.monotonic_ns()
+        samples.append(
+            dict(
+                start_ns=start,
+                end_ns=end,
+                planned_start_ns=planned,
+                elapsed_seconds=(end - start) / 1e9,
+                operations=2 * m * n * k * count,
+                modeled_bytes=call_bytes * count,
+            )
+        )
+    valid = True
+    if dtype == "bf16":
+        valid = bool(torch.isfinite(result).all())
+        for i, j in [(0, 0), (m - 1, n - 1), (0, n - 1), (m // 2, n // 2)]:
+            expected = float(torch.dot(x[i].float(), pool[0][j].float()))
+            observed = float(result[i, j])
+            valid &= abs(observed - expected) <= max(0.5, 0.02 * abs(expected))
+    else:
+        for i, j in [(0, 0), (m - 1, n - 1), (0, n - 1), (m // 2, n // 2)]:
+            expected = int(torch.dot(x[i].int(), pool[0][j].int()))
+            valid &= int(result[i, j]) == expected
+    print(
+        json.dumps(
+            dict(
+                benchmark="onednn_gemm_sweep",
+                kernel="gemm",
+                dtype=dtype,
+                implementation="onednn_rotating_weight_pool",
+                threads=torch.get_num_threads(),
+                m=m,
+                n=n,
+                k=k,
+                working_set_bytes=weight_bytes * len(pool),
+                weight_bytes=weight_bytes,
+                pool_copies=len(pool),
+                torch_version=torch.__version__,
+                samples=samples,
+                valid=valid,
+                checksum=float(result[0, 0]) + float(result[-1, -1]),
+                source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            )
+        )
+    )
+    return 0 if valid else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

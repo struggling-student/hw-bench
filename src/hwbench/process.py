@@ -69,7 +69,31 @@ FIELDS = [
     "launch_method",
     "node",
     "memory_mode_verified",
+    "cycles",
+    "amx_busy_cycles",
+    "ghz_effective",
+    "amx_busy_frac",
 ]
+
+
+def _legacy(record: dict[str, Any]) -> bool:
+    """Schema 1.0 is the superseded September pipeline."""
+
+    return record.get("schema_version", "1.0") == "1.0"
+
+
+# Disassembly evidence each benchmark needs before its numbers are accepted.
+REQUIRED_VERIFICATION = {
+    "amx_peak": ("amx_bf16", "missing_amx_disassembly_evidence"),
+    "int8_amx_peak": ("amx_int8", "missing_amx_int8_disassembly_evidence"),
+    "avx512_peak": ("avx512_fma", "missing_avx512_disassembly_evidence"),
+    "roofline_sweep": ("avx512_fma", "missing_avx512_disassembly_evidence"),
+    "vnni_peak": ("avx512_vnni", "missing_vnni_disassembly_evidence"),
+    "avx512_bf16_peak": ("avx512_bf16", "missing_avx512_bf16_disassembly_evidence"),
+    "stream_triad_nt": ("nt_store", "missing_nt_store_disassembly_evidence"),
+}
+# Benchmarks reported as bandwidth rather than operation rate.
+BANDWIDTH_BENCHMARKS = {"stream_triad", "stream_triad_nt", "stream_read"}
 
 
 def _reasons(record, compiler):
@@ -85,11 +109,11 @@ def _reasons(record, compiler):
         and record.get("hostname") != record["_expected_host"]
     ):
         reasons.append("non_target_host")
-    if r.get("dtype") == "int8":
+    if r.get("dtype") == "int8" and _legacy(record):
         reasons.append("int8_out_of_scope")
     if r.get("threads", record.get("threads")) != record.get("threads"):
         reasons.append("worker_count_mismatch")
-    if benchmark == "amx_onednn_gemm":
+    if benchmark in ("amx_onednn_gemm", "onednn_gemm_sweep"):
         evidence = [
             s.lower()
             for s in record.get("stdout", "").splitlines()
@@ -97,18 +121,17 @@ def _reasons(record, compiler):
         ]
         if not any("amx" in s for s in evidence):
             reasons.append("missing_amx_execution_evidence")
-        if "numactl_only" not in (r.get("implementation") or record.get("notes") or ""):
+        affinity = r.get("implementation") or record.get("notes") or ""
+        if benchmark == "amx_onednn_gemm" and "numactl_only" not in affinity:
             reasons.append("superseded_onednn_affinity")
     if benchmark == "roofline_sweep" and "avx512_8_independent_chains" not in (
         r.get("implementation") or record.get("notes") or ""
     ):
         reasons.append("superseded_dependency_limited_sweep")
-    if benchmark == "amx_peak" and not compiler.get("verification", {}).get("amx_bf16"):
-        reasons.append("missing_amx_disassembly_evidence")
-    if benchmark in ["avx512_peak", "roofline_sweep"] and not compiler.get(
-        "verification", {}
-    ).get("avx512_fma"):
-        reasons.append("missing_avx512_disassembly_evidence")
+    if benchmark in REQUIRED_VERIFICATION:
+        key, reason = REQUIRED_VERIFICATION[benchmark]
+        if not compiler.get("verification", {}).get(key):
+            reasons.append(reason)
     return reasons
 
 
@@ -129,6 +152,24 @@ def _requested_seconds(record: dict[str, Any]) -> float | None:
     return None
 
 
+def _clock_fields(row: dict[str, Any], threads: int | None) -> dict[str, Any]:
+    """Effective core clock and AMX-busy fraction from self-monitored counters.
+
+    ``cycles`` are unhalted user-mode core cycles summed over the benchmark's
+    threads, so dividing by threads x wall time gives the average clock the cores
+    actually ran at while the kernel executed.
+    """
+
+    cycles, elapsed = row.get("cycles"), row.get("elapsed_seconds")
+    if not cycles or cycles <= 0 or not threads or not elapsed or elapsed <= 0:
+        return dict(ghz_effective=None, amx_busy_frac=None)
+    amx = row.get("amx_busy_cycles")
+    return dict(
+        ghz_effective=cycles / (threads * elapsed) / 1e9,
+        amx_busy_frac=amx / cycles if amx is not None and amx >= 0 else None,
+    )
+
+
 def _launch_method(record: dict[str, Any], campaign: dict[str, Any] | None):
     """How the campaign was started; campaigns that predate the field ran in Slurm."""
 
@@ -147,7 +188,7 @@ def rows_from_record(
     campaign: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     r = record.get("result") or {}
-    if not r or r.get("dtype") == "int8":
+    if not r or (r.get("dtype") == "int8" and _legacy(record)):
         return []
     reasons = _reasons(record, compiler)
     mode = record.get("memory_mode")
@@ -176,7 +217,11 @@ def rows_from_record(
         socket_scope=record.get("socket_scope"),
         socket=socket,
         memory_socket=ms,
-        locality="local" if ms == socket else "remote",
+        locality="span"
+        if record.get("socket_scope") == "span"
+        else "local"
+        if ms == socket
+        else "remote",
         memory_target=target,
         benchmark=r.get("benchmark"),
         kernel=r.get("kernel"),
@@ -271,6 +316,7 @@ def rows_from_record(
                 arithmetic_intensity=ops / traffic if traffic else None,
                 latency_ns=elapsed * 1e9 / loads if loads else None,
             )
+            row.update(_clock_fields(row, row.get("counter_threads") or row.get("threads")))
             if r.get("benchmark") == "pointer_chase" and loads <= 0:
                 errors.append("invalid_load_count")
             if (
@@ -375,6 +421,12 @@ def _aggregate(rows, scope, component):
             row.update(
                 memory_target="ddr+hbm", memory_socket=row["socket"], locality="local"
             )
+        cycles = [m.get("cycles") for m in members]
+        amx_cycles = [m.get("amx_busy_cycles") for m in members]
+        row["cycles"] = sum(cycles) if all(c for c in cycles) else None
+        row["amx_busy_cycles"] = (
+            sum(amx_cycles) if all(a is not None and a >= 0 for a in amx_cycles) else None
+        )
         row.update(
             threads=sum(m["threads"] for m in members),
             physical_cores=sum(m["physical_cores"] for m in members),
@@ -385,6 +437,7 @@ def _aggregate(rows, scope, component):
             mem_bind=";".join(str(m["mem_bind"]) for m in members),
         )
         if not errors:
+            row.update(_clock_fields(row, row["threads"]))
             row.update(
                 bandwidth_gbs=row["modeled_bytes"] / row["elapsed_seconds"] / 1e9
                 if row["modeled_bytes"]
@@ -458,6 +511,10 @@ def main(argv=None):
                     compiler["verification"] = {
                         "avx512_fma": "vfmadd" in evidence and "%zmm" in evidence,
                         "amx_bf16": "tdpbf16ps" in evidence,
+                        "amx_int8": "tdpbssd" in evidence,
+                        "avx512_vnni": "vpdpbusd" in evidence,
+                        "avx512_bf16": "vdpbf16ps" in evidence,
+                        "nt_store": "vmovntpd" in evidence,
                     }
             source = Path(root.name) / path.relative_to(root)
             reasons = _reasons(record, compiler)
@@ -547,7 +604,7 @@ def main(argv=None):
             "latency_ns"
             if part.iloc[0].benchmark == "pointer_chase"
             else "bandwidth_gbs"
-            if part.iloc[0].benchmark == "stream_triad"
+            if part.iloc[0].benchmark in BANDWIDTH_BENCHMARKS
             else "performance_gops"
         )
         values = part[metric].dropna()
