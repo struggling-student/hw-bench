@@ -95,7 +95,9 @@ def amx_execution_lines(text):
     return [
         line
         for line in text.splitlines()
-        if ",exec," in line.lower() and "matmul" in line.lower() and "amx" in line.lower()
+        if ",exec," in line.lower()
+        and "matmul" in line.lower()
+        and "amx" in line.lower()
     ]
 
 
@@ -135,10 +137,94 @@ def probe_int8():
     except Exception as error:  # noqa: BLE001 - the probe must report, not fail
         candidate["error"] = f"{type(error).__name__}: {error}"
     report["candidates"].append(candidate)
+    report["candidates"].append(probe_qlinear())
     accepted = [c for c in report["candidates"] if c["accepted"]]
     report["accepted"] = bool(accepted)
     report["path"] = accepted[0]["name"] if accepted else None
     return report
+
+
+def qlinear_variants(w_q, m):
+    """Ways of preparing/calling oneDNN's quantized linear; the first that runs wins."""
+
+    n, k = w_q.shape
+    scale = torch.ones(n, dtype=torch.float32)
+    zero = torch.zeros(n, dtype=torch.int32)
+
+    def call(packed):
+        def run(x_q):
+            return torch.ops.onednn.qlinear_pointwise(
+                x_q,
+                1.0,
+                0,
+                packed,
+                scale,
+                zero,
+                None,
+                1.0,
+                0,
+                torch.float32,
+                "none",
+                [],
+                "",
+            )
+
+        return run
+
+    yield (
+        "prepack(weight, x_shape)",
+        lambda: call(torch.ops.onednn.qlinear_prepack(w_q, [m, k])),
+    )
+    yield (
+        "prepack(weight.t(), x_shape)",
+        lambda: call(torch.ops.onednn.qlinear_prepack(w_q.t().contiguous(), [m, k])),
+    )
+    yield (
+        "prepack(weight, None)",
+        lambda: call(torch.ops.onednn.qlinear_prepack(w_q, None)),
+    )
+
+
+def prepare_qlinear(w_q, m):
+    """Return (name, run) for the first variant whose call succeeds."""
+
+    errors = []
+    probe_x = torch.randint(0, 4, (m, w_q.shape[1]), dtype=torch.uint8)
+    for name, make in qlinear_variants(w_q, m):
+        try:
+            run = make()
+            run(probe_x)
+            return name, run, errors
+        except Exception as error:  # noqa: BLE001
+            errors.append(f"{name}: {type(error).__name__}: {str(error)[:160]}")
+    return None, None, errors
+
+
+def probe_qlinear():
+    candidate = {"name": "onednn.qlinear_pointwise", "accepted": False}
+    try:
+        w_q = torch.randint(-3, 4, (512, 1024), dtype=torch.int8)
+        x_q = torch.randint(0, 4, (256, 1024), dtype=torch.uint8)
+        reference = x_q.float() @ w_q.float().t()
+        with torch.backends.mkldnn.verbose(torch.backends.mkldnn.VERBOSE_ON):
+            with captured_output() as output:
+                variant, run, errors = prepare_qlinear(w_q, 256)
+                result = run(x_q) if run else None
+        candidate["variant"] = variant
+        candidate["errors"] = errors
+        text = output["value"]
+        lines = [
+            line
+            for line in text.splitlines()
+            if ",exec," in line.lower() and "amx" in line.lower()
+        ]
+        candidate.update(amx_lines=lines[:3], verbose_head=text.splitlines()[:5])
+        if result is not None:
+            candidate["correct"] = bool(torch.equal(result.float(), reference))
+            candidate["accepted"] = bool(lines) and candidate["correct"]
+    except Exception as error:  # noqa: BLE001
+        candidate["error"] = f"{type(error).__name__}: {error}"
+    return candidate
 
 
 def build_pool(dtype, n, k, pool_bytes):
@@ -186,17 +272,36 @@ def main():
         else torch.randint(-3, 4, (m, k), dtype=torch.int8)
     )
 
-    def multiply(w):
+    int8_runs = None
+    if dtype == "int8":
+        report = probe_int8()
+        if not report["accepted"]:
+            print(json.dumps(dict(valid=False, error="no verified INT8 AMX path")))
+            return 3
+        if report["path"] == "torch._int_mm":
+            int8_runs = [
+                (lambda w: lambda a, w=w: torch._int_mm(a, w.t()))(w) for w in pool
+            ]
+        else:
+            x = torch.randint(0, 4, (m, k), dtype=torch.uint8)
+            int8_runs = []
+            for w in pool:
+                _, run, _ = prepare_qlinear(w, m)
+                int8_runs.append(run)
+
+    def multiply(w, index=0):
         if dtype == "bf16":
             return torch.nn.functional.linear(x, w)
-        return torch._int_mm(x, w.t())
+        return int8_runs[index](x)
 
     # Only the verification warm-up prints primitive execution evidence.
     with torch.backends.mkldnn.verbose(torch.backends.mkldnn.VERBOSE_ON):
-        result = multiply(pool[0])
+        result = multiply(pool[0], 0)
     for i in range(args.warmups):
-        result = multiply(pool[i % len(pool)])
-    call_bytes = weight_bytes + m * k * ELEMENT_BYTES[dtype] + m * n * OUTPUT_BYTES[dtype]
+        result = multiply(pool[i % len(pool)], i % len(pool))
+    call_bytes = (
+        weight_bytes + m * k * ELEMENT_BYTES[dtype] + m * n * OUTPUT_BYTES[dtype]
+    )
     samples = []
     cursor = 0
     for rep in range(args.repetitions):
@@ -205,7 +310,7 @@ def main():
         start = time.monotonic_ns()
         count = 0
         while True:
-            result = multiply(pool[cursor])
+            result = multiply(pool[cursor], cursor)
             cursor = (cursor + 1) % len(pool)
             count += 1
             if time.monotonic_ns() >= deadline:
@@ -231,7 +336,7 @@ def main():
     else:
         for i, j in [(0, 0), (m - 1, n - 1), (0, n - 1), (m // 2, n // 2)]:
             expected = int(torch.dot(x[i].int(), pool[0][j].int()))
-            valid &= int(result[i, j]) == expected
+            valid &= int(round(float(result[i, j]))) == expected
     print(
         json.dumps(
             dict(
