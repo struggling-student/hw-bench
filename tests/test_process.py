@@ -179,3 +179,25 @@ def test_rows_carry_requested_duration_and_kernel_source_hash():
     # A launcher that hashes its own source at run time overrides the campaign record.
     r["result"]["source_sha256"] = "run-time"
     assert rows_from_record(r, Path("raw"), {}, campaign)[0]["source_sha256"] == "run-time"
+
+
+def test_interference_and_launch_provenance_flow_into_rows():
+    r = record()
+    r["hostname"] = "cresco8-hbm14.example.org"
+    r["launch_method"] = "ssh"
+    row = rows_from_record(r, Path("raw"), {}, {"topology_mode": "flat"})[0]
+    assert row["accepted"]
+    assert (row["launch_method"], row["node"]) == ("ssh", "cresco8-hbm14")
+    assert row["memory_mode_verified"] is True
+    r["interference_suspected"] = True
+    noisy = rows_from_record(r, Path("raw"), {}, {"topology_mode": "cache"})[0]
+    assert "interference_suspected" in noisy["exclusion_reason"]
+    assert not noisy["accepted"] and noisy["memory_mode_verified"] is False
+
+
+def test_campaigns_without_launch_field_are_labelled_by_their_slurm_job():
+    r = record()
+    assert rows_from_record(r, Path("raw"), {}, {"slurm_job_id": "5"})[0][
+        "launch_method"
+    ] == "slurm_exclusive"
+    assert rows_from_record(r, Path("raw"), {}, None)[0]["launch_method"] is None

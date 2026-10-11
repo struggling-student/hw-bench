@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from hwbench.execution import Guard
+
 
 def _frequency_khz() -> float | None:
     values: list[int] = []
@@ -45,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("a command is required after --")
+    guard = Guard(check=os.environ.get("HWBENCH_GUARD") == "1")
+    guard.start()
     before = _frequency_khz()
     started_ns = time.monotonic_ns()
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -99,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
         "stdout": completed.stdout,
         "stderr": completed.stderr,
         "result": parsed,
+        **guard.finish(),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

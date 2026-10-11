@@ -66,6 +66,9 @@ FIELDS = [
     "retry_of",
     "source_file",
     "source_sha256",
+    "launch_method",
+    "node",
+    "memory_mode_verified",
 ]
 
 
@@ -75,6 +78,8 @@ def _reasons(record, compiler):
     benchmark = r.get("benchmark")
     if record.get("returncode") != 0 or not r.get("valid"):
         reasons.append("failed_return_or_correctness")
+    if record.get("interference_suspected"):
+        reasons.append("interference_suspected")
     if (
         record.get("_expected_host")
         and record.get("hostname") != record["_expected_host"]
@@ -122,6 +127,17 @@ def _requested_seconds(record: dict[str, Any]) -> float | None:
         except (IndexError, ValueError):
             return None
     return None
+
+
+def _launch_method(record: dict[str, Any], campaign: dict[str, Any] | None):
+    """How the campaign was started; campaigns that predate the field ran in Slurm."""
+
+    campaign = campaign or {}
+    return (
+        record.get("launch_method")
+        or campaign.get("launch_method")
+        or ("slurm_exclusive" if campaign.get("slurm_job_id") else None)
+    )
 
 
 def rows_from_record(
@@ -189,6 +205,13 @@ def rows_from_record(
         retry_of=record.get("retry_of"),
         source_file=str(source),
         requested_seconds=_requested_seconds(record),
+        launch_method=_launch_method(record, campaign),
+        node=(record.get("hostname") or "").split(".", 1)[0] or None,
+        memory_mode_verified=(
+            None
+            if not (campaign or {}).get("topology_mode")
+            else campaign["topology_mode"] == mode
+        ),
         # A launcher that hashes itself at run time (torch_amx.py) is authoritative;
         # otherwise fall back to the hash recorded when the campaign started.
         source_sha256=r.get("source_sha256")
@@ -422,6 +445,7 @@ def main(argv=None):
                 if meta_path.exists():
                     campaign_meta = json.loads(meta_path.read_text())
                 topology = json.loads((campaign / "system/topology.json").read_text())
+                campaign_meta["topology_mode"] = topology.get("memory_mode")
                 record["_expected_host"] = topology["hostname"]
                 record["_campaign_id"] = campaign.name
                 meta = campaign / "system/build_metadata.json"
