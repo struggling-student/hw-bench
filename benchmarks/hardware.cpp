@@ -187,6 +187,44 @@ inline double read_pass(const double *p, std::size_t n) {
                     _mm512_add_pd(_mm512_add_pd(a4, a5), _mm512_add_pd(a6, a7))));
 }
 
+// The intensity sweep and the AVX-512 BF16 peak keep C independent accumulators
+// live; the chain count is a template parameter so the compiler keeps every
+// accumulator in a register and unrolls the inner loop completely.
+template <int C>
+inline void sweep_block(const double *b, double *a, std::size_t n, int k) {
+#pragma omp parallel for schedule(static)
+  for (std::size_t i = 0; i < n; i += 8 * C) {
+    __m512d x[C];
+    for (int u = 0; u < C; ++u)
+      x[u] = _mm512_load_pd(b + i + u * 8);
+    const __m512d v = _mm512_set1_pd(1.000000000000001),
+                  z = _mm512_set1_pd(1e-12);
+    for (int j = 0; j < k; ++j)
+      for (int u = 0; u < C; ++u)
+        x[u] = _mm512_fmadd_pd(x[u], v, z);
+    for (int u = 0; u < C; ++u)
+      _mm512_store_pd(a + i + u * 8, x[u]);
+  }
+}
+
+template <int C> inline double bf16_chain_sum() {
+  __m512 x[C];
+  for (auto &v : x)
+    v = _mm512_setzero_ps();
+  const __m512bh one = (__m512bh)_mm512_set1_epi16(0x3f80);
+  for (int j = 0; j < 3000000; ++j)
+    for (int u = 0; u < C; ++u)
+      x[u] = _mm512_dpbf16_ps(x[u], one, one);
+  double sum = 0;
+  for (auto &value : x) {
+    alignas(64) float lanes[16];
+    _mm512_store_ps(lanes, value);
+    for (float lane : lanes)
+      sum += lane;
+  }
+  return sum;
+}
+
 struct alignas(64) TileConfig {
   std::uint8_t palette_id = 1, start_row = 0, reserved[14]{};
   std::uint16_t colsb[16]{};
@@ -203,7 +241,7 @@ int main(int argc, char **argv) {
     std::string kind = "triad";
     std::size_t bytes = 8ULL << 30;
     double seconds = 1;
-    int repetitions = 5, k = 1;
+    int repetitions = 5, k = 1, chains = 0;
     bool per_thread = false, huge = false;
     for (int i = 1; i < argc; ++i) {
       std::string arg = argv[i];
@@ -227,6 +265,8 @@ int main(int argc, char **argv) {
         repetitions = std::stoi(argv[++i]);
       else if (arg == "--k")
         k = std::stoi(argv[++i]);
+      else if (arg == "--chains")
+        chains = std::stoi(argv[++i]);
       else
         return 2;
     }
@@ -242,6 +282,12 @@ int main(int argc, char **argv) {
           amx || amx_i8 || vnni || vbf16))
       return 2;
     const bool stream = triad || triad_nt;
+    // Independent accumulator chains: 12 for the compute peaks and 8 for the sweep
+    // unless --chains asks otherwise (only the BF16 dot product and the sweep).
+    const int chains_eff = chains ? chains : (sweep ? 8 : 12);
+    if (chains && !((vbf16 && (chains == 6 || chains == 12 || chains == 24)) ||
+                    (sweep && (chains == 8 || chains == 12 || chains == 16))))
+      return 2;
     int workers = 0;
     bool valid = true;
 #pragma omp parallel
@@ -258,7 +304,9 @@ int main(int argc, char **argv) {
     std::vector<double> own_reference;
     std::size_t per_thread_bytes = 0;
     if (stream || sweep) {
-      n = (bytes / ((stream ? 3 : 2) * sizeof(double)) / 64) * 64;
+      // The sweep walks 8 doubles per chain, so n must be a multiple of that too.
+      const std::size_t unit = sweep ? std::lcm<std::size_t>(64, 8 * chains_eff) : 64;
+      n = (bytes / ((stream ? 3 : 2) * sizeof(double)) / unit) * unit;
       if (n == 0)
         return 2;
       bytes = n * (stream ? 3 : 2) * sizeof(double);
@@ -394,18 +442,15 @@ int main(int argc, char **argv) {
         return 0;
       }
       if (sweep) {
-#pragma omp parallel for schedule(static)
-        for (std::size_t i = 0; i < n; i += 64) {
-          __m512d x[8];
-          for (int u = 0; u < 8; ++u)
-            x[u] = _mm512_load_pd(b + i + u * 8);
-          const __m512d v = _mm512_set1_pd(1.000000000000001),
-                        z = _mm512_set1_pd(1e-12);
-          for (int j = 0; j < k; ++j)
-            for (int u = 0; u < 8; ++u)
-              x[u] = _mm512_fmadd_pd(x[u], v, z);
-          for (int u = 0; u < 8; ++u)
-            _mm512_store_pd(a + i + u * 8, x[u]);
+        switch (chains_eff) {
+        case 12:
+          sweep_block<12>(b, a, n, k);
+          break;
+        case 16:
+          sweep_block<16>(b, a, n, k);
+          break;
+        default:
+          sweep_block<8>(b, a, n, k);
         }
         return 2ULL * n * k;
       }
@@ -508,18 +553,15 @@ int main(int argc, char **argv) {
             sum += double(_mm512_reduce_add_epi32(value));
         } else if (vbf16) {
           // vdpbf16ps: 16 lanes x 2 bf16 products, accumulated into fp32.
-          __m512 x[12];
-          for (auto &v : x)
-            v = _mm512_setzero_ps();
-          const __m512bh one = (__m512bh)_mm512_set1_epi16(0x3f80);
-          for (int j = 0; j < 3000000; ++j)
-            for (int u = 0; u < 12; ++u)
-              x[u] = _mm512_dpbf16_ps(x[u], one, one);
-          for (auto &value : x) {
-            alignas(64) float lanes[16];
-            _mm512_store_ps(lanes, value);
-            for (float lane : lanes)
-              sum += lane;
+          switch (chains_eff) {
+          case 6:
+            sum += bf16_chain_sum<6>();
+            break;
+          case 24:
+            sum += bf16_chain_sum<24>();
+            break;
+          default:
+            sum += bf16_chain_sum<12>();
           }
         } else if (fp32) {
           __m512 x[12];
@@ -551,13 +593,13 @@ int main(int argc, char **argv) {
       if (vnni)
         valid &= sum == double(workers) * 12 * 16 * 4 * 3000000;
       if (vbf16)
-        valid &= sum == double(workers) * 12 * 16 * 2 * 3000000;
+        valid &= sum == double(workers) * chains_eff * 16 * 2 * 3000000;
       // Operations per call: tile instructions x (rows x cols x depth x 2).
       return workers *
              (amx      ? 1024ULL * 256 * 4 * 16384
               : amx_i8 ? 1024ULL * 256 * 4 * 32768
               : vnni   ? 3000000ULL * 12 * 128
-              : vbf16  ? 3000000ULL * 12 * 64
+              : vbf16  ? 3000000ULL * chains_eff * 64
                        : 3000000ULL * 12 * (fp32 ? 16 : 8) * 2);
     };
     if (!latency) {
@@ -583,10 +625,10 @@ int main(int argc, char **argv) {
         amx        ? "native_amx_4_tiles"
         : amx_i8   ? "native_amx_int8_4_tiles"
         : vnni     ? "avx512_vnni_12_chains"
-        : vbf16    ? "avx512_bf16_12_chains"
+        : vbf16    ? "avx512_bf16_" + std::to_string(chains_eff) + "_chains"
         : triad_nt ? "native_avx512_nt_stores"
         : readk    ? "native_avx512_read_8_accumulators"
-        : sweep    ? "avx512_8_independent_chains"
+        : sweep    ? "avx512_" + std::to_string(chains_eff) + "_independent_chains"
         : latency  ? "random_dependent_cachelines"
                    : "native_avx512";
     const bool memory_kind = stream || sweep || latency || readk;
@@ -597,6 +639,7 @@ int main(int argc, char **argv) {
               << ",\"working_set_bytes\":" << (memory_kind ? bytes : 0)
               << ",\"per_thread_bytes\":" << per_thread_bytes
               << ",\"hugepages\":" << (huge ? 1 : 0) << ",\"k\":" << k
+              << ",\"chains\":" << ((sweep || vbf16) ? chains_eff : 0)
               << ",\"counters\":" << (counters.read().ok ? "true" : "false")
               << ",\"seed\":7,\"samples\":[";
     for (int rep = 0; rep < repetitions; ++rep) {

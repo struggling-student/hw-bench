@@ -9,6 +9,11 @@ streaming access.  ``y = x @ W^T`` with x of shape M x K, as in ``nn.Linear``.
 Modeled traffic per call is the weight matrix + activations in + result out;
 operations are 2*M*N*K.  The two together place the point on a roofline.
 
+BF16 can be run with plain weights (``--layout plain``, what ``nn.Linear`` does: oneDNN
+repacks the weights inside every call) or with weights prepacked once into oneDNN's
+blocked layout (``--layout prepacked``), which is what INT8 always uses.  The prepacked
+path is only reported if it ran and passed the same correctness check.
+
 INT8 is only measured when a probe shows that a oneDNN matmul with an ``amx``
 implementation really executes it (``--probe-int8``); otherwise it is reported as
 unavailable instead of being timed on a slow fallback.
@@ -227,6 +232,45 @@ def probe_qlinear():
     return candidate
 
 
+def prepare_bf16_prepacked(w, m):
+    """Return (name, run, errors) for the first prepacked BF16 linear that runs.
+
+    These are the entry points torch's inductor uses to prepack a Linear weight for
+    oneDNN; they are tried in order and the first that executes wins.
+    """
+
+    errors = []
+    probe_x = torch.randn((m, w.shape[1]), dtype=torch.float32).to(torch.bfloat16)
+
+    def reorder_linear():
+        packed = torch.ops.mkldnn._reorder_linear_weight(w, m)
+
+        def run(x):
+            return torch.ops.mkldnn._linear_pointwise(x, packed, None, "none", [], "")
+
+        return run
+
+    def mkldnn_tensor():
+        packed = w.to_mkldnn()
+
+        def run(x):
+            return torch.ops.mkldnn._linear_pointwise(x, packed, None, "none", [], "")
+
+        return run
+
+    for name, make in (
+        ("mkldnn._reorder_linear_weight", reorder_linear),
+        ("weight.to_mkldnn()", mkldnn_tensor),
+    ):
+        try:
+            run = make()
+            run(probe_x)
+            return name, run, errors
+        except Exception as error:  # noqa: BLE001
+            errors.append(f"{name}: {type(error).__name__}: {str(error)[:160]}")
+    return None, None, errors
+
+
 def build_pool(dtype, n, k, pool_bytes):
     weight_bytes = n * k * ELEMENT_BYTES[dtype]
     copies = max(2, -(-pool_bytes // weight_bytes))
@@ -252,6 +296,13 @@ def main():
     p.add_argument("--seconds", type=float, default=1)
     p.add_argument("--repetitions", type=int, default=5)
     p.add_argument("--warmups", type=int, default=3)
+    p.add_argument("--layout", choices=["plain", "prepacked"], default="plain")
+    p.add_argument(
+        "--warm-passes",
+        type=int,
+        default=0,
+        help="full passes over the weight pool before timing, so every copy is resident",
+    )
     p.add_argument("--probe-int8", action="store_true")
     args = p.parse_args()
     threads = int(os.environ["OMP_NUM_THREADS"])
@@ -289,8 +340,23 @@ def main():
                 _, run, _ = prepare_qlinear(w, m)
                 int8_runs.append(run)
 
+    bf16_runs = None
+    layout = "prepacked" if dtype == "int8" else args.layout
+    layout_variant = None
+    if dtype == "bf16" and args.layout == "prepacked":
+        bf16_runs, errors = [], []
+        for w in pool:
+            name, run, errors = prepare_bf16_prepacked(w, m)
+            if run is None:
+                print(json.dumps(dict(valid=False, error="no prepacked BF16 path", errors=errors)))
+                return 3
+            layout_variant = name
+            bf16_runs.append(run)
+
     def multiply(w, index=0):
         if dtype == "bf16":
+            if bf16_runs is not None:
+                return bf16_runs[index](x)
             return torch.nn.functional.linear(x, w)
         return int8_runs[index](x)
 
@@ -299,6 +365,9 @@ def main():
         result = multiply(pool[0], 0)
     for i in range(args.warmups):
         result = multiply(pool[i % len(pool)], i % len(pool))
+    for _ in range(args.warm_passes):
+        for i in range(len(pool)):
+            result = multiply(pool[i], i)
     call_bytes = (
         weight_bytes + m * k * ELEMENT_BYTES[dtype] + m * n * OUTPUT_BYTES[dtype]
     )
@@ -351,6 +420,9 @@ def main():
                 working_set_bytes=weight_bytes * len(pool),
                 weight_bytes=weight_bytes,
                 pool_copies=len(pool),
+                layout=layout,
+                layout_variant=layout_variant,
+                warm_passes=args.warm_passes,
                 torch_version=torch.__version__,
                 samples=samples,
                 valid=valid,

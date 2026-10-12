@@ -14,6 +14,13 @@ hierarchy    read bandwidth and idle latency against working-set size
 gemm         BF16 (and verified INT8) GEMM M-sweep with weights streamed from memory
 span         one process over both sockets: interleaved vs first-touch placement
 xcheck       repeat of earlier reference points to bound run-to-run variance
+gemmvalid    (flat) GEMM validity: pool-size convergence, tiny-shape call overhead,
+             prepacked BF16 weights, extra warm-up passes
+cachefill    (cache) Cache-mode bandwidth at more working sets, latency beyond the HBM cache
+remotehbm    (flat) remote-HBM repeat: 5 s windows, thread sweep, local controls
+chains       (flat) AVX-512 BF16 accumulator-chain sweep (6, 12, 24)
+sweep12      (flat) FP64 intensity sweep with 12 chains up to K=1024, with 8-chain control
+repeat       the headline numbers once, for independent launches (run it three times)
 smoke        a few seconds of every kernel; proves build and counters, not a result
 
 memory, compute, sweep, memory-sweep, concurrency, all
@@ -42,7 +49,21 @@ from hwbench.execution import (  # noqa: E402
 from hwbench.topology import discover  # noqa: E402
 
 LEGACY_PARTS = ["memory", "compute", "sweep", "memory-sweep", "concurrency", "all"]
-NEW_PARTS = ["isa", "bandwidth2", "hierarchy", "gemm", "span", "xcheck", "smoke"]
+NEW_PARTS = [
+    "isa",
+    "bandwidth2",
+    "hierarchy",
+    "gemm",
+    "span",
+    "xcheck",
+    "smoke",
+    "gemmvalid",
+    "cachefill",
+    "remotehbm",
+    "chains",
+    "sweep12",
+    "repeat",
+]
 
 THREAD_STEPS = [1, 2, 4, 8, 14, 28, 56]
 ISA_THREAD_STEPS = [1, 2, 4, 8, 14, 28, 55, 56]
@@ -57,6 +78,15 @@ GEMM_M_CACHE = [1, 4, 16, 64, 256, 1024, 4096]
 # Spilled pool (96 GiB): initialising it dominates, so fewer batch sizes are taken.
 GEMM_M_SPILL = [1, 16, 256, 4096]
 LLC_BYTES_PER_SOCKET = 112_500_000 + 2**20  # 112.5 MiB L3; rounded up
+# On-chip capacity that can hold weights: 112.5 MiB L3 (non-inclusive) + 56 x 2 MiB L2.
+ONCHIP_BYTES = int(112.5 * MIB) + 56 * 2 * MIB
+POOL_MULTIPLES = [4, 16, 64]  # of ONCHIP_BYTES
+GEMM_WARM_PASSES = 2
+REMOTE_THREADS = [1, 4, 14, 28, 56]
+CACHEFILL_GIB = [24, 32, 40, 48, 56]
+CACHEFILL_TRIAD_GIB = [24, 40, 56]  # Triad already has 16, 32, 48, 64, 96, 128
+LATENCY_FAR_GIB = [16, 32, 64, 96, 128]
+SWEEP_K = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
 
 
 def per_thread_sizes(low, high):
@@ -67,18 +97,48 @@ def per_thread_sizes(low, high):
     return sizes
 
 
+def synthetic_topology(mode):
+    """Two sockets x 56 cores with one DDR and one HBM node each: enough to list a plan."""
+
+    return {
+        "memory_mode": mode,
+        "sockets": [
+            {
+                "socket": i,
+                "physical_cores": 56,
+                "logical_cpus": list(range(56 * i, 56 * (i + 1))),
+                "ddr_nodes": [i],
+                "hbm_nodes": [2 + i] if mode == "flat" else [],
+            }
+            for i in (0, 1)
+        ],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("mode", choices=["flat", "cache"])
     parser.add_argument("output", type=Path)
-    parser.add_argument("--container", type=Path, required=True)
+    parser.add_argument("--container", type=Path)
     parser.add_argument("--only", choices=LEGACY_PARTS + NEW_PARTS, default="all")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="list the records the part would take, touching neither the node nor the output",
+    )
     args = parser.parse_args()
-    topology = discover()
-    try:
-        provenance = require_context(args.mode, topology["memory_mode"], Context())
-    except ExecutionError as error:
-        raise SystemExit(f"Refusing to run: {error}") from error
+    dry = args.dry_run
+    if not dry and args.container is None:
+        parser.error("--container is required unless --dry-run")
+    if dry:
+        topology, provenance = synthetic_topology(args.mode), {}
+    else:
+        topology = discover()
+        try:
+            provenance = require_context(args.mode, topology["memory_mode"], Context())
+        except ExecutionError as error:
+            raise SystemExit(f"Refusing to run: {error}") from error
+    plan = []
     sockets = topology["sockets"]
     if len(sockets) != 2 or any(
         s["physical_cores"] != len(s["logical_cpus"]) for s in sockets
@@ -86,20 +146,21 @@ def main():
         raise SystemExit(
             "Campaign requires two sockets and one logical CPU per physical core."
         )
-    args.output.mkdir(parents=True, exist_ok=True)
     system = args.output / "system"
-    system.mkdir(exist_ok=True)
-    (system / "topology.json").write_text(
-        json.dumps(topology, indent=2, sort_keys=True) + "\n"
-    )
+    if not dry:
+        args.output.mkdir(parents=True, exist_ok=True)
+        system.mkdir(exist_ok=True)
+        (system / "topology.json").write_text(
+            json.dumps(topology, indent=2, sort_keys=True) + "\n"
+        )
     campaign = {
         "schema_version": "2.0",
         "campaign_id": args.output.name,
         "selection_role": os.environ.get("HW_BENCH_SELECTION_ROLE", "extended"),
-        "slurm_job_id": provenance["slurm_job_id"],
-        "launch_method": provenance["launch_method"],
-        "node": provenance["node"],
-        "memory_mode_verified": provenance["memory_mode_verified"],
+        "slurm_job_id": provenance.get("slurm_job_id"),
+        "launch_method": provenance.get("launch_method"),
+        "node": provenance.get("node"),
+        "memory_mode_verified": provenance.get("memory_mode_verified"),
         "preflight": provenance.get("preflight"),
         "seconds_per_sample": 1.0,
         "repetitions": 5,
@@ -112,23 +173,24 @@ def main():
             if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".env"
         },
     }
-    (system / "campaign.json").write_text(
-        json.dumps(campaign, indent=2, sort_keys=True) + "\n"
-    )
-    subprocess.run(
-        ["bash", str(ROOT / "scripts/collect_system_info.sh"), args.mode, str(system)],
-        check=True,
-    )
-    with (system / "build.log").open("w") as log:
-        subprocess.run(
-            ["bash", str(ROOT / "scripts/build_benchmarks.sh")],
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            check=True,
-            env=dict(os.environ, HW_BENCH_BUILD_DIR=str(args.output / "build")),
+    if not dry:
+        (system / "campaign.json").write_text(
+            json.dumps(campaign, indent=2, sort_keys=True) + "\n"
         )
-    for name in ["build_metadata.json", "hardware.asm"]:
-        (system / name).write_bytes((args.output / "build" / name).read_bytes())
+        subprocess.run(
+            ["bash", str(ROOT / "scripts/collect_system_info.sh"), args.mode, str(system)],
+            check=True,
+        )
+        with (system / "build.log").open("w") as log:
+            subprocess.run(
+                ["bash", str(ROOT / "scripts/build_benchmarks.sh")],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                check=True,
+                env=dict(os.environ, HW_BENCH_BUILD_DIR=str(args.output / "build")),
+            )
+        for name in ["build_metadata.json", "hardware.asm"]:
+            (system / name).write_bytes((args.output / "build" / name).read_bytes())
     binary = args.output / "build/hardware"
     guard = "1" if args.mode == "flat" else "0"
 
@@ -216,6 +278,10 @@ def main():
             parts.append(s["dtype"])
         if s.get("pool"):
             parts.append(f"pool{s['pool']}")
+        if s.get("layout"):
+            parts.append(s["layout"])
+        if s.get("chains"):
+            parts.append(f"c{s['chains']}")
         return "-".join(parts)
 
     resumed = (
@@ -237,6 +303,9 @@ def main():
 
     def execute(s, group=None, participant=0, count=1):
         name = record_name(s)
+        if dry:
+            plan.append((name, float(s.get("seconds", 5 if group else 1)), s))
+            return
         if already_measured(name):
             return
         dest = args.output / "records" / f"{name}.json"
@@ -299,6 +368,10 @@ def main():
                     "--pool-bytes",
                     str(s["pool"]),
                 ]
+                if s.get("layout"):
+                    command += ["--layout", s["layout"]]
+                if s.get("warm"):
+                    command += ["--warm-passes", str(s["warm"])]
             else:
                 command += [
                     str(ROOT / "benchmarks/amx/torch_amx.py"),
@@ -323,6 +396,8 @@ def main():
             size = s.get("bytes") or (int(s["gib"] * GIB) if s["gib"] else 0)
             if size:
                 command += ["--bytes", str(size)]
+            if s.get("chains"):
+                command += ["--chains", str(s["chains"])]
             command += s.get("flags", [])
         argv = [
             "python3",
@@ -384,6 +459,8 @@ def main():
     def int8_gemm_verified():
         """Probe once per campaign whether an INT8 oneDNN path runs on AMX."""
 
+        if dry:
+            return True
         path = system / "gemm_int8.json"
         if not path.exists():
             socket0 = sockets[0]
@@ -498,6 +575,32 @@ def main():
                     seconds=0.3,
                 )
             )
+        # The step-6 code paths: accumulator chains, and prepacked BF16 weights.
+        execute(dict(spec(0, "avx512bf16", 4, label="smoke_chains", chains=6), seconds=0.3))
+        execute(
+            dict(
+                spec(0, "sweep", target=targets[0], bytes=256 * MIB, k=16, label="smoke_sweep12", chains=12),
+                seconds=0.3,
+            )
+        )
+        execute(
+            dict(
+                spec(
+                    0,
+                    "gemm",
+                    target=targets[0],
+                    shape=1024,
+                    label="smoke_prepacked",
+                    m=64,
+                    gemm_n=1024,
+                    dtype="bf16",
+                    pool=64 * MIB,
+                    layout="prepacked",
+                    warm=1,
+                ),
+                seconds=0.3,
+            )
+        )
 
     # -------------------------------------------------------------------- isa
     if part == "isa":
@@ -687,6 +790,120 @@ def main():
                 execute(spec(socket, "triad", target=target, gib=8, label="xcheck"))
             for kind in ["fp64", "fp32", "bf16"]:
                 execute(spec(socket, kind, label="xcheck"))
+
+    # -------------------------------------------------------------- gemmvalid
+    # Does the GEMM bandwidth converge as the weight pool grows past what the chip
+    # can hold?  How large is the fixed cost of one call?  Does repacking BF16 weights
+    # inside every call explain the BF16/INT8 gap?  Flat only (SSH, node hbm14).
+    if part == "gemmvalid":
+        if args.mode != "flat":
+            raise SystemExit("gemmvalid is a Flat-mode part")
+        warm = GEMM_WARM_PASSES
+
+        def gemm(target, dtype, n, k, m, pool, label, layout=None):
+            execute(
+                spec(
+                    0,
+                    "gemm",
+                    target=target,
+                    shape=k,
+                    label=label,
+                    m=m,
+                    gemm_n=n,
+                    dtype=dtype,
+                    pool=int(pool),
+                    layout=layout,
+                    warm=warm,
+                )
+            )
+
+        for target in targets:
+            # 1. pool convergence: 4x, 16x and 64x the on-chip capacity.
+            for n, k in [(14336, 4096), (4096, 4096)]:
+                for dtype in ["bf16", "int8"]:
+                    if dtype == "int8" and not int8_gemm_verified():
+                        continue
+                    for mult in POOL_MULTIPLES:
+                        for m in [1, 16, 256]:
+                            gemm(target, dtype, n, k, m, mult * ONCHIP_BYTES, "gemm_pool")
+            # 2. fixed cost of one call: tiny weights that stay in L2 (two copies)
+            #    and, for the 1024 shape, a pool that streams from memory.
+            for n, k, pools in [
+                (256, 256, [("hot", 2 * 256 * 256 * 2)]),
+                (1024, 1024, [("hot", 2 * 1024 * 1024 * 2), ("stream", 4 * ONCHIP_BYTES)]),
+            ]:
+                for dtype in ["bf16", "int8"]:
+                    if dtype == "int8" and not int8_gemm_verified():
+                        continue
+                    for _name, pool in pools:
+                        for m in [1, 16]:
+                            gemm(target, dtype, n, k, m, pool, "gemm_overhead")
+            # 3. BF16 with the weights prepacked once, as INT8 always is.
+            for n, k in [(14336, 4096), (4096, 4096)]:
+                for m in [1, 16, 256]:
+                    gemm(target, "bf16", n, k, m, 4 * ONCHIP_BYTES, "gemm_prepacked", "prepacked")
+
+    # -------------------------------------------------------------- cachefill
+    if part == "cachefill":
+        if args.mode != "cache":
+            raise SystemExit("cachefill is a Cache-mode part")
+        # Same labels as bandwidth2 / the October capacity sweep, so the new working
+        # sets join the existing Cache-mode curve once the campaign is listed.
+        for socket in both:
+            for gib in CACHEFILL_GIB:
+                for kind, label in [("read", "bw2_read_capacity"), ("triad_nt", "bw2_triad_nt_capacity")]:
+                    execute(spec(socket, kind, target="effective_cache", gib=gib, label=label))
+            for gib in CACHEFILL_TRIAD_GIB:
+                execute(spec(socket, "triad", target="effective_cache", gib=gib, label="bw2_triad_capacity"))
+        # Idle latency beyond the HBM cache: one core chases a random cycle that is
+        # far larger than the cache.  Initialising the cycle takes minutes at 128 GiB.
+        for gib in LATENCY_FAR_GIB:
+            execute(spec(0, "latency", 1, "effective_cache", gib=gib, label="hier_latency_far"))
+
+    # -------------------------------------------------------------- remotehbm
+    if part == "remotehbm":
+        if args.mode != "flat":
+            raise SystemExit("remotehbm is a Flat-mode part")
+        # 5 s windows, local control beside every remote point, DDR remote for contrast.
+        for socket in both:
+            for target, kind in [("hbm", "read"), ("ddr", "read"), ("hbm", "triad_nt")]:
+                for t in REMOTE_THREADS:
+                    for ms, label in [(socket, "remote_repeat_local"), (1 - socket, "remote_repeat")]:
+                        execute(
+                            dict(
+                                spec(socket, kind, t, target, memory_socket=ms, gib=8, label=label),
+                                seconds=5,
+                            )
+                        )
+
+    # ----------------------------------------------------------------- chains
+    if part == "chains":
+        if args.mode != "flat":
+            raise SystemExit("chains is a Flat-mode part")
+        for t in (1, 56):
+            for c in (6, 12, 24):
+                execute(spec(0, "avx512bf16", t, label=f"chains_bf16_c{c}", chains=c))
+
+    # ----------------------------------------------------------------- sweep12
+    if part == "sweep12":
+        if args.mode != "flat":
+            raise SystemExit("sweep12 is a Flat-mode part")
+        for target in targets:
+            for k in SWEEP_K:
+                execute(spec(0, "sweep", target=target, gib=8, k=k, label="sweep_c12", chains=12))
+            # The October kernel (8 chains), extended to the same K for a like-for-like control.
+            for k in (512, 1024):
+                execute(spec(0, "sweep", target=target, gib=8, k=k, label="sweep_c8", chains=8))
+
+    # ----------------------------------------------------------------- repeat
+    if part == "repeat":
+        # The headline numbers once.  Run this part as three separate launches
+        # (three campaigns) to get an independent between-run spread.
+        for target in targets:
+            for kind in ["read", "triad"]:
+                execute(spec(0, kind, target=target, gib=8, label="repeat"))
+        for kind in ["fp64", "fp32", "bf16", "int8", "vnni", "avx512bf16"]:
+            execute(spec(0, kind, label="repeat"))
 
     # ------------------------------------------------- October-11 thesis parts
     if part == "concurrency":
@@ -899,6 +1116,15 @@ def main():
                 execute(
                     spec(0, "sweep", target=target, gib=gib, k=k, label="intensity")
                 )
+
+    if dry:
+        names = [n for n, _, _ in plan]
+        assert len(names) == len(set(names)), "duplicate record names in the plan"
+        measured = sum(5 * sec for _, sec, _ in plan)
+        print(f"{args.mode} {part}: {len(plan)} records, {measured / 60:.1f} min of timed windows (initialisation not included)")
+        for name, sec, _ in plan:
+            print(f"  {sec:g}s  {name}")
+        return
 
     # The post-check closes the exposure window: record what else ran meanwhile.
     try:
