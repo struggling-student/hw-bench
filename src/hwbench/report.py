@@ -127,6 +127,8 @@ def bandwidth_summary(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
         & ext.notes.str.match(r"bw2_(read|triad_nt)(_remote|_capacity|_dual)?$")
     ].assign(kernel=lambda f: f.benchmark.map(BANDWIDTH_KERNELS))
     frame = with_config(pd.concat([triad, new], ignore_index=True))
+    # Allocation rounding makes "8 GiB" 7.999996 GiB; compare working sets to 0.01 GiB.
+    frame["working_set_gib"] = frame.working_set_gib.round(2)
     keys = ["memory_mode", "config", "kernel", "locality", "socket_scope", "socket", "working_set_gib"]
     return (
         frame.groupby(keys, dropna=False)

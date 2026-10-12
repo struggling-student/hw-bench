@@ -332,10 +332,10 @@ table(local.pivot_table(index='config', columns='kernel', values='gbs').reset_in
 """),
     code("""
 p = local.pivot_table(index='config', columns='kernel', values='gbs')
-say(f"**Result.** On DDR the three kernels agree within {100*(p.loc['flat_ddr'].max()/p.loc['flat_ddr'].min()-1):.0f}% "
-    f"(Triad {p.loc['flat_ddr','triad']:.0f}, non-temporal {p.loc['flat_ddr','triad_nt']:.0f}, read {p.loc['flat_ddr','read']:.0f} GB/s), "
-    f"so the Triad figure is not depressed by write-allocate traffic on this part; on HBM they agree within {100*(p.loc['flat_hbm'].max()/p.loc['flat_hbm'].min()-1):.0f}%. "
-    f"The firmware-advertised DDR read bandwidth is 262 GB/s, which the read-only kernel reproduces.")
+say(f"**Result.** Triad and non-temporal Triad agree to {100*abs(p.loc['flat_ddr','triad']/p.loc['flat_ddr','triad_nt']-1):.1f}% on DDR ({p.loc['flat_ddr','triad']:.0f} and {p.loc['flat_ddr','triad_nt']:.0f} GB/s) "
+    f"and {100*abs(p.loc['flat_hbm','triad']/p.loc['flat_hbm','triad_nt']-1):.1f}% on HBM ({p.loc['flat_hbm','triad']:.0f} and {p.loc['flat_hbm','triad_nt']:.0f} GB/s), "
+    f"so the destination line is not being read before it is written. Read-only is {p.loc['flat_ddr','read']/p.loc['flat_ddr','triad']-1:+.0%} on DDR ({p.loc['flat_ddr','read']:.0f} GB/s, the firmware-advertised 262) "
+    f"and {p.loc['flat_hbm','read']/p.loc['flat_hbm','triad']-1:+.0%} on HBM ({p.loc['flat_hbm','read']:.0f} GB/s): reading is not faster than a mixed read/write stream on HBM.")
 """),
     md("""
 **Implication.** Full-line vector stores do not appear to cost an extra read here (consistent with the core skipping the read for whole-line writes), so counted Triad bandwidth is a fair proxy for bus traffic; this is inferred from equal rates, not observed with controller counters. For a roofline, the primary ceiling is the best sustained of the three kernels (ERT convention), with read-only shown as the decode-relevant slope.
