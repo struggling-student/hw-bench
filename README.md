@@ -23,7 +23,7 @@ Every figure cell displays an interactive Plotly figure and saves **SVG and PNG*
 
 | Quantity | Kernel |
 | --- | --- |
-| Compute peaks | AVX-512 FP64/FP32 FMA, AVX-512 BF16 `vdpbf16ps`, AVX-512 VNNI `vpdpbusd`, AMX BF16 `tdpbf16ps`, AMX INT8 `tdpbssd`; instruction use proven from disassembly; effective clock and AMX-busy cycles from per-thread `perf_event_open` |
+| Compute peaks | AVX-512 FP64/FP32 FMA, AVX-512 BF16 `vdpbf16ps`, AVX-512 VNNI `vpdpbusd`, AMX BF16 `tdpbf16ps`, AMX INT8 `tdpbssd`; instruction use checked in the binary's disassembly; effective clock and AMX-busy cycles from per-thread `perf_event_open` |
 | Memory bandwidth | Triad, non-temporal-store Triad, read-only; local/remote; core scaling; Cache working-set capacity |
 | Memory hierarchy | read bandwidth and dependent-load latency from 16 KiB to 4 GiB per core; one core and 56 cores |
 | Achieved GEMM | oneDNN BF16 and INT8 (verified on AMX) at Llama-3.1-8B projection shapes, batch 1–4096, weights streamed from memory |

@@ -11,7 +11,7 @@ import pandas as pd
 import plotly.io as pio
 from IPython.display import Markdown, display
 
-from hwbench import report
+from hwbench import claims, report
 from hwbench.analysis import ROOT, export_figure
 from hwbench.theory import Theory
 
@@ -35,6 +35,7 @@ class Context:
     table: Callable[..., None]
     figure: Callable[..., None]
     say: Callable[[str], None]
+    say_claims: Callable[..., None]
 
 
 def setup(name: str) -> Context:
@@ -69,6 +70,17 @@ def setup(name: str) -> Context:
     def say(text: str) -> None:
         display(Markdown(text))
 
+    def say_claims(items, ids=None, lead: str = "") -> None:
+        """Render computed claims as bullets; the notebook stops if one is contradicted."""
+
+        chosen = [c for c in items if ids is None or c.id in ids]
+        if ids is not None:
+            chosen.sort(key=lambda c: ids.index(c.id))
+            assert len(chosen) == len(ids), f"unknown claim id in {ids}"
+        failed = claims.check(chosen)
+        assert not failed, [c.id for c in failed]
+        display(Markdown((lead + "\n\n" if lead else "") + claims.render(chosen)))
+
     return Context(
-        name, validation, everything, thesis, ext, policy, Theory.load(), table, figure, say
+        name, validation, everything, thesis, ext, policy, Theory.load(), table, figure, say, say_claims
     )

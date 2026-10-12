@@ -27,7 +27,8 @@ from hwbench import report, roofline, plotting
 from hwbench.notebook import setup
 ctx = setup({name!r})
 thesis, ext, theory = ctx.thesis, ctx.ext, ctx.theory
-table, figure, say = ctx.table, ctx.figure, ctx.say"""
+table, figure, say, say_claims = ctx.table, ctx.figure, ctx.say, ctx.say_claims
+from hwbench import claims"""
 
 
 def md(text: str):
@@ -65,7 +66,7 @@ table(prov)
     md("""
 ## 2. Compute: peak per execution path
 
-The *efficiency at clock* column is the honest one: the cores do not run at the 1.9 GHz base clock. AVX-512 code ran near 2.5 GHz and AMX code near 2.0 GHz, so a datasheet comparison at base clock reads above 100% for FP64 and FP32.
+The *efficiency at clock* column is the honest one: the cores do not run at the 1.9 GHz base clock, so a datasheet comparison at base clock can read above 100%. The measured clocks are stated below the figure.
 """),
     code("""
 peaks = report.isa_peaks(ext, theory)
@@ -88,12 +89,13 @@ fig.add_scatter(x=order, y=[theory.peak_gops(p, 56) / 1000 for p in order], mode
 plotting.style(fig, 'Peak throughput by execution path · one socket', 'Execution path', 'TOP/s (operations = multiply + add)', 520)
 fig.update_yaxes(type='log')
 figure(fig, 'compute_peaks')
+say_claims(claims.compute_paths(ext, theory), ['clocks'])
 """),
     code("""
 amx = flat.loc['amx_bf16']; i8 = flat.loc['amx_int8']; vb = flat.loc['avx512_bf16']; f32 = flat.loc['fp32']
 say(f"**Result.** One socket sustains {i8.gops/1000:.0f} TOP/s on AMX INT8 and {amx.gops/1000:.0f} TOP/s on AMX BF16 "
     f"({amx.efficiency_at_clock:.1%} of the peak at the {amx.ghz_effective:.2f} GHz the cores actually ran). "
-    f"The AVX-512 BF16 dot-product path reaches only {vb.gops/1000:.1f} TOP/s ({vb.ops_per_cycle_per_core:.0f} ops/cycle/core, about 0.5 instruction per cycle), "
+    f"The AVX-512 BF16 dot-product path reaches only {vb.gops/1000:.1f} TOP/s ({vb.ops_per_cycle_per_core:.0f} ops/cycle/core, {vb.ops_per_cycle_per_core/64:.2f} instruction per cycle at 64 operations each), "
     f"less than half of FP32 FMA ({f32.gops/1000:.1f} TOP/s): software that cannot use AMX gains little from BF16 weights in compute-bound regimes.")
 """),
     md("""
@@ -119,7 +121,7 @@ say(f"**Result.** One socket's HBM sustains {p.loc['flat_hbm'].max():.0f} GB/s a
     md("""
 ## 4. Flat versus Cache
 
-Compute is identical in both modes (the memory mode does not touch the cores); only the memory system differs. Cache mode matches Flat HBM while the working set fits the 64 GiB memory-side cache and falls below Flat DDR once it does not.
+Compute is identical in both modes (the memory mode does not touch the cores); only the memory system differs. The table compares one resident and one spilled working set; the statements below it give the dependence on working-set size.
 """),
     code("""
 bwa = report.bandwidth_summary(ext, thesis)
@@ -133,17 +135,19 @@ rows = [
     dict(memory='Flat · HBM', GBs=best('flat_hbm').gbs, idle_latency_ns=lat[(lat.config == 'flat_hbm') & (lat.level == 'memory')].latency_ns.iloc[0], amx_bf16_TOPs=amx_by_mode['flat']),
     dict(memory='Flat · DDR', GBs=best('flat_ddr').gbs, idle_latency_ns=lat[(lat.config == 'flat_ddr') & (lat.level == 'memory')].latency_ns.iloc[0], amx_bf16_TOPs=amx_by_mode['flat']),
     dict(memory='Cache · 8 GiB (resident)', GBs=best('cache', 8.0).gbs, idle_latency_ns=lat[(lat.config == 'cache') & (lat.level == 'memory')].latency_ns.iloc[0], amx_bf16_TOPs=amx_by_mode['cache']),
-    dict(memory='Cache · 96 GiB (spilled)', GBs=best('cache', 96.0).gbs, idle_latency_ns=lat[(lat.config == 'cache') & (lat.level == 'memory')].latency_ns.iloc[0], amx_bf16_TOPs=amx_by_mode['cache']),
+    dict(memory='Cache · 96 GiB (spilled)', GBs=best('cache', 96.0).gbs, idle_latency_ns=np.nan, amx_bf16_TOPs=amx_by_mode['cache']),
 ]
 fc = pd.DataFrame(rows)
 table(fc)
-say(f"**Result.** Cache mode delivers {fc.GBs[2]/fc.GBs[0]:.0%} of Flat HBM bandwidth while resident and {fc.GBs[3]:.0f} GB/s ({fc.GBs[3]/fc.GBs[1]:.0%} of Flat DDR) when the working set is 96 GiB; "
-    f"its idle memory latency ({fc.idle_latency_ns[2]:.0f} ns) is higher than either Flat tier. AMX BF16 throughput differs by {abs(amx_by_mode['cache']/amx_by_mode['flat']-1):.1%} between modes.")
+say(f"**Result.** The best kernel delivers {fc.GBs[2]:.0f} GB/s at 8 GiB ({fc.GBs[2]/fc.GBs[0]:.0%} of Flat HBM's best) and {fc.GBs[3]:.0f} GB/s at 96 GiB. "
+    f"Idle memory latency was measured only inside the HBM cache ({fc.idle_latency_ns[2]:.0f} ns, against {fc.idle_latency_ns[0]:.0f} ns on Flat HBM and {fc.idle_latency_ns[1]:.0f} ns on Flat DDR); the spilled case is blank because it was not measured. "
+    f"AMX BF16 throughput differs by {abs(amx_by_mode['cache']/amx_by_mode['flat']-1):.1%} between modes.")
+say_claims(claims.cache_mode(ext, thesis) + claims.latency(ext, theory), ['cache_declines_before_capacity', 'cache_resident_model', 'cache_below_flat_ddr', 'cache_latency_resident_only'])
 """),
     md("""
 ## 5. Placement and sockets
 
-Memory must be local: remote HBM keeps about a tenth of its bandwidth. Two independent sockets deliver the sum of their parts, and a single process spanning both sockets reaches that only if every thread touches its own socket's pages.
+Where memory sits matters. The statements below the result give the remote-memory penalty, the two-socket efficiency and the cost of one process spanning both sockets.
 """),
     code("""
 loc = report.locality_ratio(ext, thesis)
@@ -154,6 +158,7 @@ local_hbm = loc[(loc.config == 'flat_hbm') & (loc.kernel == 'read')].local.mean(
 say(f"**Result.** Remote HBM reads reach {loc[(loc.config=='flat_hbm')&(loc.kernel=='read')].remote.mean():.0f} GB/s against {local_hbm:.0f} GB/s local. "
     f"Two timed processes retain {de.efficiency.median():.1%} (median) of the sum of isolated sockets. One 112-thread process reads HBM at {spm['firsttouch']:.0f} GB/s with first-touch placement "
     f"but {spm['interleave']:.0f} GB/s with interleaved pages ({spm['interleave']/spm['firsttouch']:.0%}).")
+say_claims(claims.placement(ext, thesis) + claims.sockets(ext, thesis) + claims.span(ext, thesis), ['remote_hbm', 'dual_efficiency', 'span_flat_hbm', 'span_interleave_cost'])
 """),
     md("""
 ## 6. Achieved GEMM against the peaks
@@ -168,9 +173,10 @@ for dtype, path in [('bf16', 'amx_bf16'), ('int8', 'amx_int8')]:
     rows.append(dict(precision=dtype, measured_tile_peak_TOPs=peak / 1000, best_gemm_TOPs=sel.gops.max() / 1000, fraction=sel.gops.max() / peak,
                      M1_TOPs=sel[sel.m == 1].gops.max() / 1000, M1_traffic_GBs=sel[sel.m == 1].gbs.max()))
 table(pd.DataFrame(rows))
+say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_fraction_of_tile_peak', 'gemm_asymmetry', 'gemv_fixed_cost'])
 """),
     md("""
-A library GEMM reaches about a third of the tile peak even at large batches, and at batch 1 it moves weights at well under the HBM bandwidth. The [atlas](05_roofline_atlas.ipynb) compares these achieved rates with the instruction peak.
+The [atlas](05_roofline_atlas.ipynb) compares these achieved rates with the instruction peak and lists every point above its roofline.
 
 ## 7. Where the ceilings meet: ridge points
 
@@ -192,15 +198,18 @@ for p in order:
                          ridge_op_per_byte=roofline.ridge(flat.loc[p, 'gops'], gbs)))
 table(pd.DataFrame(rows).pivot(index='path', columns='memory', values='ridge_op_per_byte').reindex(order).reset_index())
 """),
+    code("""
+say_claims(claims.ridges(ext, thesis, theory), ['ridge_points'])
+"""),
     md("""
-**Implication.** On HBM the ridge for AMX BF16 sits near 200 operations per byte, for AVX-512 FP64 near 8. The [roofline atlas](05_roofline_atlas.ipynb) draws these ceilings with measured GEMM points.
+The [roofline atlas](05_roofline_atlas.ipynb) draws these ceilings with measured GEMM points.
 
 ## 8. Limits of these results
 
 * Bytes are *modeled* (kernel traffic convention), not memory-controller counts: uncore counters are not readable without privileges. Write-allocate behaviour is therefore inferred, not observed.
 * No power or energy was measured (RAPL needs root).
 * SMT is off on these nodes; its effect is documented, not measured.
-* Cache-mode HBM hit rates are inferred from bandwidth versus working-set size only.
+* Cache-mode HBM hit rates are inferred from bandwidth versus working-set size only, and the HBM ceiling is a 56-core sustainable figure, not the capability of the HBM devices.
 * Peaks come from synthetic kernels; GEMM points show what a library achieves at representative shapes.
 """),
 ]
@@ -246,9 +255,10 @@ table(pd.DataFrame([dict(node=int(k), tier=nodes[int(k)]['memory_tier'], socket=
         hmat_read_GBs=v['read_bandwidth'] / 1000, hmat_write_GBs=v['write_bandwidth'] / 1000,
         hmat_read_ns=v['read_latency']) for k, v in hm.items()]))
 """),
+    code("""
+say_claims(claims.core_scaling(ext, thesis, ROOT) + claims.latency(ext, theory, ROOT), ['hmat_gap', 'hmat_latency'])
+"""),
     md("""
-The firmware (ACPI HMAT) advertises 262 GB/s DDR read bandwidth per socket — the measured read-only bandwidth ([notebook 02](02_memory_hierarchy_and_bandwidth.ipynb)) matches it — and 869 GB/s for HBM, which no kernel here reached (about 540–560 GB/s). HMAT latencies are unloaded datasheet-like values and are lower than measured dependent-load latency, which includes translation and the cache path.
-
 ## 2. Execution rules and provenance
 
 * **Flat** campaigns run on the single dedicated Flat node, outside Slurm, in a tmux session started over SSH. Before measuring, the runner checks the node is idle (no Slurm job placed on it, 1-minute load below 1), and every record is bracketed by load and job snapshots. A foreign job observed at any point marks the record `interference_suspected` and processing rejects it.
@@ -264,7 +274,7 @@ table(prov)
     md("""
 ## 3. Validity rules and repeatability
 
-A sample is used only if the benchmark's own checksum validated, the process ran on the expected host with the expected topology, its clock window lies inside the process window, disassembly proves the kernel used the intended instruction, GEMMs show an AMX execution in oneDNN's verbose log, and no foreign Slurm job was seen. Each configuration needs five steady samples; variation above 5% is flagged, not hidden.
+A sample is used only if the benchmark's own checksum validated, the process ran on the expected host with the expected topology, its clock window lies inside the process window, the disassembly of the compiled benchmark contains the intended instruction (a whole-binary check, not a check of the measured loop), GEMMs show an AMX execution in oneDNN's verbose log, and no foreign Slurm job was seen. Each configuration needs five steady samples; variation above 5% is flagged, not hidden.
 """),
     code("""
 v = ctx.validation
@@ -295,9 +305,10 @@ say(f"**Result.** Flat, SSH versus the October Slurm-exclusive runs: {flat_x.wit
     f"(largest {flat_x.deviation_percent.abs().max():.1f}%). Cache, second node versus the first: {cache_x.within_tolerance.mean():.0%} of {len(cache_x)} within 2% "
     f"(largest {cache_x.deviation_percent.abs().max():.1f}%).")
 """),
+    code("""
+say_claims(claims.xcheck(ext, thesis))
+"""),
     md("""
-**Implication.** Launch method (exclusive Slurm versus an idle node over SSH) does not change the Flat results beyond measurement noise, so the October Flat data and the new SSH data can share a roofline. Where Cache deviations exceed 2% they are reported as node-to-node variance and not averaged away.
-
 ## 5. Traffic and operation conventions
 
 * Triad counts 24 B per element (two reads, one write); read-only counts 8 B per element; operations are counted as multiply + add = 2.
@@ -349,9 +360,10 @@ say(f"**Result.** Per core, L1 sustains {lv.loc['L1 (32 KiB)','flat_hbm']:.0f} G
     f"All 56 cores aggregate to {lv.loc['L1, 56 cores (32 KiB/core)','flat_hbm']/1000:.1f} TB/s in L1 and {lv.loc['L2, 56 cores (1 MiB/core)','flat_hbm']/1000:.1f} TB/s in L2, "
     f"against {lv.loc['memory, 56 cores (256 MiB/core)','flat_hbm']:.0f} GB/s (HBM) and {lv.loc['memory, 56 cores (256 MiB/core)','flat_ddr']:.0f} GB/s (DDR) from memory.")
 """),
+    code("""
+say_claims(claims.hierarchy(ext, theory))
+"""),
     md("""
-**Implication.** Memory bandwidth grows with core count, not with a single core's capability: a thread needs data to fit in L2 to run at 100+ GB/s, while a thread streaming from memory is capped near 17–25 GB/s regardless of tier. The 16 KiB point reads lower than 32 KiB because a pass over 16 KiB takes only tens of nanoseconds, comparable to the clock read that ends each pass; it is a measurement overhead, not an L1 property.
-
 ## 2. Idle dependent-load latency
 
 **Conditions.** One core chasing a random cycle of 64-byte nodes (seed 7); transparent huge pages are enabled system-wide, so translation cost is small. Results describe idle latency, not loaded latency.
@@ -367,8 +379,11 @@ figure(fig, 'hierarchy_latency')
     code("""
 table(latency.pivot(index='level', columns='config', values='latency_ns').reset_index())
 """),
+    code("""
+say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_resident_only'])
+"""),
     md("""
-**Implication.** Cache levels are identical across configurations; only beyond the L3 do tiers differ. HBM's idle latency is higher than DDR's, so latency-bound code does not benefit from HBM; its benefit is bandwidth under many outstanding requests. In Cache mode the memory-side cache is a further HBM-latency step in front of DDR.
+Cache levels are identical across configurations; only beyond the L3 do tiers differ. HBM's benefit is bandwidth under many outstanding requests, not latency.
 
 ## 3. Triad, read-only and non-temporal Triad
 
@@ -393,8 +408,11 @@ say(f"**Result.** Triad and non-temporal Triad agree to {100*abs(p.loc['flat_ddr
     f"so the destination line is not being read before it is written. Read-only is {p.loc['flat_ddr','read']/p.loc['flat_ddr','triad']-1:+.0%} on DDR ({p.loc['flat_ddr','read']:.0f} GB/s, the firmware-advertised 262) "
     f"and {p.loc['flat_hbm','read']/p.loc['flat_hbm','triad']-1:+.0%} on HBM ({p.loc['flat_hbm','read']:.0f} GB/s): reading is not faster than a mixed read/write stream on HBM.")
 """),
+    code("""
+say_claims(claims.kernels(ext, thesis, theory), ['no_write_allocate_bound', 'triad_store_width', 'read_vs_triad', 'hbm_over_ddr'])
+"""),
     md("""
-**Implication.** Full-line vector stores do not appear to cost an extra read here (consistent with the core skipping the read for whole-line writes), so counted Triad bandwidth is a fair proxy for bus traffic; this is inferred from equal rates, not observed with controller counters. For a roofline, the primary ceiling is the best sustained of the three kernels (ERT convention), with read-only shown alongside the Triad ceilings.
+Counted Triad bandwidth is therefore used as a proxy for bus traffic, with the caveat that this is inferred, not observed. For a roofline the primary ceiling is the best sustained of the three kernels (ERT convention); workload-matched ceilings (read-only for GEMM weights) are used where the access pattern is known.
 
 ## 4. Core count needed to saturate memory
 """),
@@ -407,12 +425,15 @@ figure(fig, 'read_core_scaling')
 sat = (rs0.groupby('config').apply(lambda g: g[g.gbs >= 0.9 * g.gbs.max()].threads.min(), include_groups=False)).rename('cores for 90% of peak').reset_index()
 table(sat)
 """),
+    code("""
+say_claims(claims.core_scaling(ext, thesis, ROOT), ['ddr_saturates', 'hbm_still_scaling', 'hbm_clock_drop', 'hmat_gap'])
+"""),
     md("""
-**Implication.** DDR saturates with roughly 28 cores while HBM keeps scaling to all 56: a workload that uses fewer cores than that (for example a server pinned to 55 cores competing with other work) leaves HBM bandwidth unused.
+A workload that uses fewer cores than the saturation point (for example a server pinned to 55 cores competing with other work) leaves HBM bandwidth unused.
 
 ## 5. Cache mode against working-set size
 
-**Conditions.** One socket, 56 cores, read-only, Triad (October, regular stores) and non-temporal Triad, local DDR-backed allocation of 8–128 GiB. The 64 GiB HBM capacity is a reference line, not a fitted transition.
+**Conditions.** One socket, 56 cores, read-only, Triad (regular stores) and non-temporal Triad, local DDR-backed allocation of 8–128 GiB. The 64 GiB HBM capacity is a reference line, not a fitted transition.
 """),
     code("""
 cap = bw[(bw.config == 'cache') & (bw.socket_scope == 'single') & (bw.socket == 0)]
@@ -426,12 +447,10 @@ figure(fig, 'cache_capacity')
 table(cap.pivot_table(index='working_set_gib', columns='kernel', values='gbs').reset_index())
 """),
     code("""
-pv = cap.pivot_table(index='working_set_gib', columns='kernel', values='gbs')
-say(f"**Result.** Read-only bandwidth falls from {pv.loc[8,'read']:.0f} GB/s at 8 GiB to {pv.loc[96,'read']:.0f} GB/s at 96 GiB and {pv.loc[128,'read']:.0f} GB/s at 128 GiB, "
-    f"{pv.loc[128,'read']/pv.loc[8,'read']:.0%} of the HBM-resident rate; at 96 GiB it is {pv.loc[96,'read']/ctx.thesis[(ctx.thesis.memory_mode=='flat')&(ctx.thesis.memory_target=='ddr')&(ctx.thesis.benchmark=='stream_triad')&(ctx.thesis.notes=='core_scaling')&(ctx.thesis.threads==56)&(ctx.thesis.socket==0)].bandwidth_gbs.median():.0%} of Flat DDR's Triad.")
+say_claims(claims.cache_mode(ext, thesis))
 """),
     md("""
-**Implication.** Cache-mode bandwidth must be quoted with its working-set size. Once the active data exceeds the 64 GiB memory-side cache, bandwidth drops *below* what Flat-mode DDR delivers for the same kernel, because every miss pays for the cache lookup and fill. A model whose weights do not fit in 64 GiB should not expect HBM-class bandwidth in Cache mode.
+Cache-mode bandwidth must be quoted with its working-set size. A model whose weights are larger than a few tens of GiB should not expect HBM-class bandwidth in Cache mode.
 
 ## 6. Can DDR and HBM bandwidth be combined? (October measurement)
 """),
@@ -439,8 +458,8 @@ say(f"**Result.** Read-only bandwidth falls from {pv.loc[8,'read']:.0f} GB/s at 
 from hwbench.analysis import concurrent_table
 table(concurrent_table(thesis).drop(columns=['cpu_bind']))
 """),
-    md("""
-Combined DDR+HBM streams from disjoint core sets do not exceed the all-HBM rate for the same cores; component rates show interference relative to isolated controls. This measures two independent streams, not an application that mixes tiers.
+    code("""
+say_claims(claims.concurrent(thesis))
 """),
 ]
 
@@ -451,7 +470,7 @@ NOTEBOOKS["03_numa_and_socket_scaling"] = [
 
 **Question.** What does it cost to use memory on the other socket, how well do two sockets scale when run independently, and what happens when a single process spans both?
 
-Remote and local refer to the memory socket relative to the CPU socket. Two-socket results use two processes timed over one shared clock window (at least 99% overlap required) unless stated as a single spanning process.
+Remote and local refer to the memory socket relative to the CPU socket. Two-socket results use two processes timed over one shared clock window (at least 95% overlap required, below 99% is flagged) unless stated as a single spanning process.
 """),
     code(setup("03_numa_and_socket_scaling")),
     md("""
@@ -477,8 +496,11 @@ g = loc.groupby(['config', 'kernel'])[['remote_over_local']].mean().remote_over_
 say(f"**Result.** Remote DDR retains {g[('flat_ddr','read')]:.0%} (read) to {g[('flat_ddr','triad_nt')]:.0%} (non-temporal Triad) of local DDR bandwidth. "
     f"Remote HBM retains only {g[('flat_hbm','read')]:.0%} to {g[('flat_hbm','triad_nt')]:.0%} of local HBM, which is {loc[(loc.config=='flat_hbm')&(loc.kernel=='read')].remote.mean():.0f} GB/s: below remote DDR.")
 """),
+    code("""
+say_claims(claims.placement(ext, thesis))
+"""),
     md("""
-**Implication.** HBM is only an advantage when accessed from its own socket: remote HBM reads are slower than remote DDR reads through the same inter-socket links, so raw link bandwidth alone does not explain the loss; the cause was not identified, because the link and coherence-agent counters (UPI, CHA) are not readable without privileges. Any placement that lets threads fault HBM pages on the wrong socket loses an order of magnitude. Always bind memory and CPUs to the same socket for bandwidth-bound work.
+Bind memory and CPUs to the same socket for bandwidth-bound work.
 
 ## 2. Two sockets, two processes
 
@@ -505,11 +527,10 @@ table(de.drop(columns=['label', 'metric']))
 """),
     code("""
 say(f"**Result.** Across {len(de)} paired measurements the two-process rate is {de.efficiency.min():.3f}–{de.efficiency.max():.3f}× the sum of isolated sockets "
-    f"(median {de.efficiency.median():.3f}); the shared window overlapped by at least {de.overlap_min.min():.1%}. Compute paths cluster at 0.985–0.992 and bandwidth paths at 0.99–1.02.")
+    f"(median {de.efficiency.median():.3f}); the shared window overlapped by at least {de.overlap_min.min():.1%}.")
+say_claims(claims.sockets(ext, thesis))
 """),
     md("""
-**Implication.** Independent sockets do not interfere: a node delivers the sum of its sockets for compute (about 1% below, consistent with a slightly lower clock when all cores run) and bandwidth. This describes independent workers; it does not measure tensor-parallel scaling or cross-socket communication.
-
 ## 3. One process spanning both sockets
 
 Unpinned workloads run one process with threads on all 112 cores. Two placements are compared for 16 GiB of data: *interleaved* pages across both sockets' memory, and *first-touch* (each thread allocates local to its socket).
@@ -529,9 +550,10 @@ plotting.style(fig, 'Single process, 112 threads · bandwidth by page placement'
 fig.update_layout(barmode='group')
 figure(fig, 'span_bandwidth')
 """),
+    code("""
+say_claims(claims.span(ext, thesis))
+"""),
     md("""
-**Implication.** See the table: first-touch placement is what lets a single spanning process approach the two-process result, while interleaving halves the locality benefit by making half of every thread's traffic remote.
-
 ## 4. Cores needed to saturate one socket (October Triad)
 """),
     code("""
@@ -572,8 +594,11 @@ figure(fig, 'isa_scaling')
 per_core = sc[sc.threads == 1].set_index('path').gops
 say('Per core: ' + ', '.join(f"{theory.isa(p).label.split(' (')[0]} {per_core[p]:.0f} GOP/s" for p in per_core.index) + '.')
 """),
+    code("""
+say_claims(claims.compute_paths(ext, theory), ['linear_scaling'])
+"""),
     md("""
-**Implication.** Every path scales linearly in core count up to 56 within a few percent (compute is not shared). Per-core rates are what multiply into the socket peaks used by the roofline.
+Per-core rates are what multiply into the socket peaks used by the roofline.
 
 ## 2. Efficiency: against base clock and against the clock the cores ran at
 
@@ -599,19 +624,25 @@ figure(fig, 'ops_per_cycle')
 i = one.set_index('path')
 say(f"**Result.** AMX BF16 reaches {i.loc['amx_bf16','ops_per_cycle_per_core']:.0f} of 1024 operations per cycle ({i.loc['amx_bf16','efficiency_at_clock']:.1%}), "
     f"AMX INT8 {i.loc['amx_int8','ops_per_cycle_per_core']:.0f} of 2048, VNNI {i.loc['vnni_int8','ops_per_cycle_per_core']:.0f} of 256, FP32/FP64 {i.loc['fp32','ops_per_cycle_per_core']:.0f}/{i.loc['fp64','ops_per_cycle_per_core']:.0f} of 64/32. "
-    f"The AVX-512 BF16 dot product reaches only {i.loc['avx512_bf16','ops_per_cycle_per_core']:.0f} of the 128 two-port upper bound — one instruction every two cycles — "
+    f"The AVX-512 BF16 dot product reaches only {i.loc['avx512_bf16','ops_per_cycle_per_core']:.0f} of the 128 two-port upper bound — roughly one instruction every two cycles — "
     f"so it is not a faster path than FP32 FMA ({i.loc['fp32','gops']/1000:.1f} versus {i.loc['avx512_bf16','gops']/1000:.1f} TOP/s).")
 """),
+    code("""
+say_claims(claims.compute_paths(ext, theory), ['clocks'], lead='Apparent efficiencies above 100% at base clock are clock effects.')
+"""),
     md("""
-**Implication.** The vendor per-cycle figures are met almost exactly; apparent efficiencies above 100% at base clock are clock effects (AVX-512 ran near 2.5 GHz, AMX near 2.0 GHz — AMX ran at the lowest clock, plausibly because of a power-related frequency limit for AMX, which was not measured: no power or throttling counters are readable). Software that expects BF16 to speed up without AMX will not see it: the only fast low-precision paths are AMX and, for INT8, VNNI.
+Software that expects BF16 to speed up without AMX will not see it: the only fast low-precision paths are AMX and, for INT8, VNNI.
 
 ## 3. Effective clock and AMX activity
 """),
     code("""
 table(one[['path', 'ghz_effective', 'amx_busy_frac']])
 """),
+    code("""
+say_claims(claims.compute_paths(ext, theory), ['amx_busy'])
+"""),
     md("""
-The `EXE.AMX_BUSY` counter confirms the AMX kernels keep the unit busy nearly all cycles (about 98–99%) and reads zero for every other path, so AMX activity can be told apart from vector activity in server runs.
+AMX activity can therefore be told apart from vector activity in server runs.
 
 ## 4. oneDNN GEMM at representative projection shapes
 
@@ -652,8 +683,11 @@ mem_bound = gm[(gm.memory_target == 'hbm') & (gm.m <= 16)].groupby('dtype').gbs.
 say(f"**Result.** At M=4096 oneDNN reaches {big['bf16']/1000:.1f} TOP/s BF16 ({big['bf16']/tile['bf16']:.0%} of the tile peak) and {big['int8']/1000:.1f} TOP/s INT8 ({big['int8']/tile['int8']:.0%}). "
     f"At M=1 it delivers {small['bf16']/1000:.2f} and {small['int8']/1000:.2f} TOP/s: weight streaming, at up to {mem_bound['bf16']:.0f} (BF16) and {mem_bound['int8']:.0f} GB/s (INT8) of modeled traffic.")
 """),
+    code("""
+say_claims(claims.gemm(ext, thesis, theory, ROOT))
+"""),
     md("""
-**Implication.** GEMM approaches only a third of the AMX tile peak even at large M because tile loads, the epilogue and data layout cost more than the tile instruction itself; and below M≈16 it is bandwidth-bound, where INT8 halves the weight traffic. INT8 curves are not monotonic: for several shapes oneDNN's throughput dips between M=64 and M=256 (variation between samples is flagged in the validation report) before recovering, which looks like a switch between kernel implementations rather than noise. The "fraction of tile peak" is the realistic compute ceiling for matrix multiplication; the raw tile peak is an upper bound no library reaches.
+The "fraction of tile peak" is the library-achievable compute ceiling for these calls (framework and library overhead included); the raw tile peak is an upper bound no library call reaches. Whether the small-M points are limited by memory, by per-call overhead or by weight repacking is not separable with the present runs.
 """),
 ]
 
@@ -686,8 +720,12 @@ figure(fig, 'atlas_flat_1s')
 table(pd.DataFrame([dict(memory=f'{m.tier} ({m.kernel})', GBs=m.gbs, **{p: roofline.ridge(c.gops, m.gbs) for p, c in zip(PATHS, compute_set('flat', '1S', 56))}) for m in mem]))
 """),
     md("""
-The table gives the **ridge** (operations per byte) at which each path stops being memory-bound. Higher-throughput paths need proportionally more reuse: AMX INT8 needs about 400 operations per byte on HBM.
-
+The table gives the **ridge** (operations per byte) at which each path stops being memory-bound. Higher-throughput paths need proportionally more reuse; the ridge values for HBM and DDR are stated below.
+"""),
+    code("""
+say_claims(claims.ridges(ext, thesis, theory), ['ridge_points'])
+"""),
+    md("""
 ## 2. Cache mode, one socket
 """),
     code("""
@@ -698,8 +736,11 @@ fig = plotting.roofline_figure(theory_set(['amx_bf16', 'amx_int8'], '1S', 56) + 
 figure(fig, 'atlas_cache_1s')
 table(pd.DataFrame([dict(case=c.tier, kernel=c.kernel, GBs=c.gbs, working_set_gib=c.working_set_gib) for c in (resident, spilled)]))
 """),
+    code("""
+say_claims(claims.cache_mode(ext, thesis), ['cache_declines_before_capacity', 'cache_triad_spilled_ceiling'])
+"""),
     md("""
-**Implication.** Cache mode behaves like Flat HBM only while the working set stays inside the 64 GiB memory-side cache. Past it the slope falls to the 96 GiB line — lower than Flat DDR — and every ridge moves right by the same factor.
+Every ridge moves right by the ratio of the two slopes. The 16 GiB line is the best case for a model of that size; the 96 GiB line is the Triad-based ceiling of the spilled case.
 
 ## 3. Flat mode, both sockets
 """),
@@ -709,9 +750,10 @@ fig = plotting.roofline_figure(theory_set(['fp64', 'amx_bf16', 'amx_int8'], '2S'
                                title='Flat · both sockets (two timed processes) · measured and vendor ceilings')
 figure(fig, 'atlas_flat_2s')
 """),
+    code("""
+say_claims(claims.ridges(ext, thesis, theory), ['ridge_points', 'two_sockets_ridge'])
+"""),
     md("""
-Both ceilings double, so ridge points are unchanged: adding the second socket raises the roof without changing the intensity needed to reach it.
-
 ## 4. Achieved points: FP64 sweep
 """),
     code("""
@@ -723,8 +765,7 @@ audits = [roofline.audit_points(pts, mem_rw, fp64).assign(group='FP64 sweep · F
 fig = plotting.roofline_figure(fp64 + theory_set(['fp64'], '1S', 56), mem_rw, pts, title='FP64 intensity sweep · Flat · one socket', x_range=(0.05, 256))
 figure(fig, 'atlas_fp64_sweep')
 hb = [p for p in pts if p.memory_target == 'hbm']
-say(f"**Result.** The sweep follows the HBM slope up to its knee and reaches {max(p.gops for p in hb)/1000:.2f} TOP/s at {max(p.intensity for p in hb):.0f} FLOP/byte, "
-    f"{max(p.gops for p in hb)/fp64[0].gops:.0%} of the measured FP64 peak.")
+say_claims(claims.fp64_sweep(ext, thesis, theory))
 """),
     md("""
 ## 5. Achieved points: BF16 and INT8 GEMM
@@ -761,7 +802,7 @@ gap = pd.DataFrame(rows)
 table(gap)
 """),
     md("""
-**Gap analysis.** Two layers separate the vendor number from library performance: (1) the vendor peak versus what a hand-written tile kernel sustains (clock and power, a few percent); (2) the tile-kernel peak versus an optimized library GEMM (the achieved-over-measured column).
+**Gap analysis.** Two layers separate the vendor number from library performance: (1) the vendor peak versus what a hand-written tile kernel sustains (the clock the cores actually ran at; compare `measured_over_theory` below); (2) the tile-kernel peak versus an optimized library GEMM (the achieved-over-measured column).
 
 ## 6. Ceiling audit: points above their own roofline
 
