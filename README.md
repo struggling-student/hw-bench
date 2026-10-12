@@ -38,7 +38,7 @@ python3 -m venv .venv
 bash scripts/make_analysis.sh
 ```
 
-Raw campaigns must first be present under `data/raw/cache/` and `data/raw/flat/`; the selected campaign IDs are pinned in `configs/analysis.json` (`primary_campaigns`, `benchmark_campaigns`, `supersede` for the October thesis selection; `extended_campaigns` for the later parts). No SSH connection is needed for analysis. Static export requires Kaleido and a compatible Chrome/Chromium.
+Analysis needs Python 3.11 or newer (`tomllib`); the cluster-side scripts run on the system Python 3.9. Raw campaigns must first be present under `data/raw/cache/` and `data/raw/flat/`; the selected campaign IDs are pinned in `configs/analysis.json` (`primary_campaigns`, `benchmark_campaigns`, `supersede` for the October thesis selection; `extended_campaigns` for the later parts). No SSH connection is needed for analysis. Static export requires Kaleido and a compatible Chrome/Chromium.
 
 ## Evidence and interpretation
 

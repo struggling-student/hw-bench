@@ -493,7 +493,7 @@ def gemm_workload_points(gemm: pd.DataFrame, theory: Theory, cores: int = 56):
                 cores=cores,
                 threads=cores,
                 memory_target=r.memory_target,
-                provenance={"campaign": r.campaign_id, "pool_gib": r.pool_gib, "cv_percent": r.cv_percent},
+                provenance={"campaign": r.campaign_id, "pool_gib": r.pool_gib, "cv_percent": r.cv_percent, "series": r.shape},
             )
         )
     return points
@@ -526,7 +526,7 @@ def fp64_sweep_points(thesis: pd.DataFrame, mode: str, tier: str, ws_gib: float 
                 cores=56,
                 threads=56,
                 memory_target=tier,
-                provenance={"campaign": _ids(part.campaign_id)},
+                provenance={"campaign": _ids(part.campaign_id), "series": "fp64 sweep"},
             )
         )
     return points

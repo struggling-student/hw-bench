@@ -128,17 +128,32 @@ def roofline_figure(
                         marker=dict(symbol="diamond-open", size=8, color=CONFIG_COLORS[key]),
                         hovertemplate=f"ridge {r:.1f} op/B<extra></extra>",
                     )
+    # One trace per (memory tier, series) so the legend stays readable; every point
+    # keeps its own hover text with campaign, intensity and source of its bytes.
+    groups: dict[tuple, list[WorkloadPoint]] = {}
     for p in points or []:
-        color = PATH_COLORS.get(p.isa_path, "#444444")
+        key = (p.mode, p.memory_target, p.provenance.get("series", p.isa_path))
+        groups.setdefault(key, []).append(p)
+    symbols = ["circle", "square", "diamond", "triangle-up", "cross", "x"]
+    for i, ((mode, tier, series), members) in enumerate(groups.items()):
+        key = config_key(mode or "flat", tier)
+        members = sorted(members, key=lambda q: q.intensity)
         fig.add_scatter(
-            x=[p.intensity],
-            y=[p.gops / 1000],
+            x=[q.intensity for q in members],
+            y=[q.gops / 1000 for q in members],
             mode="markers",
-            name=p.name,
-            marker=dict(color=color, size=9, line=dict(color="white", width=1)),
+            name=f"{CONFIG_LABELS[key]} · {series}",
+            marker=dict(
+                color=CONFIG_COLORS[key],
+                symbol=symbols[i % len(symbols)],
+                size=8,
+                line=dict(color="white", width=1),
+            ),
+            text=[q.name for q in members],
+            customdata=[[q.bytes_source, q.provenance.get("campaign", "")] for q in members],
             hovertemplate=(
-                f"{p.name}<br>{p.gops / 1000:.3f} TOP/s · {p.intensity:.2f} op/B"
-                f"<br>{p.bytes_source}<extra></extra>"
+                "%{text}<br>%{y:.3f} TOP/s · %{x:.2f} op/B"
+                "<br>%{customdata[0]} · %{customdata[1]}<extra></extra>"
             ),
         )
     style(fig, title, "Operations per byte of memory traffic", "TOP/s", height)
@@ -181,3 +196,48 @@ def line_by_config(
     if log_y:
         fig.update_yaxes(type="log")
     return fig
+
+
+def mark_x(fig, edges: dict[str, float], log: bool = True) -> None:
+    """Dotted vertical reference lines with labels that work on log axes.
+
+    ``add_vline`` places its annotation in data coordinates, which on a log axis
+    puts the label far off screen; labels need ``log10(x)`` there.
+    """
+
+    for label, x in edges.items():
+        fig.add_shape(
+            type="line", x0=x, x1=x, y0=0, y1=1, xref="x", yref="paper",
+            line=dict(dash="dot", color="#9AA3AF", width=1.5),
+        )
+        fig.add_annotation(
+            x=np.log10(x) if log else x, y=1.0, xref="x", yref="paper", text=label,
+            showarrow=False, yanchor="bottom", font=dict(size=12, color="#6B7480"),
+        )
+
+
+def bytes_axis(fig, low: int = 2**14, high: int = 2**32, step: int = 4) -> None:
+    """Binary-prefixed ticks (KiB/MiB/GiB) on a log x axis."""
+
+    values, labels, size = [], [], low
+    while size <= high:
+        values.append(size)
+        for unit, scale in (("GiB", 2**30), ("MiB", 2**20), ("KiB", 2**10)):
+            if size >= scale:
+                labels.append(f"{size // scale} {unit}")
+                break
+        size *= step
+    fig.update_xaxes(type="log", tickmode="array", tickvals=values, ticktext=labels)
+
+
+def mark_y(fig, y: float, text: str, log: bool = True) -> None:
+    """Dashed horizontal reference line with a label that works on a log y axis."""
+
+    fig.add_shape(
+        type="line", x0=0, x1=1, y0=y, y1=y, xref="paper", yref="y",
+        line=dict(dash="dash", color="#6B7480", width=1.5),
+    )
+    fig.add_annotation(
+        x=1.0, y=np.log10(y) if log else y, xref="paper", yref="y", text=text,
+        showarrow=False, xanchor="right", yanchor="bottom", font=dict(size=12, color="#6B7480"),
+    )

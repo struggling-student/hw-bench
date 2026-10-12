@@ -227,6 +227,14 @@ def validate(df, raw_roots, policy=None):
         errors += extended_errors
         warnings += extended_warnings
         extended_samples = len(select_extended(df, policy))
+        from hwbench.report import xcheck_table
+
+        for r in xcheck_table(select_extended(df, policy), data).itertuples():
+            if not r.within_tolerance:
+                warnings.append(
+                    f"Repeat run deviates {r.deviation_percent:+.1f}% from October "
+                    f"({r.memory_mode}/{r.benchmark}/{r.memory_target}/socket {r.socket:.0f} on {r.node})"
+                )
     return dict(
         status="failed" if errors else "passed",
         selected_samples=len(data),

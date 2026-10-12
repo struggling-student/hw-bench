@@ -117,7 +117,62 @@ say(f"**Result.** One socket's HBM sustains {p.loc['flat_hbm'].max():.0f} GB/s a
     f"{lat[(lat.config=='flat_ddr')&(lat.level=='memory')].latency_ns.iloc[0]:.0f} ns on DDR.")
 """),
     md("""
-## 4. Where the ceilings meet: ridge points
+## 4. Flat versus Cache
+
+Compute is identical in both modes (the memory mode does not touch the cores); only the memory system differs. Cache mode matches Flat HBM while the working set fits the 64 GiB memory-side cache and falls below Flat DDR once it does not.
+"""),
+    code("""
+bwa = report.bandwidth_summary(ext, thesis)
+bwa = bwa[(bwa.socket_scope == 'single') & (bwa.socket == 0) & (bwa.locality == 'local')]
+def best(cfg, ws=None):
+    sel = bwa[bwa.config == cfg] if ws is None else bwa[(bwa.config == cfg) & (bwa.working_set_gib == ws)]
+    return sel.loc[sel.gbs.idxmax()]
+pk = report.isa_peaks(ext, theory)
+amx_by_mode = pk[(pk.path == 'amx_bf16') & (pk.scope == '1S') & (pk.cores == 56)].groupby('memory_mode').gops.median() / 1000
+rows = [
+    dict(memory='Flat · HBM', GBs=best('flat_hbm').gbs, idle_latency_ns=lat[(lat.config == 'flat_hbm') & (lat.level == 'memory')].latency_ns.iloc[0], amx_bf16_TOPs=amx_by_mode['flat']),
+    dict(memory='Flat · DDR', GBs=best('flat_ddr').gbs, idle_latency_ns=lat[(lat.config == 'flat_ddr') & (lat.level == 'memory')].latency_ns.iloc[0], amx_bf16_TOPs=amx_by_mode['flat']),
+    dict(memory='Cache · 8 GiB (resident)', GBs=best('cache', 8.0).gbs, idle_latency_ns=lat[(lat.config == 'cache') & (lat.level == 'memory')].latency_ns.iloc[0], amx_bf16_TOPs=amx_by_mode['cache']),
+    dict(memory='Cache · 96 GiB (spilled)', GBs=best('cache', 96.0).gbs, idle_latency_ns=lat[(lat.config == 'cache') & (lat.level == 'memory')].latency_ns.iloc[0], amx_bf16_TOPs=amx_by_mode['cache']),
+]
+fc = pd.DataFrame(rows)
+table(fc)
+say(f"**Result.** Cache mode delivers {fc.GBs[2]/fc.GBs[0]:.0%} of Flat HBM bandwidth while resident and {fc.GBs[3]:.0f} GB/s ({fc.GBs[3]/fc.GBs[1]:.0%} of Flat DDR) when the working set is 96 GiB; "
+    f"its idle memory latency ({fc.idle_latency_ns[2]:.0f} ns) is higher than either Flat tier. AMX BF16 throughput differs by {abs(amx_by_mode['cache']/amx_by_mode['flat']-1):.1%} between modes.")
+"""),
+    md("""
+## 5. Placement and sockets
+
+Memory must be local: remote HBM keeps about a tenth of its bandwidth. Two independent sockets deliver the sum of their parts, and a single process spanning both sockets reaches that only if every thread touches its own socket's pages.
+"""),
+    code("""
+loc = report.locality_ratio(ext, thesis)
+de = report.dual_efficiency(ext, thesis)
+sp = report.span_table(ext)
+spm = sp[(sp.memory_mode == 'flat') & (sp.benchmark == 'stream_read') & (sp.config == 'flat_hbm')].set_index('placement').gbs
+local_hbm = loc[(loc.config == 'flat_hbm') & (loc.kernel == 'read')].local.mean()
+say(f"**Result.** Remote HBM reads reach {loc[(loc.config=='flat_hbm')&(loc.kernel=='read')].remote.mean():.0f} GB/s against {local_hbm:.0f} GB/s local. "
+    f"Two timed processes retain {de.efficiency.median():.1%} (median) of the sum of isolated sockets. One 112-thread process reads HBM at {spm['firsttouch']:.0f} GB/s with first-touch placement "
+    f"but {spm['interleave']:.0f} GB/s with interleaved pages ({spm['interleave']/spm['firsttouch']:.0%}).")
+"""),
+    md("""
+## 6. Achieved GEMM against the peaks
+"""),
+    code("""
+gm = report.gemm_points(ext)
+fl = gm[gm.memory_mode == 'flat']
+rows = []
+for dtype, path in [('bf16', 'amx_bf16'), ('int8', 'amx_int8')]:
+    peak = flat.loc[path, 'gops']
+    sel = fl[(fl.dtype == dtype) & (fl.memory_target == 'hbm')]
+    rows.append(dict(precision=dtype, measured_tile_peak_TOPs=peak / 1000, best_gemm_TOPs=sel.gops.max() / 1000, fraction=sel.gops.max() / peak,
+                     M1_TOPs=sel[sel.m == 1].gops.max() / 1000, M1_traffic_GBs=sel[sel.m == 1].gbs.max()))
+table(pd.DataFrame(rows))
+"""),
+    md("""
+A library GEMM reaches about a third of the tile peak even at large batches, and at batch 1 it moves weights at well under the HBM bandwidth: the realistic compute ceiling for LLM prefill is the GEMM line, not the instruction peak ([atlas](05_roofline_atlas.ipynb)).
+
+## 7. Where the ceilings meet: ridge points
 
 The ridge is the operational intensity at which a kernel stops being limited by memory and starts being limited by compute. It sets how much reuse a workload needs before extra compute helps.
 """),
@@ -140,7 +195,7 @@ table(pd.DataFrame(rows).pivot(index='path', columns='memory', values='ridge_op_
     md("""
 **Implication.** On HBM the ridge for AMX BF16 sits near 200 operations per byte, for AVX-512 FP64 near 8. LLM decode at small batch has an intensity of a few operations per byte and is therefore bandwidth-bound on every path; the compute ceiling only matters for prefill and large batches. The [roofline atlas](05_roofline_atlas.ipynb) draws these ceilings with measured GEMM points; [notebook 06](06_llm_roofline_interface.ipynb) shows where decode and prefill will fall.
 
-## 5. Limits of these results
+## 8. Limits of these results
 
 * Bytes are *modeled* (kernel traffic convention), not memory-controller counts: uncore counters are not readable without privileges. Write-allocate behaviour is therefore inferred, not observed.
 * No power or energy was measured (RAPL needs root).
@@ -271,15 +326,16 @@ h = report.hierarchy(ext)
 one = h[h.notes == 'hier_read_1']
 fig = plotting.line_by_config(one, 'per_thread_bytes', 'gbs', 'config', 'Read bandwidth · one core',
                               'Working set per core (bytes)', 'GB/s', log_y=True)
-for edge, name in [(48 * 2**10, 'L1d 48 KiB'), (2 * 2**20, 'L2 2 MiB'), (112.5 * 2**20, 'L3 112.5 MiB')]:
-    fig.add_vline(x=edge, line_dash='dot', line_color='#9AA3AF', annotation_text=name, annotation_position='top')
+plotting.mark_x(fig, {'L1d 48 KiB': 48 * 2**10, 'L2 2 MiB': 2 * 2**20, 'L3 112.5 MiB': 112.5 * 2**20})
+plotting.bytes_axis(fig)
 figure(fig, 'hierarchy_read_1core')
 """),
     code("""
 full = h[h.notes == 'hier_read_56']
 fig = plotting.line_by_config(full, 'per_thread_bytes', 'gbs', 'config', 'Read bandwidth · 56 cores, one socket',
                               'Working set per core (bytes)', 'GB/s', log_y=True)
-fig.add_vline(x=112.5 * 2**20 / 56, line_dash='dot', line_color='#9AA3AF', annotation_text='L3 share per core', annotation_position='top')
+plotting.mark_x(fig, {'L1d 48 KiB': 48 * 2**10, 'L2 2 MiB': 2 * 2**20, 'L3 share 2 MiB': 112.5 * 2**20 / 56 * 1.02})
+plotting.bytes_axis(fig, 2**14, 2**28)
 figure(fig, 'hierarchy_read_56cores')
 """),
     code("""
@@ -304,8 +360,8 @@ say(f"**Result.** Per core, L1 sustains {lv.loc['L1 (32 KiB)','flat_hbm']:.0f} G
 lat = h[h.notes == 'hier_latency']
 fig = plotting.line_by_config(lat, 'per_thread_bytes', 'latency_ns', 'config', 'Dependent-load latency · one core',
                               'Working set (bytes)', 'ns per load', log_y=True)
-for edge, name in [(48 * 2**10, 'L1d'), (2 * 2**20, 'L2'), (112.5 * 2**20, 'L3')]:
-    fig.add_vline(x=edge, line_dash='dot', line_color='#9AA3AF', annotation_text=name, annotation_position='top')
+plotting.mark_x(fig, {'L1d': 48 * 2**10, 'L2': 2 * 2**20, 'L3': 112.5 * 2**20})
+plotting.bytes_axis(fig)
 figure(fig, 'hierarchy_latency')
 """),
     code("""
@@ -433,24 +489,26 @@ Each pair completes initialization and warm-up, then synchronizes readiness befo
 """),
     code("""
 de = report.dual_efficiency(ext, thesis)
-de['label'] = de.benchmark.str.replace('_peak', '') + ' ' + de.dtype.fillna('') + ' ' + de.memory_mode
-de['mean'] = de.config
+bandwidth = de.benchmark.str.startswith('stream')
+de['label'] = np.where(bandwidth,
+    de.benchmark.str.replace('stream_', '', regex=False) + ' ' + de.config.str.replace('flat_', '', regex=False) + ' ' + de.working_set_gib.round(0).fillna(0).astype(int).astype(str) + 'G',
+    de.benchmark.str.replace('_peak', '', regex=False) + ' ' + de.dtype.fillna(''))
 view = de[de.working_set_gib.isna() | (de.working_set_gib <= 16)].copy()
+view = view.groupby(['memory_mode', 'label'], as_index=False).efficiency.median()
 fig = plotting.go.Figure()
 for mode, part in view.groupby('memory_mode'):
-    fig.add_bar(x=part.label.str.replace(' ' + mode, '', regex=False) + ' · ' + part.campaign_id.str.split('-').str[1], y=part.efficiency,
-                name=plotting.CONFIG_LABELS['cache' if mode == 'cache' else 'flat_hbm'].split(' ·')[0],
+    fig.add_bar(x=part.label, y=part.efficiency, name='Cache' if mode == 'cache' else 'Flat',
                 marker_color='#268270' if mode == 'cache' else '#C24A40')
 fig.add_hline(y=1.0, line_dash='dot', line_color='#6B7480')
-plotting.style(fig, 'Two-socket scaling efficiency · dual rate ÷ sum of isolated sockets', 'Kernel · campaign', 'Efficiency', 520)
+plotting.style(fig, 'Two-socket scaling efficiency · dual rate ÷ sum of isolated sockets', 'Kernel', 'Efficiency', 520)
 fig.update_layout(barmode='group')
-fig.update_yaxes(range=[0.9, 1.05])
+fig.update_yaxes(range=[0.95, 1.03])
 figure(fig, 'dual_socket_efficiency')
-table(de.drop(columns=['label', 'mean', 'metric']))
+table(de.drop(columns=['label', 'metric']))
 """),
     code("""
 say(f"**Result.** Across {len(de)} paired measurements the two-process rate is {de.efficiency.min():.3f}–{de.efficiency.max():.3f}× the sum of isolated sockets "
-    f"(median {de.efficiency.median():.3f}); the shared window overlapped by at least {de.overlap_min.min():.1%}. Compute paths cluster at 0.985–0.992, bandwidth paths at or just above 1.")
+    f"(median {de.efficiency.median():.3f}); the shared window overlapped by at least {de.overlap_min.min():.1%}. Compute paths cluster at 0.985–0.992 and bandwidth paths at 0.99–1.02.")
 """),
     md("""
 **Implication.** Independent sockets do not interfere: a node delivers the sum of its sockets for compute (about 1% below, consistent with a slightly lower clock when all cores run) and bandwidth. This describes independent workers; it does not measure tensor-parallel scaling or cross-socket communication.
@@ -574,7 +632,7 @@ fig = plotting.go.Figure()
 for shape, part in sel.groupby('shape'):
     part = part.sort_values('m')
     fig.add_scatter(x=part.m, y=part.gops / 1000, mode='lines+markers', name=f'{shape}')
-fig.add_hline(y=tile['bf16'] / 1000, line_dash='dash', line_color='#6B7480', annotation_text='AMX BF16 tile peak')
+plotting.mark_y(fig, tile['bf16'] / 1000, 'AMX BF16 tile peak')
 plotting.style(fig, 'BF16 GEMM against batch M · Flat HBM, 56 cores', 'M (tokens per batch)', 'TOP/s', 520)
 fig.update_xaxes(type='log'); fig.update_yaxes(type='log')
 figure(fig, 'gemm_bf16_m_sweep')
@@ -585,7 +643,7 @@ fig = plotting.go.Figure()
 for shape, part in sel.groupby('shape'):
     part = part.sort_values('m')
     fig.add_scatter(x=part.m, y=part.gops / 1000, mode='lines+markers', name=f'{shape}')
-fig.add_hline(y=tile['int8'] / 1000, line_dash='dash', line_color='#6B7480', annotation_text='AMX INT8 tile peak')
+plotting.mark_y(fig, tile['int8'] / 1000, 'AMX INT8 tile peak')
 plotting.style(fig, 'INT8 GEMM against batch M · Flat HBM, 56 cores', 'M (tokens per batch)', 'TOP/s', 520)
 fig.update_xaxes(type='log'); fig.update_yaxes(type='log')
 figure(fig, 'gemm_int8_m_sweep')
@@ -598,7 +656,7 @@ say(f"**Result.** At M=4096 oneDNN reaches {big['bf16']/1000:.1f} TOP/s BF16 ({b
     f"At M=1 it delivers {small['bf16']/1000:.2f} and {small['int8']/1000:.2f} TOP/s: weight streaming, at up to {mem_bound['bf16']:.0f} (BF16) and {mem_bound['int8']:.0f} GB/s (INT8) of modeled traffic.")
 """),
     md("""
-**Implication.** GEMM approaches only a third of the AMX tile peak even at large M because tile loads, the epilogue and data layout cost more than the tile instruction itself; and below M≈16 it is bandwidth-bound, where INT8 halves the weight traffic and therefore doubles the token rate. The "fraction of tile peak" is the realistic compute ceiling to use for LLM prefill; the raw tile peak is an upper bound no library reaches.
+**Implication.** GEMM approaches only a third of the AMX tile peak even at large M because tile loads, the epilogue and data layout cost more than the tile instruction itself; and below M≈16 it is bandwidth-bound, where INT8 halves the weight traffic and therefore doubles the token rate. INT8 curves are not monotonic: for several shapes oneDNN's throughput dips between M=64 and M=256 (variation between samples is flagged in the validation report) before recovering, which looks like a switch between kernel implementations rather than noise. The "fraction of tile peak" is the realistic compute ceiling to use for LLM prefill; the raw tile peak is an upper bound no library reaches.
 """),
 ]
 
@@ -767,9 +825,11 @@ cs = [report.compute_ceiling(ext, 'amx_bf16', 'cache', 55), report.compute_ceili
 fig = plotting.roofline_figure(cs, mem, title='Where LLM decode and prefill should fall · Cache · 55 cores · 16 GiB resident', x_range=(0.5, 8192))
 for name, color in zip(bytes_per_param, ['#C24A40', '#268270', '#7A3E3E']):
     part = guide[guide.weights == name]
-    fig.add_scatter(x=part.intensity, y=[min(cs[0].gops, mem[0].gbs * i) / 1000 for i in part.intensity], mode='markers+lines', name=f'decode guide · {name}',
+    roof = cs[2].gops if 'INT8' in name or 'Q8' in name else cs[0].gops
+    fig.add_scatter(x=part.intensity, y=[min(roof, mem[0].gbs * i) / 1000 for i in part.intensity], mode='markers+lines', name=f'decode guide · {name}',
                     line=dict(dash='dot', color=color), marker=dict(size=5, color=color))
-fig.add_vrect(x0=128, x1=4096, fillcolor='#E8EDF2', opacity=0.5, line_width=0, annotation_text='prefill 128–4096 tokens', annotation_position='top left')
+fig.add_vrect(x0=128, x1=4096, fillcolor='#E8EDF2', opacity=0.5, line_width=0, layer='below')
+fig.add_annotation(x=np.log10(700), y=0.02, xref='x', yref='paper', text='prefill 128–4096 tokens', showarrow=False, font=dict(size=12, color='#6B7480'))
 figure(fig, 'llm_guide_lines')
 """),
     code("""
