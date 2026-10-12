@@ -652,6 +652,24 @@ def main():
                     )
         for kind in ISA_KINDS + ISA_REFERENCE_KINDS:
             execute(spanning(kind, "registers", "membind", "span_compute"))
+        if args.mode == "cache":
+            # Dual-socket bandwidth with data resident in the HBM cache; the
+            # bandwidth2 pairs used 96 GiB, which spills to DDR.
+            for kind in ["read", "triad_nt"]:
+                pair(
+                    [
+                        spec(
+                            s,
+                            kind,
+                            target="effective_cache",
+                            gib=16,
+                            scope="dual_component",
+                            label=f"bw2_{kind}_dual",
+                        )
+                        for s in both
+                    ],
+                    f"bw2-dual-resident-{kind}",
+                )
 
     # ----------------------------------------------------------------- xcheck
     if part == "xcheck":

@@ -109,17 +109,22 @@ def bandwidth_summary(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
 
     triad = thesis[
         thesis.benchmark.eq("stream_triad")
-        & thesis.socket_scope.eq("single")
-        & thesis.threads.eq(56)
-        & thesis.notes.eq("core_scaling")
         & thesis.locality.eq("local")
+        & (
+            (
+                thesis.socket_scope.eq("single")
+                & thesis.threads.eq(56)
+                & thesis.notes.eq("core_scaling")
+            )
+            | (thesis.socket_scope.eq("dual") & thesis.notes.eq("dual"))
+        )
     ].assign(kernel="triad")
     triad = triad[~triad.memory_mode.eq("cache")]
     new = ext[
         ext.benchmark.isin(BANDWIDTH_KERNELS)
         & ext.socket_scope.isin(["single", "dual"])
         & ext.threads.isin([56, 112])
-        & ext.notes.str.match(r"bw2_(read|triad_nt)(_remote|_capacity)?$")
+        & ext.notes.str.match(r"bw2_(read|triad_nt)(_remote|_capacity|_dual)?$")
     ].assign(kernel=lambda f: f.benchmark.map(BANDWIDTH_KERNELS))
     frame = with_config(pd.concat([triad, new], ignore_index=True))
     keys = ["memory_mode", "config", "kernel", "locality", "socket_scope", "socket", "working_set_gib"]
@@ -295,3 +300,231 @@ def xcheck_table(ext: pd.DataFrame, thesis: pd.DataFrame, tolerance: float = 0.0
             )
         )
     return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------- ceiling selection
+PATH_BENCHMARK = {
+    "fp64": ("avx512_peak", "fp64"),
+    "fp32": ("avx512_peak", "fp32"),
+    "avx512_bf16": ("avx512_bf16_peak", "bf16"),
+    "vnni_int8": ("vnni_peak", "int8"),
+    "amx_bf16": ("amx_peak", "bf16"),
+    "amx_int8": ("int8_amx_peak", "int8"),
+}
+
+
+def compute_ceiling(ext: pd.DataFrame, path: str, mode: str, cores: int = 56, scope: str = "1S"):
+    """Measured peak of one ISA path at a core count: the matching ceiling for a workload.
+
+    ``cores`` must be one that was measured (the scaling sweep includes 55, the
+    core count of the LLM servers).  Socket 0 is the reference, as in the thesis.
+    """
+
+    from hwbench.roofline import Ceiling
+
+    benchmark, dtype = PATH_BENCHMARK[path]
+    wanted = ext[
+        ext.benchmark.eq(benchmark)
+        & ext["dtype"].eq(dtype)
+        & ext.memory_mode.eq(mode)
+        & ext.threads.eq(cores * (2 if scope == "2S" else 1))
+        & ext.socket_scope.eq("dual" if scope == "2S" else "single")
+        & (ext.socket.eq(0) if scope == "1S" else ext.socket.isna())
+    ]
+    if wanted.empty:
+        raise LookupError(f"no {path} measurement for {mode} at {cores} cores ({scope})")
+    return Ceiling(
+        kind="measured_peak",
+        precision=dtype,
+        path=path,
+        gops=float(wanted.performance_gops.median()),
+        unit="GOP/s",
+        scope=scope,
+        mode=mode,
+        cores=cores * (2 if scope == "2S" else 1),
+        ghz=float(wanted.ghz_effective.median()),
+        source_campaign=_ids(wanted.campaign_id),
+    )
+
+
+def theoretical_ceiling(theory: Theory, path: str, cores: int = 56, scope: str = "1S", mode=None):
+    from hwbench.roofline import Ceiling
+
+    entry = theory.isa(path)
+    n = cores * (2 if scope == "2S" else 1)
+    return Ceiling(
+        kind="theoretical",
+        precision=entry.dtype,
+        path=path,
+        gops=theory.peak_gops(path, n),
+        unit="GOP/s",
+        scope=scope,
+        mode=mode,
+        cores=n,
+        ghz=theory.base_ghz,
+        note=f"{entry.status}: {entry.basis}",
+    )
+
+
+def memory_ceiling(
+    ext: pd.DataFrame, thesis: pd.DataFrame, mode: str, tier: str, scope: str = "1S", resident_gib: float = 16.0
+):
+    """Primary bandwidth ceiling: best sustained of Triad, non-temporal Triad and read.
+
+    Flat uses the 8 GiB points; Cache uses points whose working set fits the HBM
+    cache (<= ``resident_gib``), since larger ones measure DDR behind the cache.
+    """
+
+    from hwbench.roofline import MemoryCeiling
+
+    table = bandwidth_summary(ext, thesis)
+    table = table[table.memory_mode.eq(mode) & table.locality.eq("local")]
+    table = table[table.socket_scope.eq("dual" if scope == "2S" else "single")]
+    if mode == "flat":
+        table = table[table.config.eq("flat_hbm" if tier == "hbm" else "flat_ddr")]
+    if scope == "1S":
+        table = table[table.socket.eq(0)]
+    table = table[table.working_set_gib.le(resident_gib if mode == "cache" else 8.0 + 1e-6)]
+    if table.empty:
+        raise LookupError(f"no bandwidth for {mode}/{tier}/{scope}")
+    best = table.loc[table.gbs.idxmax()]
+    return MemoryCeiling(
+        kind="measured_peak",
+        tier=tier,
+        kernel=best.kernel,
+        gbs=float(best.gbs),
+        scope=scope,
+        mode=mode,
+        working_set_gib=float(best.working_set_gib),
+        source_campaign=best.campaign_id,
+    )
+
+
+# ------------------------------------------------------------ socket scaling
+def dual_efficiency(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
+    """Two processes (one per socket) timed over a shared window, against the sum of
+    the same two processes run on their own.
+
+    Pairs are matched within one campaign by benchmark, dtype, placement, working
+    set and thread count; ``efficiency`` of 1 means the isolated rates were retained.
+    """
+
+    frame = pd.concat([ext, thesis], ignore_index=True).drop_duplicates(
+        subset=["campaign_id", "source_file", "iteration", "socket_scope", "phase"]
+    )
+    frame = frame[frame.benchmark.isin(COMPUTE_BENCHMARKS | set(BANDWIDTH_KERNELS))]
+    frame = with_config(frame)
+    dual = frame[frame.socket_scope.eq("dual")]
+    single = frame[frame.socket_scope.eq("single") & frame.locality.eq("local")]
+    rows = []
+    keys = ["campaign_id", "memory_mode", "config", "benchmark", "dtype", "working_set_gib"]
+    for key, part in dual.groupby(keys, dropna=False):
+        campaign, mode, config, benchmark, dtype, ws = key
+        metric = "bandwidth_gbs" if benchmark in BANDWIDTH_KERNELS else "performance_gops"
+        sel = single[
+            single.campaign_id.ne(None)
+            & single.memory_mode.eq(mode)
+            & single.benchmark.eq(benchmark)
+            & single.config.eq(config)
+            & (single.threads.eq(56))
+        ]
+        sel = sel[sel["dtype"].eq(dtype)] if isinstance(dtype, str) else sel[sel["dtype"].isna()]
+        if isinstance(ws, float) and not math.isnan(ws):
+            sel = sel[sel.working_set_gib.sub(ws).abs().lt(0.01)]
+        # Same campaign if the campaign measured both, otherwise the nearest sibling
+        # (October measured the isolated sockets in a different campaign part).
+        same = sel[sel.campaign_id.eq(campaign)]
+        sel = same if not same.empty else sel
+        iso = sel.groupby("socket")[metric].median()
+        if len(iso) < 2:
+            continue
+        rows.append(
+            dict(
+                memory_mode=mode,
+                config=config,
+                benchmark=benchmark,
+                dtype=dtype,
+                working_set_gib=ws,
+                metric="GB/s" if metric == "bandwidth_gbs" else "GOP/s",
+                dual=part[metric].median(),
+                isolated_sum=iso.sum(),
+                efficiency=part[metric].median() / iso.sum(),
+                overlap_min=part.overlap_fraction.min(),
+                n_samples=len(part),
+                campaign_id=campaign,
+            )
+        )
+    return pd.DataFrame(rows)
+
+
+def locality_ratio(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
+    """Remote against local bandwidth for the Flat tiers."""
+
+    bw = bandwidth_summary(ext, thesis)
+    flat = bw[bw.memory_mode.eq("flat") & bw.socket_scope.eq("single")]
+    local = flat[flat.locality.eq("local")].set_index(["config", "kernel", "socket"]).gbs
+    remote = flat[flat.locality.eq("remote")].set_index(["config", "kernel", "socket"]).gbs
+    out = pd.DataFrame({"local": local, "remote": remote}).dropna().reset_index()
+    out["remote_over_local"] = out.remote / out.local
+    return out
+
+
+# ---------------------------------------------------------- workload points
+def gemm_workload_points(gemm: pd.DataFrame, theory: Theory, cores: int = 56):
+    """Achieved GEMM operating points as roofline workload points."""
+
+    from hwbench.roofline import WorkloadPoint
+
+    path = {"bf16": "amx_bf16", "int8": "amx_int8"}
+    points = []
+    for r in gemm.itertuples():
+        points.append(
+            WorkloadPoint(
+                name=f"{r.dtype} gemm {r.shape} M={int(r.m)} · {r.config}",
+                precision=r.dtype,
+                isa_path=path[r.dtype],
+                gops=float(r.gops),
+                intensity=float(r.intensity),
+                bytes_source="modeled",
+                mode=r.memory_mode,
+                scope="1S",
+                cores=cores,
+                threads=cores,
+                memory_target=r.memory_target,
+                provenance={"campaign": r.campaign_id, "pool_gib": r.pool_gib, "cv_percent": r.cv_percent},
+            )
+        )
+    return points
+
+
+def fp64_sweep_points(thesis: pd.DataFrame, mode: str, tier: str, ws_gib: float = 8.0, socket: int = 0):
+    """FP64 intensity sweep (October) as workload points."""
+
+    from hwbench.roofline import WorkloadPoint
+
+    sweep = thesis[
+        thesis.benchmark.eq("roofline_sweep")
+        & thesis.memory_mode.eq(mode)
+        & thesis.memory_target.eq(tier)
+        & thesis.socket.eq(socket)
+        & thesis.working_set_gib.sub(ws_gib).abs().lt(0.01)
+        & thesis.threads.eq(56)
+    ]
+    points = []
+    for k, part in sweep.groupby("k"):
+        points.append(
+            WorkloadPoint(
+                name=f"fp64 sweep K={int(k)} · {mode}/{tier}",
+                precision="fp64",
+                isa_path="fp64",
+                gops=float(part.performance_gops.median()),
+                intensity=float(part.arithmetic_intensity.median()),
+                mode=mode,
+                scope="1S",
+                cores=56,
+                threads=56,
+                memory_target=tier,
+                provenance={"campaign": _ids(part.campaign_id)},
+            )
+        )
+    return points

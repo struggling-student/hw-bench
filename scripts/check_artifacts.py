@@ -20,4 +20,4 @@ if args.clean_retired:
     for name in manifest["retired_root_figures"]:
         for fmt in ["html", "svg", "png"]:
             (ROOT / "figures" / f"{name}.{fmt}").unlink(missing_ok=True)
-print("Verified all eight SVG/PNG pairs.")
+print("Verified all SVG/PNG pairs.")
