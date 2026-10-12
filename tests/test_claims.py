@@ -119,3 +119,15 @@ def test_render_and_check_helpers():
     items = [claims.Claim("a", True, "first"), claims.Claim("b", False, "second")]
     assert claims.render(items) == "* first\n* second"
     assert [c.id for c in claims.check(items)] == ["b"]
+
+
+def test_counter_probe_validates_the_events_and_the_write_allocate_inference():
+    if not any((ROOT / "data/probes").glob("counters-*/*.json")):
+        pytest.skip("no counter probe results in this checkout")
+    found = {c.id: c for c in claims.counters(ROOT)}
+    assert set(found) == {"counters_unprivileged", "write_allocate_counted"}
+    assert all(c.holds for c in found.values())
+    probe = claims.probe_events(ROOT)
+    # Triad reads two of its three arrays whether or not the stores are non-temporal.
+    reads = {w: probe[f"{w}/hbm"]["OCR.READS_TO_CORE.DRAM"]["per_expected_line"] for w in ("triad", "triad-nt")}
+    assert abs(reads["triad"] - reads["triad-nt"]) < 0.05 and reads["triad"] < 0.7

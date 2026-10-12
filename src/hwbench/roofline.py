@@ -76,7 +76,7 @@ class WorkloadPoint:
     isa_path: str
     gops: float
     intensity: float
-    bytes_source: Literal["modeled", "pmu_l3miss"] = "modeled"
+    bytes_source: Literal["modeled", "pmu_ocr"] = "modeled"
     mode: str | None = None
     scope: str = "1S"
     cores: int | None = None

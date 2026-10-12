@@ -750,7 +750,7 @@ def unmeasured_table() -> pd.DataFrame:
 
     return pd.DataFrame(
         [
-            ("Memory traffic of GEMM and sweeps (counted bytes)", "uncore_imc counters need CAP_PERFMON or paranoid ≤ 0", "bandwidth and intensity are modeled"),
+            ("Memory-controller traffic (uncore_imc CAS counts)", "needs CAP_PERFMON or paranoid ≤ 0", "a per-core DRAM line count exists for new campaigns (docs/06_COUNTERS.md); none of the analysed data has it, so bandwidth and intensity here are modeled"),
             ("Cache-mode hit rate", "memory-side-cache tag events are uncore (M2M)", "conflict misses are inferred from bandwidth"),
             ("Why remote HBM collapses", "UPI and CHA counters are uncore", "mechanism unidentified; one campaign"),
             ("Why the clock falls while HBM streams", "power and turbostat counters need privileges", "cause unidentified"),
@@ -846,4 +846,37 @@ def cross_run_percent(ext: pd.DataFrame, thesis: pd.DataFrame) -> dict[tuple[str
         out[(mode, "compute")] = dict(percent=float(comp.deviation_percent.abs().max()), basis="largest repeated compute path")
         for tier, rows in part[part.benchmark.eq("stream_triad")].groupby("memory_target"):
             out[(mode, tier)] = dict(percent=float(rows.deviation_percent.abs().max()), basis="Triad repeat, same tier")
+    return out
+
+
+# ----------------------------------------------------------- counted traffic
+def counted_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Counted against modeled memory traffic, one row per measured configuration.
+
+    ``counted_bytes`` are 64-byte DRAM lines read plus written by the benchmark's own
+    threads (offcore-response events); ``modeled_bytes`` is the kernel's traffic
+    convention.  ``counted_over_modeled`` of 1 means the model describes what the cores
+    moved.  ``read_share`` is the fraction of the counted lines that were reads, and
+    ``intensity_counted`` places the point on a roofline with counted bytes.
+    """
+
+    data = df[df.counted_bytes.notna() & df.modeled_bytes.gt(0)].copy()
+    if data.empty:
+        return pd.DataFrame()
+    data["_lines"] = data.dram_read_lines + data.dram_write_lines
+    data["_read_share"] = data.dram_read_lines / data._lines
+    data["_ipc"] = data.instructions / data.cycles
+    keys = ["memory_mode", "benchmark", "kernel", "dtype", "memory_target", "threads", "working_set_bytes", "m", "n", "k", "notes", "campaign_id"]
+    g = data.groupby(keys, dropna=False)
+    out = g.agg(
+        modeled_bytes=("modeled_bytes", "median"),
+        counted_bytes=("counted_bytes", "median"),
+        read_share=("_read_share", "median"),
+        ipc=("_ipc", "median"),
+        operations=("operations", "median"),
+        n_samples=("counted_bytes", "size"),
+    ).reset_index()
+    out["counted_over_modeled"] = out.counted_bytes / out.modeled_bytes
+    out["intensity_modeled"] = out.operations / out.modeled_bytes
+    out["intensity_counted"] = out.operations / out.counted_bytes
     return out

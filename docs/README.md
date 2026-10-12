@@ -12,6 +12,7 @@ interpret a CRESCO8 campaign.
 | [04 — Analysis and results](04_ANALYSIS_AND_RESULTS.md) | Measured ceilings, plot-by-plot reading guide, knees, theory, and limitations. |
 | [Validation appendix](VALIDATION.md) | Preserved failed/superseded runs and the explicit acceptance rules. |
 | [05 — Follow-up runs](05_FOLLOW_UP_RUNS.md) | The prepared (not yet executed) cluster runs of review roadmap step 6: what each answers, order, commands, and how results join the analysis. |
+| [06 — Hardware counters](06_COUNTERS.md) | Which counters work without privileges (instructions, reference cycles, DRAM read and write lines), how they were validated, and what needs an administrator. |
 | [Scientific review, 2026-10-12](REVIEW_2026-10-12.md) | Independent audit of the roofline analysis: prioritized findings and the follow-up roadmap. |
 
 `data/raw/` (scrubbed of account-identifying strings by `scripts/scrub_raw.py`),

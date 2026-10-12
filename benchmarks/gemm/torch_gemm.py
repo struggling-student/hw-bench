@@ -27,12 +27,69 @@ import ctypes
 import hashlib
 import json
 import os
+import struct
 import sys
 import tempfile
 import time
 from pathlib import Path
 
-import torch
+
+class Perf:
+    """Process-wide hardware counters, inherited by every thread created afterwards.
+
+    Opened before torch starts its OpenMP team, so the team's threads are counted too.
+    User mode only (exclude kernel and hypervisor), which paranoid=2 allows.  The
+    events match benchmarks/hardware.cpp: cycles, instructions, reference cycles and the
+    DRAM read and write traffic in 64-byte lines (offcore-response events, validated by
+    benchmarks/probe_counters.cpp).  An event that cannot be opened is simply absent.
+    """
+
+    EVENTS = {
+        "cycles": (0, 0, 0),
+        "instructions": (0, 1, 0),
+        "ref_cycles": (0, 9, 0),
+        "dram_read_lines": (4, 0x012A, 0x73C000477),
+        "dram_write_lines": (4, 0x012B, 0xFBFF80822),
+    }
+
+    def __init__(self):
+        self.fds = {}
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+        except OSError:
+            return
+
+        class Attr(ctypes.Structure):
+            _fields_ = [
+                ("type", ctypes.c_uint32), ("size", ctypes.c_uint32),
+                ("config", ctypes.c_uint64), ("sample_period", ctypes.c_uint64),
+                ("sample_type", ctypes.c_uint64), ("read_format", ctypes.c_uint64),
+                ("flags", ctypes.c_uint64), ("wakeup_events", ctypes.c_uint32),
+                ("bp_type", ctypes.c_uint32), ("config1", ctypes.c_uint64),
+                ("config2", ctypes.c_uint64),
+            ]
+
+        for name, (kind, config, config1) in self.EVENTS.items():
+            attr = Attr(type=kind, size=ctypes.sizeof(Attr), config=config, config1=config1)
+            attr.read_format = 3  # total time enabled | total time running
+            attr.flags = (1 << 1) | (1 << 5) | (1 << 6)  # inherit, exclude kernel, exclude hv
+            fd = libc.syscall(298, ctypes.byref(attr), 0, -1, -1, 0)
+            if fd >= 0:
+                self.fds[name] = fd
+
+    def read(self):
+        values = {}
+        for name, fd in self.fds.items():
+            raw = os.read(fd, 24)
+            count, enabled, running = struct.unpack("QQQ", raw)
+            if running:
+                values[name] = count * enabled / running
+        return values
+
+
+PERF = Perf()  # before torch creates its threads
+
+import torch  # noqa: E402
 
 ELEMENT_BYTES = {"bf16": 2, "int8": 1}
 OUTPUT_BYTES = {"bf16": 2, "int8": 4}
@@ -376,6 +433,7 @@ def main():
     for rep in range(args.repetitions):
         planned = window(rep)
         deadline = planned + int(args.seconds * 1e9)
+        before = PERF.read()
         start = time.monotonic_ns()
         count = 0
         while True:
@@ -385,16 +443,19 @@ def main():
             if time.monotonic_ns() >= deadline:
                 break
         end = time.monotonic_ns()
-        samples.append(
-            dict(
-                start_ns=start,
-                end_ns=end,
-                planned_start_ns=planned,
-                elapsed_seconds=(end - start) / 1e9,
-                operations=2 * m * n * k * count,
-                modeled_bytes=call_bytes * count,
-            )
+        after = PERF.read()
+        sample = dict(
+            start_ns=start,
+            end_ns=end,
+            planned_start_ns=planned,
+            elapsed_seconds=(end - start) / 1e9,
+            operations=2 * m * n * k * count,
+            modeled_bytes=call_bytes * count,
         )
+        counted = {name: after[name] - before[name] for name in after if name in before}
+        if "cycles" in counted:
+            sample.update(counted, counter_threads=torch.get_num_threads())
+        samples.append(sample)
     valid = True
     if dtype == "bf16":
         valid = bool(torch.isfinite(result).all())

@@ -74,10 +74,20 @@ std::uint64_t window(int rep, double seconds) {
 
 
 // ---------------------------------------------------------------------------
-// Self-monitoring: user-mode core cycles and EXE.AMX_BUSY per OpenMP thread via
-// perf_event_open. Both are permitted at kernel.perf_event_paranoid=2 because
-// they are per-thread and exclude the kernel. Encodings follow Intel's
-// Sapphire Rapids perfmon tables (EXE.AMX_BUSY = event 0xB7 umask 0x02).
+// Self-monitoring: user-mode core cycles, instructions, reference cycles,
+// EXE.AMX_BUSY and the DRAM traffic of each OpenMP thread via perf_event_open.
+// All are permitted at kernel.perf_event_paranoid=2 because they are per-thread
+// and exclude the kernel. Encodings follow Intel's Sapphire Rapids perfmon
+// tables (EXE.AMX_BUSY = event 0xB7 umask 0x02).
+//
+// The two offcore-response (OCR) events are traffic counters measured per core:
+//   reads   OCR.READS_TO_CORE.DRAM       event 0x2A umask 0x01, mask 0x73C000477
+//   writes  OCR.WRITE_ESTIMATE.MEMORY    event 0x2B umask 0x01, mask 0xFBFF80822
+// Each counts 64-byte lines.  benchmarks/probe_counters.cpp validated them on this
+// node against known traffic: a 1 GiB read pass counts 0.996 lines per line read,
+// a store or non-temporal-store pass 1.00 write lines per line, and Triad 0.64 read
+// and 0.33 write lines per array line (reads and writes of Triad: 2 and 1 of 3).
+// They do not tell DDR from HBM, which the NUMA binding already does.
 #ifndef SYS_perf_event_open
 #define SYS_perf_event_open 298
 #endif
@@ -88,11 +98,12 @@ struct PerfAttr {
   std::uint64_t config1, config2;
 };
 static_assert(sizeof(PerfAttr) == 72);
-int perf_open(std::uint32_t type, std::uint64_t config) {
+int perf_open(std::uint32_t type, std::uint64_t config, std::uint64_t config1 = 0) {
   PerfAttr a{};
   a.type = type;
   a.size = sizeof(a);
   a.config = config;
+  a.config1 = config1;
   a.read_format = 3; // total time enabled | total time running
   a.flags = (1ULL << 5) | (1ULL << 6); // exclude kernel, exclude hypervisor
   return static_cast<int>(syscall(SYS_perf_event_open, &a, 0, -1, -1, 0));
@@ -100,22 +111,40 @@ int perf_open(std::uint32_t type, std::uint64_t config) {
 struct CounterReading {
   bool ok = false;
   double cycles = 0, amx_busy = 0, scale = 1;
+  // -1 when the event could not be opened or read.
+  double instructions = -1, ref_cycles = -1, dram_read_lines = -1, dram_write_lines = -1;
   int threads = 0;
 };
 class Counters {
-  std::vector<int> cycles_, amx_;
+  std::vector<int> cycles_, amx_, instructions_, ref_cycles_, dram_reads_, dram_writes_;
   bool ok_ = false;
+
+  // Sum of a per-thread event, scaled for multiplexing; -1 unless every thread read.
+  static double total(const std::vector<int> &fds) {
+    double sum = 0;
+    for (int fd : fds) {
+      std::uint64_t v[3];
+      if (fd < 0 || ::read(fd, v, sizeof v) != sizeof v || v[2] == 0)
+        return -1;
+      sum += double(v[0]) * double(v[1]) / double(v[2]);
+    }
+    return sum;
+  }
 
 public:
   void open(int workers) {
-    cycles_.assign(workers, -1);
-    amx_.assign(workers, -1);
+    for (auto *fds : {&cycles_, &amx_, &instructions_, &ref_cycles_, &dram_reads_, &dram_writes_})
+      fds->assign(workers, -1);
 #pragma omp parallel num_threads(workers)
     {
       int t = omp_get_thread_num();
       if (t < workers) {
         cycles_[t] = perf_open(0 /*PERF_TYPE_HARDWARE*/, 0 /*CPU_CYCLES*/);
         amx_[t] = perf_open(4 /*PERF_TYPE_RAW*/, 0x02B7);
+        instructions_[t] = perf_open(0, 1 /*INSTRUCTIONS*/);
+        ref_cycles_[t] = perf_open(0, 9 /*REF_CPU_CYCLES*/);
+        dram_reads_[t] = perf_open(4, 0x012A, 0x73C000477ULL);
+        dram_writes_[t] = perf_open(4, 0x012B, 0xFBFF80822ULL);
       }
     }
     ok_ = true;
@@ -144,15 +173,17 @@ public:
     }
     if (!amx_ok)
       r.amx_busy = -1;
+    r.instructions = total(instructions_);
+    r.ref_cycles = total(ref_cycles_);
+    r.dram_read_lines = total(dram_reads_);
+    r.dram_write_lines = total(dram_writes_);
     return r;
   }
   ~Counters() {
-    for (int fd : cycles_)
-      if (fd >= 0)
-        close(fd);
-    for (int fd : amx_)
-      if (fd >= 0)
-        close(fd);
+    for (auto *fds : {&cycles_, &amx_, &instructions_, &ref_cycles_, &dram_reads_, &dram_writes_})
+      for (int fd : *fds)
+        if (fd >= 0)
+          close(fd);
   }
 };
 
@@ -671,6 +702,18 @@ int main(int argc, char **argv) {
                   << (after.amx_busy < 0 ? -1.0 : after.amx_busy - before.amx_busy)
                   << ",\"counter_scale\":" << std::min(before.scale, after.scale)
                   << ",\"counter_threads\":" << after.threads;
+      // Instructions, reference cycles and DRAM traffic (64-byte lines); omitted when
+      // an event is unavailable, so a missing field means "not counted", never zero.
+      if (before.ok && after.ok) {
+        auto emit = [&](const char *name, double b, double a) {
+          if (b >= 0 && a >= 0)
+            std::cout << ",\"" << name << "\":" << (a - b);
+        };
+        emit("instructions", before.instructions, after.instructions);
+        emit("ref_cycles", before.ref_cycles, after.ref_cycles);
+        emit("dram_read_lines", before.dram_read_lines, after.dram_read_lines);
+        emit("dram_write_lines", before.dram_write_lines, after.dram_write_lines);
+      }
       std::cout << '}';
     }
     if (stream || sweep) {

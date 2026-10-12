@@ -97,9 +97,9 @@ def test_memory_ceiling_prefers_best_sustained_kernel():
 
 def test_workload_point_round_trips_to_a_dict():
     p = WorkloadPoint(
-        "workload", "bf16", "avx512_bf16", 50.0, 1.0, bytes_source="pmu_l3miss"
+        "workload", "bf16", "avx512_bf16", 50.0, 1.0, bytes_source="pmu_ocr"
     )
-    assert p.as_dict()["bytes_source"] == "pmu_l3miss"
+    assert p.as_dict()["bytes_source"] == "pmu_ocr"
 
 
 def _point(name, gops, intensity, cv=0.5, tier="hbm"):
@@ -157,3 +157,22 @@ def test_ceilings_on_committed_data_are_the_max_of_their_kernels():
             assert best.gbs >= matched.gbs, (mode, tier, access)
     spilled_best = report.memory_ceiling(ext, thesis, "cache", "effective_cache", at_gib=96)
     assert spilled_best.kernel == "triad"  # not non-temporal Triad, which is 21% lower
+
+
+def test_counted_table_reports_counted_over_modeled_and_read_share():
+    base = dict(
+        memory_mode="flat", benchmark="stream_triad", kernel="triad", dtype=None, memory_target="hbm", threads=56,
+        working_set_bytes=2400, m=None, n=None, k=None, notes="x", campaign_id="c", operations=200.0,
+    )
+    rows = pd.DataFrame(
+        [
+            dict(base, modeled_bytes=2400.0, dram_read_lines=26.0, dram_write_lines=12.0, counted_bytes=38 * 64.0, instructions=4.0, cycles=2.0),
+            dict(base, modeled_bytes=2400.0, dram_read_lines=24.0, dram_write_lines=12.0, counted_bytes=36 * 64.0, instructions=4.0, cycles=2.0),
+            dict(base, modeled_bytes=2400.0, dram_read_lines=float("nan"), dram_write_lines=float("nan"), counted_bytes=float("nan"), instructions=4.0, cycles=2.0),
+        ]
+    )
+    t = report.counted_table(rows)
+    assert len(t) == 1 and t.n_samples.iloc[0] == 2  # the sample without counters is left out
+    assert math.isclose(t.counted_over_modeled.iloc[0], 37 * 64 / 2400)
+    assert math.isclose(t.read_share.iloc[0], 25 / 37, rel_tol=0.01)
+    assert math.isclose(t.ipc.iloc[0], 2.0)

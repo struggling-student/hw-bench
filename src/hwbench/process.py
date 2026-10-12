@@ -73,6 +73,11 @@ FIELDS = [
     "amx_busy_cycles",
     "ghz_effective",
     "amx_busy_frac",
+    "instructions",
+    "ref_cycles",
+    "dram_read_lines",
+    "dram_write_lines",
+    "counted_bytes",
 ]
 
 
@@ -168,6 +173,23 @@ def _clock_fields(row: dict[str, Any], threads: int | None) -> dict[str, Any]:
         ghz_effective=cycles / (threads * elapsed) / 1e9,
         amx_busy_frac=amx / cycles if amx is not None and amx >= 0 else None,
     )
+
+
+CACHE_LINE = 64
+
+
+def _counted_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """Bytes the cores moved to and from DRAM, from the offcore-response line counts.
+
+    Reads and writes are counted per 64-byte line by two events (``hardware.cpp``,
+    ``torch_gemm.py``); ``counted_bytes`` needs both.  A record made without them has no
+    such field, and the value stays empty rather than zero.
+    """
+
+    reads, writes = row.get("dram_read_lines"), row.get("dram_write_lines")
+    if reads is None or writes is None or reads < 0 or writes < 0:
+        return dict(counted_bytes=None)
+    return dict(counted_bytes=(reads + writes) * CACHE_LINE)
 
 
 def _launch_method(record: dict[str, Any], campaign: dict[str, Any] | None):
@@ -317,6 +339,7 @@ def rows_from_record(
                 latency_ns=elapsed * 1e9 / loads if loads else None,
             )
             row.update(_clock_fields(row, row.get("counter_threads") or row.get("threads")))
+            row.update(_counted_fields(row))
             if r.get("benchmark") == "pointer_chase" and loads <= 0:
                 errors.append("invalid_load_count")
             if (

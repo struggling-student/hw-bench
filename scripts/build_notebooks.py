@@ -395,6 +395,7 @@ say(f"**Result.** Triad and non-temporal Triad agree to {100*abs(p.loc['flat_ddr
 """),
     code("""
 say_claims(claims.kernels(ext, thesis, theory), ['no_write_allocate_bound', 'triad_store_width', 'read_vs_triad', 'hbm_over_ddr'])
+say_claims(claims.counters(ROOT), ['counters_unprivileged', 'write_allocate_counted'])
 """),
     md("""
 Counted Triad bandwidth is therefore used as a proxy for bus traffic, with the caveat that this is inferred, not observed. For a roofline the primary ceiling is the best sustained of the three kernels (ERT convention); workload-matched ceilings (read-only for GEMM weights) are used where the access pattern is known.

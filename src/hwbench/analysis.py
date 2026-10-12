@@ -47,6 +47,12 @@ NUMERIC = [
     "end_ns",
     "operations",
     "modeled_bytes",
+    "cycles",
+    "instructions",
+    "ref_cycles",
+    "dram_read_lines",
+    "dram_write_lines",
+    "counted_bytes",
 ]
 # Columns that identify one measured configuration independently of the campaign.
 CONFIGURATION = [

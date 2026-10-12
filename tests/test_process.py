@@ -201,3 +201,21 @@ def test_campaigns_without_launch_field_are_labelled_by_their_slurm_job():
         "launch_method"
     ] == "slurm_exclusive"
     assert rows_from_record(r, Path("raw"), {}, None)[0]["launch_method"] is None
+
+
+def test_counted_bytes_come_from_dram_read_and_write_lines() -> None:
+    sample = dict(
+        elapsed_seconds=1.0, operations=200, modeled_bytes=2400, cycles=3e9, counter_threads=1,
+        instructions=4e9, dram_read_lines=20.0, dram_write_lines=10.0,
+    )
+    rec = record()
+    rec["result"] = dict(rec["result"], samples=[sample])
+    rows = rows_from_record(rec, Path("raw.json"), {})
+    assert rows[0]["counted_bytes"] == 30 * 64
+
+
+def test_counted_bytes_stay_empty_without_both_events() -> None:
+    sample = dict(elapsed_seconds=1.0, operations=200, modeled_bytes=2400, dram_read_lines=20.0)
+    rec = record()
+    rec["result"] = dict(rec["result"], samples=[sample])
+    assert rows_from_record(rec, Path("raw.json"), {})[0]["counted_bytes"] is None

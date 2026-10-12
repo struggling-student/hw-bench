@@ -220,6 +220,49 @@ def kernels(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Cla
     ]
 
 
+def probe_events(root: Path = ROOT) -> dict[str, dict[str, dict]]:
+    """Counter-probe results (benchmarks/probe_counters.cpp), by workload and tier, then event."""
+
+    out: dict[str, dict[str, dict]] = {}
+    for path in sorted((root / "data/probes").glob("counters-*/*.json")):
+        workload, tier = path.stem.rsplit("-", 1)
+        data = json.loads(path.read_text())
+        out.setdefault(f"{workload}/{tier}", {}).update({e["name"]: e for e in data["events"]})
+    return out
+
+
+def counters(root: Path = ROOT) -> list[Claim]:
+    probe = probe_events(root)
+    if not probe:
+        return []
+    reads = "OCR.READS_TO_CORE.DRAM"
+    writes = "OCR.WRITE_ESTIMATE.MEMORY"
+
+    def per_line(workload: str, event: str) -> float:
+        return float(np.mean([probe[f"{workload}/{t}"][event]["per_expected_line"] for t in ("ddr", "hbm")]))
+
+    read_pass, triad, triad_nt = per_line("read", reads), per_line("triad", reads), per_line("triad-nt", reads)
+    opened = all(e["opened"] for run in probe.values() for e in run.values() if e["name"] in {"instructions", "ref-cycles", reads, writes})
+    return [
+        Claim(
+            "counters_unprivileged",
+            opened and abs(read_pass - 1) < 0.05,
+            "At `perf_event_paranoid=2` the per-thread, user-mode events instructions, reference cycles and the offcore-response events "
+            f"for DRAM reads and writes open without privileges, and they count what a known pass moves: {read_pass:.3f} read lines per "
+            f"line of a 1 GiB read pass, {per_line('store', writes):.2f} write lines per line of a store pass. The same counts come out on DDR and HBM, so "
+            "the events measure traffic but do not tell the tiers apart (the NUMA binding does).",
+        ),
+        Claim(
+            "write_allocate_counted",
+            abs(triad - triad_nt) < 0.05 and triad < 0.8,
+            f"Regular Triad causes {triad:.3f} DRAM read lines per array line, non-temporal Triad {triad_nt:.3f}: both read two of the three "
+            f"arrays (2/3 = 0.667) and a read-for-ownership of the destination would have added 0.333. Writes count {per_line('triad', writes):.3f} "
+            "lines per array line. So regular Triad does not read the lines it overwrites, as the 313 GB/s bound also implied; this probe ran one "
+            "thread on 1 GiB arrays, and the 56-core check is the `counted` campaign part.",
+        ),
+    ]
+
+
 def core_scaling(ext: pd.DataFrame, thesis: pd.DataFrame, root: Path = ROOT) -> list[Claim]:
     rs = report.read_scaling(ext)
     rs = rs[rs.socket.eq(0)].pivot(index="threads", columns="config", values="gbs")
@@ -654,6 +697,7 @@ def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Pa
     return {
         "compute": compute_paths(ext, theory),
         "kernels": kernels(ext, thesis, theory),
+        "counters": counters(root),
         "core_scaling": core_scaling(ext, thesis, root),
         "cache_mode": cache_mode(ext, thesis),
         "hierarchy": hierarchy(ext, theory),

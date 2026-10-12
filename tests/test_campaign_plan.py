@@ -33,6 +33,8 @@ def test_dry_run_writes_nothing():
         ("flat", "repeat", 10),
         ("cache", "cachefill", 31),
         ("cache", "repeat", 8),
+        ("flat", "counted", 24),
+        ("cache", "counted", 18),
     ],
 )
 def test_part_sizes_and_unique_record_names(mode, part, count):

@@ -21,6 +21,7 @@ remotehbm    (flat) remote-HBM repeat: 5 s windows, thread sweep, local controls
 chains       (flat) AVX-512 BF16 accumulator-chain sweep (6, 12, 24)
 sweep12      (flat) FP64 intensity sweep with 12 chains up to K=1024, with 8-chain control
 repeat       the headline numbers once, for independent launches (run it three times)
+counted      counted against modeled memory traffic: streams, the intensity sweep and GEMM
 smoke        a few seconds of every kernel; proves build and counters, not a result
 
 memory, compute, sweep, memory-sweep, concurrency, all
@@ -63,6 +64,7 @@ NEW_PARTS = [
     "chains",
     "sweep12",
     "repeat",
+    "counted",
 ]
 
 THREAD_STEPS = [1, 2, 4, 8, 14, 28, 56]
@@ -904,6 +906,27 @@ def main():
                 execute(spec(0, kind, target=target, gib=8, label="repeat"))
         for kind in ["fp64", "fp32", "bf16", "int8", "vnni", "avx512bf16"]:
             execute(spec(0, kind, label="repeat"))
+
+    # ---------------------------------------------------------------- counted
+    # Every record carries DRAM line counts (hardware.cpp, torch_gemm.py); this part picks
+    # the points where counted traffic is compared with the modeled bytes: the three
+    # streams, the intensity sweep and one GEMM shape.
+    if part == "counted":
+        gib_cases = [(t, 8) for t in targets] if args.mode == "flat" else [("effective_cache", 8), ("effective_cache", 96)]
+        for target, gib in gib_cases:
+            for kind in ["read", "triad", "triad_nt"]:
+                execute(spec(0, kind, target=target, gib=gib, label="counted"))
+            for k in (1, 16, 256):
+                execute(spec(0, "sweep", target=target, gib=gib, k=k, label="counted_sweep"))
+        gemm_targets = [(t, 4 * ONCHIP_BYTES) for t in targets] if args.mode == "flat" else [("effective_cache", 16 * GIB)]
+        for target, pool in gemm_targets:
+            for dtype in ["bf16", "int8"]:
+                if dtype == "int8" and not int8_gemm_verified():
+                    continue
+                for m in (1, 16, 256):
+                    execute(
+                        spec(0, "gemm", target=target, shape=4096, label="counted_gemm", m=m, gemm_n=14336, dtype=dtype, pool=pool, warm=GEMM_WARM_PASSES)
+                    )
 
     # ------------------------------------------------- October-11 thesis parts
     if part == "concurrency":
