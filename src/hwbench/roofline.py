@@ -43,6 +43,7 @@ class Ceiling:
     ghz: float | None = None
     source_campaign: str | None = None
     note: str = ""
+    cv_percent: float | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ class MemoryCeiling:
     working_set_gib: float | None = None
     source_campaign: str | None = None
     note: str = ""
+    cv_percent: float | None = None
 
 
 @dataclass
@@ -103,6 +105,64 @@ def ridge(compute_gops: float, bandwidth_gbs: float) -> float:
     if bandwidth_gbs <= 0:
         return math.inf
     return compute_gops / bandwidth_gbs
+
+
+def audit_points(
+    points: list[WorkloadPoint],
+    memory: list[MemoryCeiling],
+    compute: list[Ceiling],
+) -> pd.DataFrame:
+    """Compare every achieved point with the roofline built from its own ceilings.
+
+    The bound of a point is ``min(compute, bandwidth * intensity)`` using the ceiling of
+    its memory tier and ISA path.  A point *exceeds* its roofline when it lies above the
+    bound by more than the larger of its own and the ceiling's run-to-run spread
+    (coefficient of variation).  Points whose tier or path has no ceiling are reported
+    with ``bound_gops`` empty rather than dropped.
+    """
+
+    rows = []
+    for p in points:
+        mem = next(
+            (m for m in memory if m.tier == p.memory_target and m.mode == p.mode and m.scope == p.scope),
+            None,
+        )
+        cmp_ = next(
+            (
+                c
+                for c in compute
+                if c.kind == "measured_peak" and c.path == p.isa_path and c.mode == p.mode and c.scope == p.scope
+            ),
+            None,
+        )
+        bound, limiting, spread = math.nan, "none", [p.provenance.get("cv_percent")]
+        candidates = []
+        if mem:
+            candidates.append((mem.gbs * p.intensity, "memory", mem.cv_percent))
+        if cmp_:
+            candidates.append((cmp_.gops, "compute", cmp_.cv_percent))
+        if candidates:
+            bound, limiting, ceiling_cv = min(candidates, key=lambda c: c[0])
+            spread.append(ceiling_cv)
+        tolerance = max((v for v in spread if v is not None and v == v), default=0.0)
+        ratio = p.gops / bound if bound == bound else math.nan
+        rows.append(
+            dict(
+                point=p.name,
+                series=p.provenance.get("series", p.isa_path),
+                intensity=p.intensity,
+                gops=p.gops,
+                bandwidth_gbs=p.gops / p.intensity,
+                bound_gops=bound,
+                ceiling_gbs=mem.gbs if mem else math.nan,
+                ceiling_kernel=mem.kernel if mem else "",
+                limiting=limiting,
+                ratio=ratio,
+                tolerance_percent=tolerance,
+                exceeds=bool(ratio == ratio and ratio > 1 + tolerance / 100),
+            )
+        )
+    return pd.DataFrame(rows)
 
 
 def _scope(row) -> str:

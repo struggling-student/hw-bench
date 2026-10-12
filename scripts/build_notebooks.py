@@ -412,7 +412,7 @@ table(sat)
 
 ## 5. Cache mode against working-set size
 
-**Conditions.** One socket, 56 cores, read-only and non-temporal Triad, local DDR-backed allocation of 8–128 GiB. The 64 GiB HBM capacity is a reference line, not a fitted transition.
+**Conditions.** One socket, 56 cores, read-only, Triad (October, regular stores) and non-temporal Triad, local DDR-backed allocation of 8–128 GiB. The 64 GiB HBM capacity is a reference line, not a fitted transition.
 """),
     code("""
 cap = bw[(bw.config == 'cache') & (bw.socket_scope == 'single') & (bw.socket == 0)]
@@ -420,9 +420,6 @@ fig = plotting.go.Figure()
 for kernel, part in cap.groupby('kernel'):
     part = part.sort_values('working_set_gib')
     fig.add_scatter(x=part.working_set_gib, y=part.gbs, mode='lines+markers', name=kernel)
-t = thesis[(thesis.memory_mode == 'cache') & (thesis.benchmark == 'stream_triad') & (thesis.notes == 'capacity') & (thesis.socket == 0)]
-tt = t.groupby('working_set_gib').bandwidth_gbs.median()
-fig.add_scatter(x=tt.index, y=tt.values, mode='lines+markers', name='triad (October)', line=dict(dash='dot'))
 fig.add_vline(x=64, line_dash='dot', line_color='#9AA3AF', annotation_text='HBM 64 GiB', annotation_position='top')
 plotting.style(fig, 'Cache-mode bandwidth against working set · socket 0', 'Working set (GiB)', 'GB/s', 500)
 figure(fig, 'cache_capacity')
@@ -667,7 +664,7 @@ NOTEBOOKS["05_roofline_atlas"] = [
 
 **Question.** Where do the measured compute and bandwidth ceilings meet for each precision and memory configuration, and where do achieved kernels sit relative to them?
 
-Line style tells the origin of a ceiling: **dashed** = theoretical (vendor or derived), **solid** = best measured by a dedicated kernel, **dotted** = what a library kernel (oneDNN GEMM) achieved. Memory slopes use the best sustained of Triad, non-temporal Triad and read-only (ERT convention). Bytes are modeled, so these are empirical envelopes, not counter-based bounds.
+Line style tells the origin of a ceiling: **dashed** = theoretical (vendor or derived), **solid** = best measured by a dedicated kernel, **dotted** = what a library kernel (oneDNN GEMM) achieved. Memory slopes use the best sustained of Triad, non-temporal Triad and read-only (ERT convention) unless a figure says otherwise: the GEMM figures use the read-only ceiling (weights are only read) and the FP64 sweep uses the best read/write kernel (it loads one array and stores another). Bytes are modeled, so these are empirical envelopes, not counter-based bounds. Section 6 lists every point that lies above its own roofline.
 """),
     code(setup("05_roofline_atlas")),
     code("""
@@ -695,10 +692,7 @@ The table gives the **ridge** (operations per byte) at which each path stops bei
 """),
     code("""
 resident = report.memory_ceiling(ext, thesis, 'cache', 'effective_cache', resident_gib=16)
-spilled_rows = report.bandwidth_summary(ext, thesis)
-spilled_rows = spilled_rows[(spilled_rows.memory_mode == 'cache') & (spilled_rows.socket_scope == 'single') & (spilled_rows.socket == 0) & (spilled_rows.working_set_gib == 96)]
-best96 = spilled_rows.loc[spilled_rows.gbs.idxmax()]
-spilled = roofline.MemoryCeiling('measured_peak', 'effective_cache (96 GiB)', best96.kernel, float(best96.gbs), '1S', 'cache', 96.0, best96.campaign_id)
+spilled = report.memory_ceiling(ext, thesis, 'cache', 'effective_cache', at_gib=96)
 fig = plotting.roofline_figure(theory_set(['amx_bf16', 'amx_int8'], '1S', 56) + compute_set('cache', '1S', 56), [resident, spilled],
                                title='Cache · one socket · data resident in HBM (16 GiB) and spilled to DDR (96 GiB)')
 figure(fig, 'atlas_cache_1s')
@@ -723,8 +717,10 @@ Both ceilings double, so ridge points are unchanged: adding the second socket ra
     code("""
 flat_hbm, flat_ddr = mem
 fp64 = [report.compute_ceiling(ext, 'fp64', 'flat', 56)]
+mem_rw = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', access='readwrite'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', access='readwrite')]
 pts = report.fp64_sweep_points(thesis, 'flat', 'hbm') + report.fp64_sweep_points(thesis, 'flat', 'ddr')
-fig = plotting.roofline_figure(fp64 + theory_set(['fp64'], '1S', 56), mem, pts, title='FP64 intensity sweep · Flat · one socket', x_range=(0.05, 256))
+audits = [roofline.audit_points(pts, mem_rw, fp64).assign(group='FP64 sweep · Flat · read/write ceiling')]
+fig = plotting.roofline_figure(fp64 + theory_set(['fp64'], '1S', 56), mem_rw, pts, title='FP64 intensity sweep · Flat · one socket', x_range=(0.05, 256))
 figure(fig, 'atlas_fp64_sweep')
 hb = [p for p in pts if p.memory_target == 'hbm']
 say(f"**Result.** The sweep follows the HBM slope up to its knee and reaches {max(p.gops for p in hb)/1000:.2f} TOP/s at {max(p.intensity for p in hb):.0f} FLOP/byte, "
@@ -737,6 +733,7 @@ Each point is one (shape, M) pair. Intensity rises with M because the same weigh
 """),
     code("""
 gm = report.gemm_points(ext)
+mem_read = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', access='read'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', access='read')]
 for dtype, path in [('bf16', 'amx_bf16'), ('int8', 'amx_int8')]:
     sel = gm[(gm.memory_mode == 'flat') & (gm.dtype == dtype)]
     pts = report.gemm_workload_points(sel, theory)
@@ -745,7 +742,8 @@ for dtype, path in [('bf16', 'amx_bf16'), ('int8', 'amx_int8')]:
         cs.append(report.compute_ceiling(ext, 'avx512_bf16', 'flat', 56))
     else:
         cs.append(report.compute_ceiling(ext, 'vnni_int8', 'flat', 56))
-    fig = plotting.roofline_figure(cs, mem, pts, title=f'{dtype.upper()} GEMM M-sweep at Llama-3.1-8B shapes · Flat · one socket')
+    audits.append(roofline.audit_points(pts, mem_read, cs).assign(group=f'{dtype.upper()} GEMM · Flat · read-only ceiling'))
+    fig = plotting.roofline_figure(cs, mem_read, pts, title=f'{dtype.upper()} GEMM M-sweep at Llama-3.1-8B shapes · Flat · one socket')
     figure(fig, f'atlas_gemm_{dtype}')
 """),
     code("""
@@ -764,6 +762,24 @@ table(gap)
 """),
     md("""
 **Gap analysis.** Two layers separate the vendor number from library performance: (1) the vendor peak versus what a hand-written tile kernel sustains (clock and power, a few percent); (2) the tile-kernel peak versus an optimized library GEMM (the achieved-over-measured column).
+
+## 6. Ceiling audit: points above their own roofline
+
+A ceiling is only an upper bound if no accepted point lies above it. Each point below is compared with `min(compute ceiling, bandwidth ceiling × intensity)` for its own tier and ISA path; it counts as *exceeding* when it is above that bound by more than the larger of its own and the ceiling's run-to-run spread (CV). Cache-mode GEMM uses the best-kernel ceiling at the pool size of the run (16 GiB resident, 96 GiB spilled).
+"""),
+    code("""
+for pool, ceiling in [(16, resident), (96, spilled)]:
+    for dtype, path in [('bf16', 'amx_bf16'), ('int8', 'amx_int8')]:
+        sel = gm[(gm.memory_mode == 'cache') & (gm.dtype == dtype) & ((gm.pool_gib - pool).abs() < 0.5)]
+        audits.append(roofline.audit_points(report.gemm_workload_points(sel, theory), [ceiling], compute_set('cache', '1S', 56)).assign(group=f'{dtype.upper()} GEMM · Cache · {pool} GiB pool · best-kernel ceiling'))
+audit = pd.concat(audits, ignore_index=True)
+summary = audit.groupby('group').agg(points=('exceeds', 'size'), exceeding=('exceeds', 'sum'), max_ratio=('ratio', 'max')).reset_index()
+table(summary)
+say(f"**Result.** {int(audit.exceeds.sum())} of {len(audit)} points lie above their roofline by more than their spread; the largest excess is {audit.ratio.max() - 1:.1%}.")
+table(audit[audit.exceeds].sort_values('ratio', ascending=False)[['group', 'series', 'intensity', 'bandwidth_gbs', 'ceiling_gbs', 'ceiling_kernel', 'ratio', 'tolerance_percent']])
+"""),
+    md("""
+**Reading the exceptions.** They are listed, not hidden. Two mechanisms can raise a point above a kernel-based ceiling, and the present data cannot separate them: (1) the access pattern of the point differs from every ceiling kernel (a one-load-one-store sweep, or a GEMM whose weight pool is small enough to be partly cache-resident, review item A5); (2) the modeled bytes overcount real memory traffic. The GEMM pool-size sweep and a counter-based traffic measurement are the planned tests; until then, points above the ceiling are evidence about the *ceiling's* definition, not a violation of the hardware.
 """),
 ]
 

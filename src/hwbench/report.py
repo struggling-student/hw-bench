@@ -105,7 +105,11 @@ def isa_scaling(ext: pd.DataFrame) -> pd.DataFrame:
 
 # ------------------------------------------------------------------- memory
 def bandwidth_summary(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
-    """Triad (October), read and non-temporal Triad at full socket, by placement."""
+    """Triad (October), read and non-temporal Triad at full socket, by placement.
+
+    Cache-mode Triad is kept, including the capacity sweep: it is the best kernel past the
+    HBM cache, so dropping it would understate the spilled ceiling.
+    """
 
     triad = thesis[
         thesis.benchmark.eq("stream_triad")
@@ -114,12 +118,11 @@ def bandwidth_summary(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
             (
                 thesis.socket_scope.eq("single")
                 & thesis.threads.eq(56)
-                & thesis.notes.eq("core_scaling")
+                & thesis.notes.isin(["core_scaling", "capacity"])
             )
             | (thesis.socket_scope.eq("dual") & thesis.notes.eq("dual"))
         )
     ].assign(kernel="triad")
-    triad = triad[~triad.memory_mode.eq("cache")]
     new = ext[
         ext.benchmark.isin(BANDWIDTH_KERNELS)
         & ext.socket_scope.isin(["single", "dual"])
@@ -346,6 +349,7 @@ def compute_ceiling(ext: pd.DataFrame, path: str, mode: str, cores: int = 56, sc
         cores=cores * (2 if scope == "2S" else 1),
         ghz=float(wanted.ghz_effective.median()),
         source_campaign=_ids(wanted.campaign_id),
+        cv_percent=_cv(wanted.performance_gops),
     )
 
 
@@ -368,13 +372,32 @@ def theoretical_ceiling(theory: Theory, path: str, cores: int = 56, scope: str =
     )
 
 
-def memory_ceiling(
-    ext: pd.DataFrame, thesis: pd.DataFrame, mode: str, tier: str, scope: str = "1S", resident_gib: float = 16.0
-):
-    """Primary bandwidth ceiling: best sustained of Triad, non-temporal Triad and read.
+#: Kernel sets for workload-matched ceilings: ``best`` is the ERT convention, ``read``
+#: matches read-only streams (weights in decode), ``readwrite`` matches kernels that also
+#: write (the intensity sweep stores one array per array it loads).
+ACCESS_KERNELS = {
+    "best": {"read", "triad", "triad_nt"},
+    "read": {"read"},
+    "readwrite": {"triad", "triad_nt"},
+}
 
-    Flat uses the 8 GiB points; Cache uses points whose working set fits the HBM
-    cache (<= ``resident_gib``), since larger ones measure DDR behind the cache.
+
+def memory_ceiling(
+    ext: pd.DataFrame,
+    thesis: pd.DataFrame,
+    mode: str,
+    tier: str,
+    scope: str = "1S",
+    resident_gib: float = 16.0,
+    access: str = "best",
+    at_gib: float | None = None,
+):
+    """Bandwidth ceiling: the best sustained rate of the kernels matching ``access``.
+
+    Flat uses the 8 GiB points.  Cache uses points that fit the HBM cache
+    (<= ``resident_gib``) unless ``at_gib`` names the working set to read instead (a
+    spilled case).  ``access`` selects which kernels may set the ceiling; see
+    ``ACCESS_KERNELS``.
     """
 
     from hwbench.roofline import MemoryCeiling
@@ -382,13 +405,17 @@ def memory_ceiling(
     table = bandwidth_summary(ext, thesis)
     table = table[table.memory_mode.eq(mode) & table.locality.eq("local")]
     table = table[table.socket_scope.eq("dual" if scope == "2S" else "single")]
+    table = table[table.kernel.isin(ACCESS_KERNELS[access])]
     if mode == "flat":
         table = table[table.config.eq("flat_hbm" if tier == "hbm" else "flat_ddr")]
     if scope == "1S":
         table = table[table.socket.eq(0)]
-    table = table[table.working_set_gib.le(resident_gib if mode == "cache" else 8.0 + 1e-6)]
+    if at_gib is not None:
+        table = table[table.working_set_gib.sub(at_gib).abs().lt(0.5)]
+    else:
+        table = table[table.working_set_gib.le(resident_gib if mode == "cache" else 8.0 + 1e-6)]
     if table.empty:
-        raise LookupError(f"no bandwidth for {mode}/{tier}/{scope}")
+        raise LookupError(f"no bandwidth for {mode}/{tier}/{scope}/{access}")
     best = table.loc[table.gbs.idxmax()]
     return MemoryCeiling(
         kind="measured_peak",
@@ -399,6 +426,7 @@ def memory_ceiling(
         mode=mode,
         working_set_gib=float(best.working_set_gib),
         source_campaign=best.campaign_id,
+        cv_percent=None if pd.isna(best.cv_percent) else float(best.cv_percent),
     )
 
 
@@ -526,7 +554,11 @@ def fp64_sweep_points(thesis: pd.DataFrame, mode: str, tier: str, ws_gib: float 
                 cores=56,
                 threads=56,
                 memory_target=tier,
-                provenance={"campaign": _ids(part.campaign_id), "series": "fp64 sweep"},
+                provenance={
+                    "campaign": _ids(part.campaign_id),
+                    "series": "fp64 sweep",
+                    "cv_percent": _cv(part.performance_gops),
+                },
             )
         )
     return points

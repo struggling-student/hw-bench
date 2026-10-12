@@ -90,7 +90,11 @@ def roofline_figure(
             x=x,
             y=slope / 1000,
             mode="lines",
-            name=f"{CONFIG_LABELS[key]} {m.kernel} · {m.gbs:.0f} GB/s ({m.scope})",
+            name=(
+                f"{CONFIG_LABELS[key]} {m.kernel}"
+                f"{f' @{m.working_set_gib:.0f} GiB' if m.mode == 'cache' and m.working_set_gib else ''}"
+                f" · {m.gbs:.0f} GB/s ({m.scope})"
+            ),
             line=dict(color=CONFIG_COLORS[key], width=2.5, dash=KIND_DASH[m.kind]),
             hovertemplate=(
                 f"{m.tier} {m.kernel}<br>{m.gbs:.1f} GB/s · {m.scope}"
