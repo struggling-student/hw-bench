@@ -1,12 +1,12 @@
 # 01 — Scope and topology
 
 HW Bench characterizes CPU and memory hardware independently of any LLM runtime. It
-measures sustainable Triad bandwidth, register-resident AVX-512 FMA throughput,
-verified AMX BF16 throughput, achieved oneDNN GEMM performance, idle dependent-load
-latency, and a controlled FP64 operational-intensity sweep.
-It also measures two-socket scaling and the effect of a growing working set in Xeon
-Max HBM Cache Mode. LLM model execution, prompt workloads, and inference metrics
-belong to [LLM Bench](https://github.com/struggling-student/benchmark).
+measures compute peaks of every relevant execution path (AVX-512 FP64/FP32/BF16, VNNI
+INT8, AMX BF16/INT8), memory bandwidth by kernel and tier, the cache hierarchy,
+idle dependent-load latency, achieved oneDNN GEMM at LLM projection shapes, two-socket
+scaling, and how the Xeon Max HBM Cache Mode responds to the working set. The results
+form a measured roofline that LLM runtime measurements (see the LLM backend analysis
+repository) are later placed on; no model is executed here.
 
 ## The two memory configurations
 
@@ -58,8 +58,10 @@ which energy and counter measurements are possible.
 ## What the Roofline means here
 
 Every plotted envelope is an empirical **upper bound** built from separately measured
-bandwidth and compute kernels. Only FP64 has matched measured intensity-sweep points.
-AVX-512 FP32/FP64 and AMX BF16 use FLOP/s and FLOP/byte.
-No FP32/BF16 sweep points, HBM hit rates, energy efficiency, or hardware-counter
-traffic are inferred from missing instrumentation. See [Methods and data](03_METHODS_AND_DATA.md)
-for the operation and traffic models.
+bandwidth and compute kernels; it is not a strict bound on every application. Three
+kinds of ceiling are never mixed without saying so: *theoretical* (vendor or derived,
+`configs/theory.toml`), *measured peak* (a dedicated kernel) and *measured achievable*
+(a library GEMM at an LLM shape). Operation rates use FLOP/s or integer-op/s with a
+multiply and an add counted as two; intensity is operations per modeled byte. HBM hit
+rates, energy and controller-counter traffic are not inferred. See
+[Methods and data](03_METHODS_AND_DATA.md) for the operation and traffic models.

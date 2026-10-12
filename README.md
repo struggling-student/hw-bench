@@ -1,14 +1,33 @@
 # HW Bench: measured CPU and memory limits
 
-Hardware-only characterization of two Intel Xeon CPU Max 9480 sockets: 56 physical cores per socket, DDR5, and 64 GiB HBM per socket. The study separates sustainable memory bandwidth, capacity effects, idle dependent-load latency, AVX-512 arithmetic, native AMX instructions, achieved BF16 GEMM, and simultaneous socket scaling.
+Reproducible hardware characterization of the Intel Xeon CPU Max 9480 nodes on CRESCO8: two sockets × 56 cores, SMT off, 64 GiB HBM2e and 8-channel DDR5-4800 per socket. The primary result is a **measured roofline** for Flat and Cache memory modes, for FP64, FP32, BF16 and INT8, on one and two sockets, with the achieved points of library GEMMs at LLM projection shapes placed on it. The same schema is designed to host vLLM and llama.cpp operating points from the LLM backend analysis.
 
-Read the three executed notebooks in order:
+Read the executed notebooks in order ([index](notebooks/README.md)):
 
-1. [Memory limits](notebooks/01_memory_limits.ipynb): bandwidth, Cache working-set response, local/remote placement, and latency.
-2. [Compute limits](notebooks/02_compute_limits.ipynb): FP64/FP32 scaling and native BF16 AMX versus oneDNN GEMM.
-3. [Rooflines and scaling](notebooks/03_rooflines_and_scaling.ipynb): matched FP64 envelopes, FP32/BF16 knees, and measured full-node capability.
+0. [Master analysis](notebooks/00_master_analysis.ipynb): findings only
+1. [Platform and methodology](notebooks/01_platform_and_methodology.ipynb)
+2. [Memory hierarchy and bandwidth](notebooks/02_memory_hierarchy_and_bandwidth.ipynb)
+3. [NUMA and socket scaling](notebooks/03_numa_and_socket_scaling.ipynb)
+4. [Compute throughput](notebooks/04_compute_throughput.ipynb)
+5. [Roofline atlas](notebooks/05_roofline_atlas.ipynb)
+6. [LLM interface](notebooks/06_llm_roofline_interface.ipynb): design and preparation, no backend runs
 
-Every figure cell displays an interactive Plotly figure and saves **SVG and PNG** copies under `figures/<notebook-stem>/`. Export errors stop the cell. Eight selected figures replace the previous repeated overview diagrams. Numerical exports are under `data/processed/thesis/`.
+Every figure cell displays an interactive Plotly figure and saves **SVG and PNG** copies under `figures/<notebook-stem>/`. Numerical exports of the October thesis selection are under `data/processed/thesis/`.
+
+## What is measured
+
+| Quantity | Kernel |
+| --- | --- |
+| Compute peaks | AVX-512 FP64/FP32 FMA, AVX-512 BF16 `vdpbf16ps`, AVX-512 VNNI `vpdpbusd`, AMX BF16 `tdpbf16ps`, AMX INT8 `tdpbssd`; instruction use proven from disassembly; effective clock and AMX-busy cycles from per-thread `perf_event_open` |
+| Memory bandwidth | Triad, non-temporal-store Triad, read-only; local/remote; core scaling; Cache working-set capacity |
+| Memory hierarchy | read bandwidth and dependent-load latency from 16 KiB to 4 GiB per core; one core and 56 cores |
+| Achieved GEMM | oneDNN BF16 and INT8 (verified on AMX) at Llama-3.1-8B projection shapes, batch 1–4096, weights streamed from memory |
+| Sockets | two timed processes over a shared window; one 112-thread process with interleaved or first-touch placement |
+| Intensity sweep | FP64, K = 1…256 |
+
+## Execution rules
+
+Flat-mode campaigns run on **one dedicated node, over SSH, outside Slurm**, with an idle check before and a job/load watch around every record. Cache-mode campaigns run only in **exclusive Slurm allocations on other nodes**; the versioned submission template excludes the Flat node and a test fails if that exclusion is ever removed. See [Run and retrieve](docs/02_RUN_AND_RETRIEVE.md). Site values live in a private environment file outside the repository.
 
 ## Reproduce locally
 
@@ -19,15 +38,13 @@ python3 -m venv .venv
 bash scripts/make_analysis.sh
 ```
 
-Raw campaigns must first be present under `data/raw/cache/` and `data/raw/flat/`. The selected campaign IDs are pinned in `configs/analysis.json`; compute follow-ups are declared explicitly per benchmark. No SSH connection is needed for analysis. Static export requires Kaleido and an installed compatible Chrome/Chromium browser.
+Raw campaigns must first be present under `data/raw/cache/` and `data/raw/flat/`; the selected campaign IDs are pinned in `configs/analysis.json` (`primary_campaigns`, `benchmark_campaigns`, `supersede` for the October thesis selection; `extended_campaigns` for the later parts). No SSH connection is needed for analysis. Static export requires Kaleido and a compatible Chrome/Chromium.
 
 ## Evidence and interpretation
 
-Raw measurements remain unchanged. Normalization retains each sample's source, campaign, socket, placement, implementation, shape, timing window, and acceptance decision. The analysis selects declared campaigns and accepted steady samples; it never silently chooses the best socket or latest run. Compute follow-ups and memory campaigns use the same host and mode, with both source identities retained in the Roofline table.
+Raw measurements remain unchanged. Normalization retains each sample's source, campaign, node, launch method, socket, placement, implementation, shape, timing window, effective clock and acceptance decision. The analysis selects declared campaigns and accepted steady samples; it never silently chooses the best socket or latest run.
 
-Flat DDR/HBM rates use explicit placement. Cache rates describe the effective memory system at a stated working set. Triad bandwidth and sweep intensity use modeled bytes rather than hardware-counter bus traffic. Idle latency comes from a randomized dependent pointer chain. Native AMX instruction throughput and achieved oneDNN GEMM are reported separately.
-
-Two-socket throughput counts work over a shared interval and is compared with the sum of the matching isolated-socket medians. This is independent-worker scaling, not application communication or tensor-parallel scaling. INT8 and LLM runtime experiments are outside this study.
+Flat DDR/HBM rates use explicit placement. Cache rates describe the effective memory system at a stated working set. Bandwidth and intensity use modeled bytes, not memory-controller counts (uncore counters are not readable without privileges). Theoretical peaks are in [`configs/theory.toml`](configs/theory.toml) with their source and whether they are vendor figures or derivations; measured peaks, theoretical peaks and library-achieved rates are always distinguished by line style.
 
 ## Documentation
 
@@ -36,7 +53,5 @@ Two-socket throughput counts work over a shared interval and is compared with th
 - [Methods and data](docs/03_METHODS_AND_DATA.md)
 - [Analysis guide](docs/04_ANALYSIS_AND_RESULTS.md)
 - [Validation and preserved attempts](docs/VALIDATION.md)
-
-Cluster paths and submission settings belong in a private environment file outside the repository. Both memory modes run through exclusive Slurm allocations. The harness verifies topology and never changes firmware mode.
 
 Architectural references are kept separate from measurements: [Intel Max overview](https://www.intel.com/content/www/us/en/developer/articles/technical/xeon-scalable-processor-max-series.html), [9480 specifications](https://www.intel.com/content/www/us/en/products/sku/232592/intel-xeon-cpu-max-9480-processor-112-5m-cache-1-90-ghz/specifications.html), and [configuration guide](https://cdrdv2-public.intel.com/782255/354227-intel-xeon-cpu-max-series-configuration-and-tuning-guide-1.pdf).

@@ -3,13 +3,20 @@
 ## Measurement definitions
 
 | Experiment | Work and timing |
-|---|---|
-| Triad | `A = B + 3C`; two FP64 reads and one write: 24 modeled bytes and two FLOPs per element. Allocation size is the total across all arrays. |
-| AVX-512 | Twelve independent FP32/FP64 vector FMA accumulators; every FMA counts multiply plus add. Long work blocks amortize OpenMP re-entry and checks. |
-| Native AMX | Four destination tiles, two BF16 operand tiles; `2 × 16 × 16 × 32` FLOPs per dot instruction. All destination values are checked against their expected result. |
-| oneDNN GEMM | `2MNK` FLOPs, warmed BF16 matrices at sizes 4096, 6144, and 8192. Untimed primitive execution verifies AMX; timed regions omit verbose logging. Four output entries are checked against FP32 dot references, and all outputs must be finite. |
+| --- | --- |
+| Triad | `A = B + 3C`; two FP64 reads and one write: 24 modeled bytes and two FLOPs per element. Allocation size is the total across all arrays. Ordinary stores: the destination line may be read first (write-allocate), which the counted 24 B ignore. |
+| Triad, non-temporal | Same arithmetic and bytes with streaming stores (`vmovntpd`): no read of the destination, so counted equals moved bytes. |
+| Read-only | Eight independent AVX-512 load/add accumulators over a private array per thread, first-touched by its owner; each thread loops to the shared deadline with no barrier. 8 B per element. `--per-thread` makes the size per core (hierarchy sweep), otherwise it is the socket total. |
+| AVX-512 FP32/FP64 | Twelve independent FMA accumulators; every FMA counts multiply plus add. Result checksummed against a scalar reference. |
+| AVX-512 VNNI | Twelve independent `vpdpbusd` chains (16 lanes × 4 byte-products × 2 operations = 128 per instruction); integer sum compared exactly. |
+| AVX-512 BF16 | Twelve independent `vdpbf16ps` chains (16 lanes × 2 products × 2 = 64 per instruction); sum exact in FP32 and compared exactly. |
+| Native AMX BF16 / INT8 | Four destination tiles, two operand tiles; `tdpbf16ps` = 16 384, `tdpbssd` = 32 768 operations per instruction. Every output element is checked against its expected value. |
+| oneDNN GEMM sweep | `y = x Wᵀ`, `x` of shape M×K, weight N×K; `2MNK` operations per call; modeled bytes = weights + `x` + `y`. Weights are a round-robin pool of identical copies at distinct addresses, at least four times the L3 (Flat) or 16 / 96 GiB (Cache: resident / spilled). Untimed verbose execution proves an AMX implementation; four outputs are checked against references. INT8 runs only if the probe finds a oneDNN path whose verbose log names AMX (`onednn.qlinear_pointwise`, u8×s8). |
 | FP64 intensity sweep | Eight independent AVX-512 chains; modeled source read plus destination write. `2NK` FLOPs over `16N` modeled bytes. |
-| Pointer chase | One randomized cyclic permutation of 64-byte nodes, seed 7, 1 GiB total allocation, one core. A full cycle is traversed before timing. ns/load is elapsed time divided by dependent loads, including loop and translation overhead. |
+| Pointer chase | One randomized cyclic permutation of 64-byte nodes, seed 7, working set 16 KiB–4 GiB (1 GiB in the October idle-latency measurement), one core. A full cycle is traversed before timing. ns/load is elapsed time over dependent loads, including loop and translation overhead. |
+| Span | One process, 112 threads, 16 GiB. *Interleave*: `numactl --interleave` over both sockets' tier; *first-touch*: `--membind` to both nodes with each thread's pages allocated local. |
+
+**Effective clock and AMX activity.** Every native kernel opens, per OpenMP thread, user-mode `cycles` and the raw event `EXE.AMX_BUSY` (0x02B7) with `perf_event_open`, which works at `perf_event_paranoid=2` because it is per-thread and excludes the kernel. `ghz_effective = Σ cycles / (threads × elapsed)`; `amx_busy_frac = Σ AMX_BUSY / Σ cycles`. Efficiency is reported against the base-clock peak and against the peak at the effective clock.
 
 Five duration-based samples follow warm-up. Native work loops complete whole work blocks, so end times can slightly exceed the planned one-second interval. Actual elapsed time determines the rate. CPU and memory masks follow discovered topology and first touch. Native kernels report the actual OpenMP worker count. The oneDNN path retains numactl restrictions and omits inner GNU OpenMP placement variables.
 
@@ -17,16 +24,18 @@ All participants in a concurrent test finish initialization and warm-up before a
 
 ## Data and selection
 
-`measurements.csv` retains individual samples with portable source paths, campaign IDs, memory socket/locality, implementation, matrix shape, modeled traffic, load counts, timing intervals, compiler evidence, and acceptance reasons. `selection_audit.csv` records source-level admission decisions. INT8 remains raw archival evidence and is not normalized into the floating-point study.
+`measurements.csv` retains individual samples with portable source paths, campaign IDs, memory socket/locality, implementation, matrix shape, modeled traffic, load counts, timing intervals, compiler evidence, and acceptance reasons. `selection_audit.csv` records source-level admission decisions. INT8 appears only in the September (schema 1.0) campaign, which is archival and rejected as `int8_out_of_scope`; the extended INT8 kernels are in scope.
 
 Compiler metadata and retained disassembly are read from each campaign's system directory. Failed correctness, invalid timings, worker mismatches, missing ISA evidence, wrong hosts, legacy affinity defects, and dependency-limited sweeps are excluded from thesis statistics. Independent campaigns are never deduplicated; an explicit successful `retry_of` can supersede a source while retaining both records.
 
-`configs/analysis.json` pins a primary memory/sweep campaign per mode and any benchmark-specific compute follow-ups. `summary.csv` summarizes accepted groups without mixing campaign, socket, placement, shape, or implementation. `data/processed/thesis/` contains the exact memory, compute, locality, scaling, knees, concurrent-tier, and theoretical-reference tables used by the notebooks.
+`configs/analysis.json` pins a primary memory/sweep campaign per mode, benchmark-specific compute follow-ups, a `supersede` campaign per mode whose longer synchronized windows replace exactly the configurations they re-measured, and the `extended_campaigns` (ISA, bandwidth, hierarchy, GEMM, span, repeat) selected by `hwbench.extended`. Provenance columns `launch_method`, `node`, `memory_mode_verified`, `source_sha256`, `ghz_effective` and `amx_busy_frac` travel with every sample. `summary.csv` summarizes accepted groups without mixing campaign, socket, placement, shape, or implementation. `data/processed/thesis/` contains the exact memory, compute, locality, scaling, knees, concurrent-tier, and theoretical-reference tables used by the notebooks.
 
 Statistics are medians and sample standard deviations of five windows within a run. They describe short-term variation, not confidence intervals over independent machine reboots or allocations. Variation above 5% is retained and flagged. The measured sockets remain separate. No best-socket selection is used.
 
 ## Rooflines and reference values
 
-`P(I) = min(P_compute, B × I)` and `I_knee = P_compute / B`. FLOPs, decimal GB/s, and binary GiB are kept distinct. Every pair matches mode, host, socket, and configuration; memory and compute campaign IDs remain explicit. The FP64 sweep is measured; FP32/BF16 have numerical envelopes only. Native AMX and achieved GEMM remain distinct compute references.
+`P(I) = min(P_compute, B × I)` and `I_ridge = P_compute / B`. Operations, decimal GB/s and binary GiB are kept distinct. Every pair matches mode and socket scope; campaign ids stay in the tables. The primary memory ceiling is the best sustained of Triad, non-temporal Triad and read-only (ERT convention); Cache mode distinguishes data resident in the HBM cache (≤ 16 GiB) from data spilled to DDR (96 GiB). Compute ceilings are measured per execution path at the core count of the workload (56, or 55 for the LLM servers).
 
-Architectural reference rates use 56 cores, documented operation rates, and explicit 1.90 GHz base or 3.50 GHz maximum-turbo clocks. Neither clock reference measures sustained active-core frequency. The envelope is benchmark-specific, not a strict bound on every application or all physical bus traffic.
+Theoretical peaks come from `configs/theory.toml`: per-path operations per cycle (vendor statement or derivation, flagged), 56 cores per socket, and the 1.9 GHz base clock. Because the cores run at 2.0 GHz (AMX) to 2.6 GHz (VNNI) in these kernels, efficiency at the effective clock is the meaningful figure. DDR5-4800 × 8 channels = 307.2 GB/s per socket; the HBM figure is Intel's rounded "up to 1 TB/s" and no bottom-up peak is derived. The firmware (ACPI HMAT) advertises 262 GB/s DDR and 869 GB/s HBM read bandwidth per socket; these appear in the platform record, not as ceilings.
+
+**Traffic convention for LLM points.** Workload points carry `bytes_source`: `modeled` (tensor sizes) or `pmu_l3miss` (beyond-L3 counters). They are not mixed within a series.
