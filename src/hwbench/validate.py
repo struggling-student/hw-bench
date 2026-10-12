@@ -15,6 +15,7 @@ from hwbench.analysis import (
     scaling_table,
     select_measurements,
 )
+from hwbench.extended import check_extended, select_extended
 
 
 def validate(df, raw_roots, policy=None):
@@ -25,6 +26,7 @@ def validate(df, raw_roots, policy=None):
     campaigns = {(mode, c) for mode, c in policy["primary_campaigns"].items()}
     for mode, overrides in policy.get("benchmark_campaigns", {}).items():
         campaigns.update((mode, c) for c in overrides.values())
+    campaigns.update(policy.get("supersede", {}).items())
     for mode, campaign in sorted(campaigns):
         roots = [root / campaign for root in raw_roots if root.name == mode]
         if not roots or not any((r / "COMPLETED").exists() for r in roots):
@@ -219,9 +221,16 @@ def validate(df, raw_roots, policy=None):
             errors.append(f"Expected 11 scaling groups, found {len(scaling)}")
     except ValueError as e:
         errors.append(str(e))
+    extended_samples = 0
+    if policy.get("extended_campaigns"):
+        extended_errors, extended_warnings = check_extended(df, policy, raw_roots)
+        errors += extended_errors
+        warnings += extended_warnings
+        extended_samples = len(select_extended(df, policy))
     return dict(
         status="failed" if errors else "passed",
         selected_samples=len(data),
+        extended_samples=extended_samples,
         all_samples=len(df),
         excluded_samples=int((~df.accepted).sum()),
         errors=sorted(set(errors)),
