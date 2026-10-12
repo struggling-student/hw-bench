@@ -481,7 +481,7 @@ say(f"**Result.** Remote DDR retains {g[('flat_ddr','read')]:.0%} (read) to {g[(
     f"Remote HBM retains only {g[('flat_hbm','read')]:.0%} to {g[('flat_hbm','triad_nt')]:.0%} of local HBM, which is {loc[(loc.config=='flat_hbm')&(loc.kernel=='read')].remote.mean():.0f} GB/s: below remote DDR.")
 """),
     md("""
-**Implication.** HBM is only an advantage when accessed from its own socket: the inter-socket link, not the HBM stacks, is the limit for remote accesses, and remote HBM reads are slower than remote DDR reads. Any placement that lets threads fault HBM pages on the wrong socket loses an order of magnitude. Always bind memory and CPUs to the same socket for bandwidth-bound work.
+**Implication.** HBM is only an advantage when accessed from its own socket: remote HBM reads are slower than remote DDR reads through the same inter-socket links, so raw link bandwidth alone does not explain the loss; the cause was not identified, because the link and coherence-agent counters (UPI, CHA) are not readable without privileges. Any placement that lets threads fault HBM pages on the wrong socket loses an order of magnitude. Always bind memory and CPUs to the same socket for bandwidth-bound work.
 
 ## 2. Two sockets, two processes
 
@@ -606,7 +606,7 @@ say(f"**Result.** AMX BF16 reaches {i.loc['amx_bf16','ops_per_cycle_per_core']:.
     f"so it is not a faster path than FP32 FMA ({i.loc['fp32','gops']/1000:.1f} versus {i.loc['avx512_bf16','gops']/1000:.1f} TOP/s).")
 """),
     md("""
-**Implication.** The vendor per-cycle figures are met almost exactly; apparent efficiencies above 100% at base clock are clock effects (AVX-512 ran near 2.5 GHz, AMX near 2.0 GHz — AMX has the lower clock because of its power license). Software that expects BF16 to speed up without AMX will not see it: the only fast low-precision paths are AMX and, for INT8, VNNI.
+**Implication.** The vendor per-cycle figures are met almost exactly; apparent efficiencies above 100% at base clock are clock effects (AVX-512 ran near 2.5 GHz, AMX near 2.0 GHz — AMX ran at the lowest clock, plausibly because of a power-related frequency limit for AMX, which was not measured: no power or throttling counters are readable). Software that expects BF16 to speed up without AMX will not see it: the only fast low-precision paths are AMX and, for INT8, VNNI.
 
 ## 3. Effective clock and AMX activity
 """),
