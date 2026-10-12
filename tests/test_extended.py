@@ -110,3 +110,17 @@ def test_selection_and_sample_count_checks(tmp_path):
     df = pd.DataFrame([row(performance_gops=100_000.0 + i) for i in range(5)])
     errors, warnings = check_extended(df, policy, [tmp_path / "flat"])
     assert errors == []
+
+
+def test_interrupted_campaign_is_accepted_only_when_a_completed_one_resumes_it(tmp_path):
+    make_campaign(tmp_path, "cache", "first", "cresco8-hbm01", "slurm", complete=False)
+    make_campaign(tmp_path, "cache", "second", "cresco8-hbm01", "slurm")
+    policy = {"extended_campaigns": {"cache": ["first", "second"]}}
+    raw = [tmp_path / "cache"]
+    errors, _ = check_extended(pd.DataFrame([row(campaign_id="x")]), policy, raw)
+    assert any("not complete: first" in e for e in errors)
+    meta = tmp_path / "cache/second/system/campaign.json"
+    data = json.loads(meta.read_text())
+    meta.write_text(json.dumps({**data, "resumes": "first"}))
+    errors, _ = check_extended(pd.DataFrame([row(campaign_id="x")]), policy, raw)
+    assert not any("not complete" in e for e in errors)

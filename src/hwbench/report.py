@@ -201,3 +201,97 @@ def level_summary(table: pd.DataFrame) -> pd.DataFrame:
             if len(hit):
                 latency.append(dict(config=config, level=name, latency_ns=hit.latency_ns.iloc[0]))
     return pd.DataFrame(rows), pd.DataFrame(latency)
+
+
+# --------------------------------------------------------------------- GEMM
+def gemm_points(ext: pd.DataFrame) -> pd.DataFrame:
+    """Achieved oneDNN GEMM points: rate, modeled traffic and intensity per shape and M."""
+
+    data = with_config(ext[ext.benchmark.eq("onednn_gemm_sweep") & ext.notes.eq("gemm_sweep")])
+    keys = ["memory_mode", "config", "memory_target", "dtype", "n", "k", "m", "working_set_bytes"]
+    out = (
+        data.groupby(keys, dropna=False)
+        .agg(
+            gops=("performance_gops", "median"),
+            gbs=("bandwidth_gbs", "median"),
+            intensity=("arithmetic_intensity", "median"),
+            cv_percent=("performance_gops", _cv),
+            n_samples=("accepted", "size"),
+            campaign_id=("campaign_id", _ids),
+            node=("node", "first"),
+        )
+        .reset_index()
+    )
+    out["pool_gib"] = out.working_set_bytes / 2**30
+    out["shape"] = out.n.astype(int).astype(str) + "x" + out.k.astype(int).astype(str)
+    return out
+
+
+# --------------------------------------------------------------------- span
+def span_table(ext: pd.DataFrame) -> pd.DataFrame:
+    """One process over 112 cores: interleaved versus first-touch placement."""
+
+    data = with_config(ext[ext.socket_scope.eq("span")])
+    data["placement"] = data.notes.str.extract(r"span_(interleave|firsttouch|compute)")[0]
+    data["kind"] = data.notes.str.replace(r"^span_(interleave|firsttouch)_?", "", regex=True)
+    keys = ["memory_mode", "config", "benchmark", "dtype", "placement", "k"]
+    return (
+        data.groupby(keys, dropna=False)
+        .agg(
+            gbs=("bandwidth_gbs", "median"),
+            gops=("performance_gops", "median"),
+            cv_percent=("bandwidth_gbs", _cv),
+            ghz_effective=("ghz_effective", "median"),
+            n_samples=("accepted", "size"),
+            campaign_id=("campaign_id", _ids),
+        )
+        .reset_index()
+    )
+
+
+# ------------------------------------------------------------------- xcheck
+def xcheck_table(ext: pd.DataFrame, thesis: pd.DataFrame, tolerance: float = 0.02) -> pd.DataFrame:
+    """Repeat runs against the October values taken through Slurm.
+
+    Flat repeats run over SSH on the same node; Cache repeats run on a second node,
+    so the deviation there is node-to-node variance rather than launch method.
+    """
+
+    new = ext[ext.notes.eq("xcheck") & ext.socket_scope.eq("single")]
+    old = thesis[thesis.socket_scope.eq("single") & thesis.threads.eq(56)]
+    rows = []
+    keys = ["memory_mode", "benchmark", "dtype", "memory_target", "socket"]
+    for key, part in new.groupby(keys, dropna=False):
+        mode, benchmark, dtype, target, socket = key
+        reference = old[
+            old.memory_mode.eq(mode) & old.benchmark.eq(benchmark) & old.socket.eq(socket)
+        ]
+        if benchmark == "stream_triad":
+            reference = reference[
+                reference.memory_target.eq(target) & reference.notes.eq("core_scaling")
+            ]
+            metric = "bandwidth_gbs"
+        else:
+            reference = reference[reference["dtype"].eq(dtype)]
+            metric = "performance_gops"
+        if reference.empty:
+            continue
+        new_value, old_value = part[metric].median(), reference[metric].median()
+        rows.append(
+            dict(
+                memory_mode=mode,
+                benchmark=benchmark,
+                dtype=dtype,
+                memory_target=target,
+                socket=socket,
+                node=part.node.iloc[0],
+                new=new_value,
+                october=old_value,
+                october_launch=reference.launch_method.iloc[0],
+                deviation_percent=100 * (new_value / old_value - 1),
+                within_tolerance=abs(new_value / old_value - 1) <= tolerance,
+                cv_percent=_cv(part[metric]),
+                campaign_id=_ids(part.campaign_id),
+            )
+        )
+    return pd.DataFrame(rows)

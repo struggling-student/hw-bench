@@ -98,6 +98,24 @@ def campaign_context_errors(mode: str, campaign: str, raw_roots: list[Path]) -> 
     return errors
 
 
+def _resumed(mode: str, campaigns: list[str], raw_roots: list[Path]) -> set[str]:
+    """Campaigns that a completed campaign of the same list declares it resumed."""
+
+    resumed = set()
+    for campaign in campaigns:
+        for root in raw_roots:
+            base = root / campaign
+            if root.name != mode or not (base / "COMPLETED").exists():
+                continue
+            try:
+                meta = json.loads((base / "system/campaign.json").read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            if meta.get("resumes") in campaigns:
+                resumed.add(meta["resumes"])
+    return resumed
+
+
 def check_extended(
     all_rows: pd.DataFrame,
     policy: dict,
@@ -110,8 +128,13 @@ def check_extended(
     warnings: list[str] = []
     theory = theory or Theory.load()
     for mode, campaigns in extended_ids(policy).items():
+        resumed = _resumed(mode, campaigns, raw_roots)
         for campaign in campaigns:
-            errors += campaign_context_errors(mode, campaign, raw_roots)
+            found = campaign_context_errors(mode, campaign, raw_roots)
+            if campaign in resumed:
+                # An interrupted campaign stands only if a completed one finished it.
+                found = [e for e in found if "not complete" not in e]
+            errors += found
     chosen = select_extended(all_rows, policy)
     attempted = select_extended(all_rows, policy, include_rejected=True)
     for campaign, part in attempted.groupby("campaign_id"):

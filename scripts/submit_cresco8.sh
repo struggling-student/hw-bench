@@ -27,12 +27,12 @@ if [[ "${MODE}" == cache ]]; then
   JOB="$(remote sbatch --parsable --exclude="cresco8-hbm14" --account="${HW_BENCH_SLURM_ACCOUNT}" \
     ${PLACEMENT[@]+"${PLACEMENT[@]}"} --time="${HW_BENCH_TIME:-01:00:00}" \
     --job-name="hw-cache-${PART}" --output="${OUTPUT}/slurm-%j.out" --error="${OUTPUT}/slurm-%j.err" \
-    --export="ALL,HW_BENCH_STAGE=${STAGE},HW_BENCH_OUTPUT=${OUTPUT},HW_BENCH_CAMPAIGN_PART=${PART},AMX_CONTAINER=${AMX_CONTAINER}" \
+    --export="ALL,HW_BENCH_STAGE=${STAGE},HW_BENCH_OUTPUT=${OUTPUT},HW_BENCH_CAMPAIGN_PART=${PART},AMX_CONTAINER=${AMX_CONTAINER},HW_BENCH_RESUME=${HW_BENCH_RESUME:-}" \
     "${STAGE}/slurm/cache_campaign.sbatch")"
   echo "job=${JOB}"
 else
   INNER="$(printf '%q ' env "AMX_CONTAINER=${AMX_CONTAINER}" "HW_BENCH_CAMPAIGN_PART=${PART}" \
-    "HW_BENCH_FLAT_NODE=${FLAT_NODE}" bash "${STAGE}/scripts/flat_campaign.sh" "${STAGE}" "${OUTPUT}")"
+    "HW_BENCH_FLAT_NODE=${FLAT_NODE}" "HW_BENCH_RESUME=${HW_BENCH_RESUME:-}" bash "${STAGE}/scripts/flat_campaign.sh" "${STAGE}" "${OUTPUT}")"
   remote ssh -o BatchMode=yes "${FLAT_NODE}" tmux new-session -d -s "${RUN_ID}" "${INNER}"
   echo "tmux=${RUN_ID} node=${FLAT_NODE}"
 fi

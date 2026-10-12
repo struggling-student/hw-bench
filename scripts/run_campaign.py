@@ -102,6 +102,7 @@ def main():
         "seconds_per_sample": 1.0,
         "repetitions": 5,
         "campaign_part": args.only,
+        "resumes": os.environ.get("HW_BENCH_RESUME") or None,
         "source_sha256": {
             str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
             for base in ["benchmarks", "src", "scripts", "slurm", "configs"]
@@ -215,8 +216,27 @@ def main():
             parts.append(f"pool{s['pool']}")
         return "-".join(parts)
 
+    resumed = (
+        args.output.parent / os.environ["HW_BENCH_RESUME"]
+        if os.environ.get("HW_BENCH_RESUME")
+        else None
+    )
+
+    def already_measured(name):
+        """A valid record of the interrupted campaign this one resumes."""
+
+        if resumed is None:
+            return False
+        path = resumed / "records" / f"{name}.json"
+        if not path.exists():
+            return False
+        old = json.loads(path.read_text())
+        return old.get("returncode") == 0 and (old.get("result") or {}).get("valid")
+
     def execute(s, group=None, participant=0, count=1):
         name = record_name(s)
+        if already_measured(name):
+            return
         dest = args.output / "records" / f"{name}.json"
         if dest.exists():
             old = json.loads(dest.read_text())
