@@ -4,14 +4,14 @@ The executed notebooks are the canonical interpretation and derive every display
 
 | Notebook | Figures | Numerical evidence |
 | --- | --- | --- |
-| 00 Master analysis | Peak throughput by path | Headline compute, memory, latency and ridge tables; limits |
+| 00 Master analysis | Per-cycle efficiency, bandwidth and clock against cores, Cache against working set, headline roofline, GEMM efficiency, placement | Headline ceilings with ranges, ridge points, measured against vendor and firmware figures, what is not measured |
 | 01 Platform and methodology | none | Platform and HMAT record, execution rules, provenance of every campaign, validation, repeatability and the SSH-versus-Slurm and node-to-node cross-check |
 | 02 Memory hierarchy and bandwidth | Hierarchy bandwidth (1 and 56 cores), latency, kernel comparison, read scaling, Cache capacity | Per-level bandwidth and latency, Triad/read/non-temporal, saturation core counts, DDR+HBM concurrent tiers |
 | 03 NUMA and socket scaling | Local/remote, two-socket efficiency, 112-thread span, Triad scaling | Remote penalty per tier, dual efficiency with overlap, interleave versus first-touch |
 | 04 Compute throughput | Scaling, operations per cycle, BF16 and INT8 GEMM M-sweeps | Peak per path against vendor figure, effective clock, AMX-busy, GEMM fraction of tile peak |
 | 05 Roofline atlas | Flat 1S, Cache 1S, Flat 2S, FP64 sweep, BF16 and INT8 GEMM points | Ridge points, achieved-versus-measured-versus-theoretical gap table |
 
-Each plot cell saves SVG and PNG to `figures/<notebook-stem>/`; the expected files are listed in `configs/artifacts.json`, and `scripts/check_artifacts.py --clean-retired` verifies them. No raw records are deleted.
+Colour has one meaning throughout: hue is the memory configuration (blue DDR, orange HBM, aqua Cache), the violet ramp is the compute path, hatching is a worse placement, dash is the kind of ceiling (dashed vendor, solid measured, dotted library-achievable). Palettes are validated for colour-vision deficiency on the light surface; there is no dark variant. Each plot cell saves SVG and PNG to `figures/<notebook-stem>/`; the expected files are listed in `configs/artifacts.json`, and `scripts/check_artifacts.py --clean-retired` verifies them. No raw records are deleted.
 
 ## Reading guide
 

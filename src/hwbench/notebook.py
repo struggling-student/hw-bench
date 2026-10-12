@@ -62,7 +62,7 @@ def setup(name: str) -> Context:
         shown = frame.copy()
         if "config" in shown:
             shown["config"] = shown["config"].replace(LABELS)
-        display(shown.round(digits).style.set_uuid(name).hide(axis="index"))
+        display(shown.style.format(precision=digits, na_rep="—").set_uuid(name).hide(axis="index"))
 
     def figure(fig, slug: str) -> None:
         export_figure(fig, slug, name)

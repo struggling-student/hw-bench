@@ -13,10 +13,10 @@ from plotly.subplots import make_subplots
 
 ROOT = Path(__file__).resolve().parents[2]
 COLORS = {
-    "ddr": "#3476A6",
-    "hbm": "#C24A40",
-    "effective_cache": "#268270",
-    "fp64": "#3476A6",
+    "ddr": "#2A78D6",
+    "hbm": "#EB6834",
+    "effective_cache": "#1BAF7A",
+    "fp64": "#B3ABF0",
     "fp32": "#8754A1",
     "native_amx_4_tiles": "#8754A1",
     "onednn_numactl_only_omp_affinity_unset": "#B76C23",
@@ -356,18 +356,22 @@ def concurrent_table(df):
 
 
 def style(fig, title, x, y, height=490):
+    """Shared figure chrome: recessive solid hairline grid, ink text, legend under the plot."""
+
     fig.update_layout(
         template="plotly_white",
-        title=dict(text=title, x=0.04, font=dict(size=20)),
+        title=dict(text=title, x=0.04, font=dict(size=20, color="#0B0B0B")),
         width=1000,
         height=height,
-        font=dict(family="Arial", size=15),
+        font=dict(family="Arial", size=15, color="#52514E"),
         margin=dict(l=85, r=40, t=85, b=125),
         legend=dict(orientation="h", x=0, y=-0.25),
         hovermode="closest",
+        paper_bgcolor="#FCFCFB",
+        plot_bgcolor="#FCFCFB",
     )
-    fig.update_xaxes(title_text=x, showgrid=True, gridcolor="#E8EDF2", zeroline=False)
-    fig.update_yaxes(title_text=y, showgrid=True, gridcolor="#E8EDF2", zeroline=False)
+    fig.update_xaxes(title_text=x, showgrid=True, gridcolor="#E1E0D9", zeroline=False, linecolor="#C3C2B7")
+    fig.update_yaxes(title_text=y, showgrid=True, gridcolor="#E1E0D9", zeroline=False, linecolor="#C3C2B7")
     return fig
 
 

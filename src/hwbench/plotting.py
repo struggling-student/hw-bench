@@ -1,11 +1,19 @@
 """One visual language for every figure.
 
-Colour identifies the memory configuration, dash identifies what kind of number a
-ceiling is, and markers are measurements.  Units are SI throughout (GB/s, TOP/s).
+Each colour has one meaning:
 
-* colour: Flat DDR, Flat HBM, Cache (effective) -- fixed across all notebooks
-* dash:   theoretical = dashed, measured peak = solid, measured achievable = dotted
-* marker: an achieved operating point; hover shows campaign, node and sample count
+* **hue = memory configuration** -- Flat DDR (blue), Flat HBM (orange), Cache (aqua),
+  the first three slots of a palette validated for colour-vision deficiency;
+* **violet ramp = compute path**, lightest to darkest in order of vendor operations
+  per cycle, so a compute ceiling is never mistaken for a memory slope;
+* **pattern = placement** (remote / interleaved bars are hatched in the colour of their
+  tier), never a different hue;
+* **dash = kind of ceiling** -- theoretical dashed, measured peak solid, library-achievable
+  dotted;
+* **marker shape = series**, the same shape for the same series on every tier.
+
+Units are SI throughout (GB/s, TOP/s).  Colours are validated for the light surface used
+by the exported figures; there is no dark variant.
 """
 
 from __future__ import annotations
@@ -13,15 +21,22 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from hwbench.analysis import ROOT, export_figure, style
 from hwbench.roofline import Ceiling, MemoryCeiling, WorkloadPoint, ridge
 
+SURFACE = "#FCFCFB"
+INK = "#0B0B0B"
+INK_2 = "#52514E"
+MUTED = "#898781"
+GRID = "#E1E0D9"
+
 CONFIG_COLORS = {
-    "flat_ddr": "#3476A6",
-    "flat_hbm": "#C24A40",
-    "cache": "#268270",
-    "theory": "#6B7480",
+    "flat_ddr": "#2A78D6",
+    "flat_hbm": "#EB6834",
+    "cache": "#1BAF7A",
+    "theory": MUTED,
 }
 CONFIG_LABELS = {
     "flat_ddr": "Flat · DDR",
@@ -34,24 +49,48 @@ KIND_DASH = {
     "measured_peak": "solid",
     "measured_achievable": "dot",
 }
-#: One colour per precision/ISA path, used where the memory configuration is fixed.
+#: Compute paths: one hue, ordered by vendor operations per cycle (lightest = fewest).
 PATH_COLORS = {
-    "fp64": "#3476A6",
-    "fp32": "#8754A1",
-    "avx512_bf16": "#B76C23",
-    "vnni_int8": "#268270",
-    "amx_bf16": "#C24A40",
-    "amx_int8": "#7A3E3E",
+    "fp64": "#B3ABF0",
+    "fp32": "#9085E9",
+    "avx512_bf16": "#7467D8",
+    "vnni_int8": "#5A4CC0",
+    "amx_bf16": "#4A3AA7",
+    "amx_int8": "#352886",
 }
+PATH_LABELS = {
+    "fp64": "AVX-512 FP64",
+    "fp32": "AVX-512 FP32",
+    "avx512_bf16": "AVX-512 BF16",
+    "vnni_int8": "VNNI INT8",
+    "amx_bf16": "AMX BF16",
+    "amx_int8": "AMX INT8",
+}
+#: GEMM shapes (identity inside the GEMM figures only; those show a single memory tier).
+SHAPE_COLORS = {
+    "4096x4096": "#008300",
+    "4096x14336": "#E87BA4",
+    "14336x4096": "#EDA100",
+    "6144x6144": "#E34948",
+}
+SYMBOLS = ["circle", "square", "diamond", "triangle-up", "cross", "x", "star", "hexagon"]
 
 __all__ = [
     "CONFIG_COLORS",
     "CONFIG_LABELS",
     "KIND_DASH",
     "PATH_COLORS",
+    "PATH_LABELS",
     "ROOT",
+    "SHAPE_COLORS",
+    "cache_capacity_figure",
+    "compute_efficiency_figure",
     "config_key",
+    "dual_efficiency_figure",
     "export_figure",
+    "gemm_efficiency_figure",
+    "memory_scaling_figure",
+    "placement_figure",
     "roofline_figure",
     "style",
 ]
@@ -65,104 +104,127 @@ def config_key(mode: str, tier: str | None) -> str:
     return "flat_hbm" if tier == "hbm" else "flat_ddr"
 
 
+def _auto_range(compute, memory, points) -> tuple[float, float]:
+    xs = [p.intensity for p in points or []]
+    ridges = [ridge(c.gops, m.gbs) for c in compute for m in memory]
+    lo = min(xs + ridges, default=1.0) / 4
+    hi = max(xs + ridges, default=1000.0) * 12
+    return max(lo, 0.02), min(hi, 40000.0)
+
+
 def roofline_figure(
     compute: list[Ceiling],
     memory: list[MemoryCeiling],
     points: list[WorkloadPoint] | None = None,
     title: str = "Roofline",
-    x_range: tuple[float, float] = (0.05, 4096.0),
+    x_range: tuple[float, float] | None = None,
     height: int = 620,
+    regions: list[tuple[float, float, str]] | None = None,
+    point_labels: bool = False,
 ):
-    """Multi-ceiling roofline: memory slopes, compute plateaus, achieved points.
+    """Memory slopes, compute plateaus and achieved points on one log-log plane.
 
-    Slopes are drawn up to the highest compute ceiling; each compute ceiling is a
-    horizontal line starting where it meets the first memory slope.  Ridge points
-    are marked with hover text giving the exact intensity.
+    Compute ceilings are labelled on the line (not in the legend); a measured ceiling is
+    labelled above its line and a theoretical one below, so the pair stays readable.
+    A plateau is drawn faintly between the ridge of the fastest and the slowest memory
+    tier -- there only the faster tier reaches it -- and solid beyond.  ``regions`` shades
+    labelled intensity intervals (for example decode and prefill).
     """
 
+    if x_range is None:
+        x_range = _auto_range(compute, memory, points)
     fig = go.Figure()
     x = np.geomspace(*x_range, 400)
     top = max((c.gops for c in compute), default=1.0)
+    for lo, hi, label in regions or []:
+        fig.add_vrect(x0=lo, x1=hi, fillcolor=GRID, opacity=0.55, line_width=0, layer="below")
+        fig.add_annotation(
+            x=np.log10(np.sqrt(lo * hi)), y=1.0, xref="x", yref="paper", text=label, showarrow=False,
+            yanchor="bottom", font=dict(size=13, color=INK_2),
+        )
     for m in memory:
         key = config_key(m.mode or "flat", m.tier)
         slope = np.minimum(m.gbs * x, top)
+        where = f" @{m.working_set_gib:.0f} GiB" if m.mode == "cache" and m.working_set_gib else ""
         fig.add_scatter(
             x=x,
             y=slope / 1000,
             mode="lines",
-            name=(
-                f"{CONFIG_LABELS[key]} {m.kernel}"
-                f"{f' @{m.working_set_gib:.0f} GiB' if m.mode == 'cache' and m.working_set_gib else ''}"
-                f" · {m.gbs:.0f} GB/s ({m.scope})"
-            ),
+            name=f"{CONFIG_LABELS[key]} {m.kernel}{where} · {m.gbs:.0f} GB/s ({m.scope})",
             line=dict(color=CONFIG_COLORS[key], width=2.5, dash=KIND_DASH[m.kind]),
             hovertemplate=(
                 f"{m.tier} {m.kernel}<br>{m.gbs:.1f} GB/s · {m.scope}"
                 f"<br>campaign {m.source_campaign}<extra></extra>"
             ),
         )
-    seen = set()
+    bandwidths = [m.gbs for m in memory] or [1.0]
+    placed: list[tuple[str, float]] = []  # (side, log10 y) of labels already on the right edge
     for c in compute:
-        color = PATH_COLORS.get(c.path, "#444444")
-        label = f"{c.path} · {c.gops / 1000:.1f} TOP/s ({c.scope}, {c.cores}c)"
-        x0 = ridge(c.gops, max((m.gbs for m in memory), default=1.0))
-        fig.add_scatter(
-            x=[max(x0, x_range[0]), x_range[1]],
-            y=[c.gops / 1000] * 2,
-            mode="lines",
-            name=label,
-            line=dict(color=color, width=2, dash=KIND_DASH[c.kind]),
-            legendgroup=c.path,
-            hovertemplate=(
-                f"{c.path} ({c.kind})<br>{c.gops / 1000:.2f} TOP/s"
-                f"<br>{c.ghz or float('nan'):.2f} GHz · campaign {c.source_campaign}<extra></extra>"
-            ),
+        color = PATH_COLORS.get(c.path, INK_2)
+        r_fast, r_slow = ridge(c.gops, max(bandwidths)), ridge(c.gops, min(bandwidths))
+        hover = (
+            f"{c.path} ({c.kind})<br>{c.gops / 1000:.2f} TOP/s"
+            f"<br>{c.ghz or float('nan'):.2f} GHz · campaign {c.source_campaign}<extra></extra>"
         )
-        if memory and (c.path, c.scope) not in seen:
-            seen.add((c.path, c.scope))
-            for m in memory:
-                r = ridge(c.gops, m.gbs)
-                if x_range[0] < r < x_range[1]:
-                    key = config_key(m.mode or "flat", m.tier)
-                    fig.add_scatter(
-                        x=[r],
-                        y=[c.gops / 1000],
-                        mode="markers",
-                        showlegend=False,
-                        marker=dict(symbol="diamond-open", size=8, color=CONFIG_COLORS[key]),
-                        hovertemplate=f"ridge {r:.1f} op/B<extra></extra>",
-                    )
-    # One trace per (memory tier, series) so the legend stays readable; every point
-    # keeps its own hover text with campaign, intensity and source of its bytes.
+        if r_slow > r_fast:
+            fig.add_scatter(
+                x=[max(r_fast, x_range[0]), min(r_slow, x_range[1])], y=[c.gops / 1000] * 2, mode="lines",
+                line=dict(color=color, width=1.5, dash=KIND_DASH[c.kind]), opacity=0.35, showlegend=False,
+                hovertemplate=hover,
+            )
+        fig.add_scatter(
+            x=[max(r_slow, x_range[0]), x_range[1]], y=[c.gops / 1000] * 2, mode="lines",
+            line=dict(color=color, width=2.2, dash=KIND_DASH[c.kind]), showlegend=False, hovertemplate=hover,
+        )
+        label = {
+            "theoretical": f"{PATH_LABELS.get(c.path, c.path)} vendor at {c.ghz or 0:.1f} GHz {c.gops / 1000:.1f}",
+            "measured_peak": f"{PATH_LABELS.get(c.path, c.path)} {c.gops / 1000:.1f} TOP/s",
+            "measured_achievable": f"{PATH_LABELS.get(c.path, c.path)} library {c.gops / 1000:.1f}",
+        }[c.kind]
+        ly = np.log10(c.gops / 1000)
+        side = "top" if c.kind == "theoretical" else "bottom"
+        if any(s_ == side and abs(y_ - ly) < 0.1 for s_, y_ in placed):  # keep neighbouring labels apart
+            side = "bottom" if side == "top" else "top"
+        placed.append((side, ly))
+        fig.add_annotation(
+            x=np.log10(x_range[1]), y=ly, xref="x", yref="y", text=label, showarrow=False,
+            xanchor="right", yanchor=side, font=dict(size=12, color=INK_2), xshift=-4,
+        )
+        for m in memory:
+            r = ridge(c.gops, m.gbs)
+            if x_range[0] < r < x_range[1] and c.kind != "theoretical":
+                fig.add_scatter(
+                    x=[r], y=[c.gops / 1000], mode="markers", showlegend=False,
+                    marker=dict(symbol="diamond-open", size=8, color=CONFIG_COLORS[config_key(m.mode or "flat", m.tier)]),
+                    hovertemplate=f"ridge {r:.1f} op/B<extra></extra>",
+                )
+    # One trace per (tier, series); the symbol belongs to the series so DDR and HBM agree.
     groups: dict[tuple, list[WorkloadPoint]] = {}
     for p in points or []:
-        key = (p.mode, p.memory_target, p.provenance.get("series", p.isa_path))
-        groups.setdefault(key, []).append(p)
-    symbols = ["circle", "square", "diamond", "triangle-up", "cross", "x"]
-    for i, ((mode, tier, series), members) in enumerate(groups.items()):
+        groups.setdefault((p.mode, p.memory_target, p.provenance.get("series", p.isa_path)), []).append(p)
+    symbols = {s: SYMBOLS[i % len(SYMBOLS)] for i, s in enumerate(sorted({k[2] for k in groups}))}
+    for (mode, tier, series), members in groups.items():
         key = config_key(mode or "flat", tier)
         members = sorted(members, key=lambda q: q.intensity)
+        labelled = point_labels and all("label" in q.provenance for q in members)
         fig.add_scatter(
             x=[q.intensity for q in members],
             y=[q.gops / 1000 for q in members],
-            mode="markers",
+            mode="markers+text" if labelled else "markers",
             name=f"{CONFIG_LABELS[key]} · {series}",
-            marker=dict(
-                color=CONFIG_COLORS[key],
-                symbol=symbols[i % len(symbols)],
-                size=8,
-                line=dict(color="white", width=1),
-            ),
-            text=[q.name for q in members],
+            marker=dict(color=CONFIG_COLORS[key], symbol=symbols[series], size=9, line=dict(color=SURFACE, width=1.5)),
+            text=[q.provenance["label"] if labelled else q.name for q in members],
+            textposition="top center",
+            textfont=dict(size=11, color=INK_2),
             customdata=[[q.bytes_source, q.provenance.get("campaign", "")] for q in members],
             hovertemplate=(
-                "%{text}<br>%{y:.3f} TOP/s · %{x:.2f} op/B"
-                "<br>%{customdata[0]} · %{customdata[1]}<extra></extra>"
+                "%{text}<br>%{y:.3f} TOP/s · %{x:.2f} op/B<br>%{customdata[0]} · %{customdata[1]}<extra></extra>"
             ),
         )
     style(fig, title, "Operations per byte of memory traffic", "TOP/s", height)
-    fig.update_xaxes(type="log")
-    fig.update_yaxes(type="log")
+    fig.update_xaxes(type="log", range=[np.log10(x_range[0]), np.log10(x_range[1])], dtick=1, tickformat="~g")
+    fig.update_yaxes(type="log", dtick=1, tickformat="~g")
+    fig.update_layout(margin=dict(l=85, r=40, t=95, b=125))
     return fig
 
 
@@ -184,21 +246,21 @@ def line_by_config(
     fig = go.Figure()
     for name, part in frame.groupby(group):
         part = part.sort_values(x)
-        color = CONFIG_COLORS.get(name) or PATH_COLORS.get(name)
+        color = CONFIG_COLORS.get(name) or PATH_COLORS.get(name) or SHAPE_COLORS.get(name) or INK_2
         fig.add_scatter(
             x=part[x],
             y=part[y],
             mode="lines+markers",
-            name=CONFIG_LABELS.get(name, str(name)),
+            name=CONFIG_LABELS.get(name, PATH_LABELS.get(name, str(name))),
             line=dict(color=color, width=2.2),
-            marker=dict(size=6),
+            marker=dict(size=6, line=dict(color=SURFACE, width=1)),
             error_y=dict(type="data", array=part[error]) if error else None,
         )
     style(fig, title, xlabel, ylabel, height)
     if log_x:
-        fig.update_xaxes(type="log")
+        fig.update_xaxes(type="log", dtick=1, tickformat="~g")
     if log_y:
-        fig.update_yaxes(type="log")
+        fig.update_yaxes(type="log", dtick=1, tickformat="~g")
     return fig
 
 
@@ -212,11 +274,11 @@ def mark_x(fig, edges: dict[str, float], log: bool = True) -> None:
     for label, x in edges.items():
         fig.add_shape(
             type="line", x0=x, x1=x, y0=0, y1=1, xref="x", yref="paper",
-            line=dict(dash="dot", color="#9AA3AF", width=1.5),
+            line=dict(dash="dot", color=MUTED, width=1.5),
         )
         fig.add_annotation(
             x=np.log10(x) if log else x, y=1.0, xref="x", yref="paper", text=label,
-            showarrow=False, yanchor="bottom", font=dict(size=12, color="#6B7480"),
+            showarrow=False, yanchor="bottom", font=dict(size=12, color=INK_2),
         )
 
 
@@ -235,13 +297,226 @@ def bytes_axis(fig, low: int = 2**14, high: int = 2**32, step: int = 4) -> None:
 
 
 def mark_y(fig, y: float, text: str, log: bool = True) -> None:
-    """Dashed horizontal reference line with a label that works on a log y axis."""
+    """Solid reference line with a label that works on a log y axis."""
 
     fig.add_shape(
         type="line", x0=0, x1=1, y0=y, y1=y, xref="paper", yref="y",
-        line=dict(dash="dash", color="#6B7480", width=1.5),
+        line=dict(color=MUTED, width=1.5),
     )
     fig.add_annotation(
-        x=1.0, y=np.log10(y) if log else y, xref="paper", yref="y", text=text,
-        showarrow=False, xanchor="right", yanchor="bottom", font=dict(size=12, color="#6B7480"),
+        x=1.0, y=np.log10(y) if log else y, xref="paper", yref="y", text=text, showarrow=False,
+        xanchor="right", yanchor="bottom", font=dict(size=12, color=INK_2),
     )
+
+
+# ----------------------------------------------------------- master figures
+def compute_efficiency_figure(peaks: pd.DataFrame, notes: dict[str, str] | None = None):
+    """Measured against vendor operations per cycle per core, one dot per path.
+
+    ``peaks`` has one row per path (one socket, 56 cores).  The x axis is linear: the
+    only quantity comparable across paths is the fraction of the per-cycle figure, and
+    the measured clock is annotated because it differs by path.  ``notes`` maps a path to
+    a caveat appended to its label (for example an assumed bound).
+    """
+
+    order = ["fp64", "fp32", "avx512_bf16", "vnni_int8", "amx_bf16", "amx_int8"]
+    rows = peaks.set_index("path").loc[order]
+    frac = rows.ops_per_cycle_per_core / rows.theory_ops_per_cycle
+    fig = go.Figure()
+    fig.add_vline(x=1.0, line=dict(color=MUTED, width=1.5))
+    fig.add_scatter(
+        x=frac,
+        y=[PATH_LABELS[p] for p in order],
+        mode="markers+text",
+        marker=dict(size=13, color=[PATH_COLORS[p] for p in order], line=dict(color=INK_2, width=1)),
+        text=[
+            f"{r.ops_per_cycle_per_core:.0f} of {r.theory_ops_per_cycle:.0f} op/cycle · {r.ghz_effective:.2f} GHz"
+            + (f" · {notes[p]}" if notes and p in notes else "")
+            for p, r in rows.iterrows()
+        ],
+        textposition="middle right",
+        textfont=dict(size=12, color=INK_2),
+        showlegend=False,
+        hovertemplate="%{y}: %{x:.1%} of the per-cycle figure<extra></extra>",
+    )
+    style(fig, "Operations per cycle against the vendor figure · one core", "Measured ÷ per-cycle figure", "", 440)
+    fig.update_xaxes(range=[0, 1.8], tickformat=".0%", tickvals=[0, 0.25, 0.5, 0.75, 1.0])
+    fig.update_yaxes(autorange="reversed", showgrid=False)
+    fig.update_layout(margin=dict(l=130, r=40, t=85, b=70))
+    return fig
+
+
+def memory_scaling_figure(read: pd.DataFrame, clock: pd.DataFrame):
+    """Read bandwidth against core count, with the effective clock on a second panel.
+
+    Two panels share the core axis (no second y-scale): bandwidth above, the clock the
+    cores actually ran at below, so a bandwidth that stops rising can be compared with a
+    clock that falls.
+    """
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07, row_heights=[0.68, 0.32])
+    for cfg in ["flat_ddr", "flat_hbm", "cache"]:
+        part = read[read.config.eq(cfg)].sort_values("threads")
+        clk = clock[clock.config.eq(cfg)].sort_values("threads")
+        color = CONFIG_COLORS[cfg]
+        fig.add_scatter(
+            x=part.threads, y=part.gbs, mode="lines+markers", name=CONFIG_LABELS[cfg], legendgroup=cfg,
+            line=dict(color=color, width=2.2), marker=dict(size=7, line=dict(color=SURFACE, width=1.5)),
+            error_y=dict(type="data", array=part["std"].fillna(0)), row=1, col=1,
+        )
+        fig.add_scatter(
+            x=clk.threads, y=clk.ghz, mode="lines+markers", name=CONFIG_LABELS[cfg], legendgroup=cfg, showlegend=False,
+            line=dict(color=color, width=2.2), marker=dict(size=7, line=dict(color=SURFACE, width=1.5)), row=2, col=1,
+        )
+    fig.add_vline(x=28, line=dict(color=MUTED, width=1))
+    fig.add_annotation(x=np.log10(28), y=1.0, xref="x", yref="paper", text="28 cores", showarrow=False, yanchor="bottom", font=dict(size=12, color=INK_2))
+    style(fig, "Read bandwidth and effective clock against core count · socket 0, 8 GiB", "Cores", "GB/s", 640)
+    fig.update_xaxes(type="log", tickmode="array", tickvals=[1, 2, 4, 8, 14, 28, 56], ticktext=["1", "2", "4", "8", "14", "28", "56"])
+    fig.update_xaxes(title_text="", row=1, col=1)
+    fig.update_xaxes(title_text="Cores", row=2, col=1)
+    fig.update_yaxes(title_text="GB/s", row=1, col=1)
+    fig.update_yaxes(title_text="GHz", range=[1.2, 2.8], row=2, col=1)
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.16))
+    return fig
+
+
+def cache_capacity_figure(cache: pd.DataFrame, flat: pd.DataFrame, markers: dict[str, float]):
+    """Cache-mode bandwidth for every kernel against working set, with Flat reference bands.
+
+    Only measured working sets are drawn: a kernel with few points gets markers alone,
+    because a line between 16 and 64 GiB would invent a smooth curve.  The bands span
+    the three kernels on Flat HBM and Flat DDR at 8 GiB.
+    """
+
+    fig = go.Figure()
+    for cfg in ("flat_hbm", "flat_ddr"):
+        part = flat[flat.config.eq(cfg)]
+        lo, hi = part.gbs.min(), part.gbs.max()
+        fig.add_hrect(y0=lo, y1=hi, fillcolor=CONFIG_COLORS[cfg], opacity=0.22, line_width=0)
+        fig.add_annotation(
+            x=1.0, xref="paper", y=hi, yref="y", text=f"{CONFIG_LABELS[cfg]}, three kernels at 8 GiB", showarrow=False,
+            xanchor="right", yanchor="bottom", font=dict(size=12, color=INK_2),
+        )
+    symbols = {"read": "circle", "triad": "square", "triad_nt": "diamond"}
+    names = {"read": "read-only", "triad": "Triad", "triad_nt": "non-temporal Triad"}
+    for kernel, part in cache.groupby("kernel"):
+        part = part.sort_values("working_set_gib")
+        dense = len(part) >= 6
+        fig.add_scatter(
+            x=part.working_set_gib, y=part.gbs, mode="lines+markers" if dense else "markers", name=f"Cache · {names[kernel]}",
+            marker=dict(size=10, symbol=symbols[kernel], color=CONFIG_COLORS["cache"], line=dict(color=SURFACE, width=1.5)),
+            line=dict(color=CONFIG_COLORS["cache"], width=2),
+        )
+    for label, x in markers.items():
+        fig.add_vline(x=x, line=dict(color=MUTED, width=1))
+        fig.add_annotation(x=x, y=1.0, xref="x", yref="paper", text=label, showarrow=False, yanchor="bottom", font=dict(size=12, color=INK_2))
+    style(fig, "Cache-mode bandwidth against working set · socket 0, 56 cores", "Working set (GiB)", "GB/s", 520)
+    fig.update_yaxes(range=[0, 640])
+    fig.update_xaxes(range=[0, 135])
+    return fig
+
+
+def gemm_efficiency_figure(sweeps: dict[str, pd.DataFrame], decode_max: int, prefill_min: int):
+    """GEMM efficiency against batch M on two panels sharing the M axis.
+
+    ``sweeps`` maps a path key (``amx_bf16``, ``amx_int8``) to rows with ``m``,
+    ``tile_fraction`` and ``bandwidth_fraction``.  Top: share of the measured tile peak.
+    Bottom: share of the read-bandwidth ceiling, from modeled bytes.
+    """
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08)
+    for path, part in sweeps.items():
+        part = part.sort_values("m")
+        for row, col in ((1, "tile_fraction"), (2, "bandwidth_fraction")):
+            fig.add_scatter(
+                x=part.m, y=part[col], mode="lines+markers", name=PATH_LABELS[path], legendgroup=path, showlegend=row == 1,
+                line=dict(color=PATH_COLORS[path], width=2.2),
+                marker=dict(size=7, color=PATH_COLORS[path], line=dict(color=SURFACE, width=1.5)), row=row, col=1,
+            )
+    for row in (1, 2):
+        fig.add_vrect(x0=0.7, x1=decode_max * 1.2, fillcolor=GRID, opacity=0.55, line_width=0, layer="below", row=row, col=1)
+        fig.add_vrect(x0=prefill_min / 1.2, x1=6000, fillcolor=GRID, opacity=0.55, line_width=0, layer="below", row=row, col=1)
+    labels = (
+        (f"decode (M ≤ {decode_max})", np.sqrt(0.7 * decode_max * 1.2)),
+        (f"prefill (M ≥ {prefill_min})", np.sqrt(prefill_min / 1.2 * 6000)),
+    )
+    for text, x in labels:
+        fig.add_annotation(x=np.log10(x), y=1.0, xref="x", yref="paper", text=text, showarrow=False, yanchor="bottom", font=dict(size=13, color=INK_2))
+    style(fig, "GEMM efficiency against batch M · 14336×4096, Flat HBM, 56 cores", "", "", 640)
+    ticks = [1, 4, 16, 64, 256, 1024, 4096]
+    fig.update_xaxes(type="log", range=[np.log10(0.7), np.log10(6000)], tickmode="array", tickvals=ticks, ticktext=[str(t) for t in ticks])
+    fig.update_xaxes(title_text="", row=1, col=1)
+    fig.update_xaxes(title_text="M (tokens per batch)", row=2, col=1)
+    fig.update_yaxes(title_text="Share of tile peak", tickformat=".0%", rangemode="tozero", row=1, col=1)
+    fig.update_yaxes(title_text="Share of read ceiling", tickformat=".0%", rangemode="tozero", row=2, col=1)
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.14))
+    return fig
+
+
+def placement_figure(local_remote: pd.DataFrame, span: pd.DataFrame):
+    """Left: local and remote bandwidth per tier and kernel. Right: one process on 112 cores.
+
+    Hatching means 'worse placement' (remote, interleaved); the colour stays the tier's.
+    The diamond is the sum of the two isolated sockets, the reference for a spanning process.
+    ``local_remote`` has ``label``, ``config``, ``local``, ``remote`` and their spreads;
+    ``span`` has ``label``, ``config``, ``placement``, ``gbs`` and ``isolated_sum``.
+    """
+
+    fig = make_subplots(
+        rows=1, cols=2, column_widths=[0.55, 0.45],
+        subplot_titles=("Local and remote · one socket", "One 112-thread process · read-only"),
+    )
+    pattern = lambda shape: dict(shape=shape, fgcolor=SURFACE, size=6, solidity=0.5)  # noqa: E731
+    for placement, hatch in (("local", ""), ("remote", "/")):
+        fig.add_bar(
+            x=local_remote.label, y=local_remote[placement], showlegend=False,
+            marker=dict(color=[CONFIG_COLORS[c] for c in local_remote.config], pattern=pattern(hatch), line=dict(width=0)),
+            error_y=dict(type="data", array=local_remote[f"{placement}_spread"], color=INK_2, thickness=1.2),
+            row=1, col=1,
+        )
+    for placement, hatch in (("firsttouch", ""), ("interleave", "/")):
+        part = span[span.placement.eq(placement)]
+        fig.add_bar(
+            x=part.label, y=part.gbs, showlegend=False,
+            marker=dict(color=[CONFIG_COLORS[c] for c in part.config], pattern=pattern(hatch), line=dict(width=0)),
+            row=1, col=2,
+        )
+    ref = span.drop_duplicates("label")
+    fig.add_scatter(
+        x=ref.label, y=ref.isolated_sum, mode="markers", name="two isolated sockets, summed",
+        marker=dict(symbol="diamond", size=12, color=INK, line=dict(color=SURFACE, width=1.5)), row=1, col=2,
+    )
+    style(fig, "Placement: remote memory and one process spanning both sockets", "", "GB/s", 520)
+    fig.update_layout(barmode="group", bargap=0.3, legend=dict(orientation="h", x=0.55, y=-0.17))
+    # Colour already says the tier, so the key only explains the hatching.
+    fig.add_annotation(
+        x=0, y=-0.17, xref="paper", yref="paper", xanchor="left", yanchor="middle", showarrow=False,
+        text="Solid: local, first-touch   ·   Hatched: remote, interleaved", font=dict(size=14, color=INK_2),
+    )
+    for ann in fig.layout.annotations:
+        ann.font = dict(size=14, color=INK_2)
+    return fig
+
+
+def dual_efficiency_figure(de: pd.DataFrame):
+    """Two-process rate ÷ the sum of the isolated sockets, one dot per pair.
+
+    ``de`` has ``label``, ``efficiency``, ``colour`` (a hex) and ``memory_mode``.  A dot
+    plot on a narrow axis around 1: bars from a truncated axis would make a 1%
+    difference look large.  The shaded band is ±2%.
+    """
+
+    fig = go.Figure()
+    fig.add_hrect(y0=0.98, y1=1.02, fillcolor=GRID, opacity=0.6, line_width=0, layer="below")
+    fig.add_hline(y=1.0, line=dict(color=MUTED, width=1.5))
+    for mode, symbol in (("flat", "circle"), ("cache", "diamond")):
+        part = de[de.memory_mode.eq(mode)]
+        fig.add_scatter(
+            x=part.label, y=part.efficiency, mode="markers", name={"flat": "Flat", "cache": "Cache"}[mode],
+            marker=dict(symbol=symbol, size=10, color=part.colour, line=dict(color=INK_2, width=1)),
+        )
+    style(fig, "Two-socket efficiency · two-process rate ÷ sum of isolated sockets", "", "Efficiency", 520)
+    fig.update_yaxes(range=[0.96, 1.04], tickformat=".2f")
+    fig.update_xaxes(tickangle=-40)
+    fig.update_layout(margin=dict(l=85, r=40, t=85, b=170), legend=dict(orientation="h", x=0, y=-0.5))
+    return fig

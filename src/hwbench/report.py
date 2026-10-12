@@ -75,6 +75,8 @@ def isa_peaks(ext: pd.DataFrame, theory: Theory) -> pd.DataFrame:
                 cores=cores,
                 gops=gops,
                 cv_percent=_cv(part.performance_gops),
+                gops_min=part.performance_gops.min(),
+                gops_max=part.performance_gops.max(),
                 ghz_effective=ghz,
                 amx_busy_frac=part.amx_busy_frac.median(),
                 ops_per_cycle_per_core=gops / cores / ghz,
@@ -137,6 +139,8 @@ def bandwidth_summary(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
         frame.groupby(keys, dropna=False)
         .agg(
             gbs=("bandwidth_gbs", "median"),
+            gbs_min=("bandwidth_gbs", "min"),
+            gbs_max=("bandwidth_gbs", "max"),
             cv_percent=("bandwidth_gbs", _cv),
             ghz_effective=("ghz_effective", "median"),
             n_samples=("accepted", "size"),
@@ -144,6 +148,13 @@ def bandwidth_summary(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+
+
+def read_scaling_clock(ext: pd.DataFrame) -> pd.DataFrame:
+    """Effective clock of the read-scaling runs (socket 0), by configuration and core count."""
+
+    data = with_config(ext[ext.notes.eq("bw2_read_scaling") & ext.socket.eq(0)])
+    return data.groupby(["config", "threads"]).ghz_effective.median().rename("ghz").reset_index()
 
 
 def read_scaling(ext: pd.DataFrame) -> pd.DataFrame:
@@ -521,7 +532,13 @@ def gemm_workload_points(gemm: pd.DataFrame, theory: Theory, cores: int = 56):
                 cores=cores,
                 threads=cores,
                 memory_target=r.memory_target,
-                provenance={"campaign": r.campaign_id, "pool_gib": r.pool_gib, "cv_percent": r.cv_percent, "series": r.shape},
+                provenance={
+                    "campaign": r.campaign_id,
+                    "pool_gib": r.pool_gib,
+                    "cv_percent": r.cv_percent,
+                    "series": r.shape,
+                    "label": f"M={int(r.m)}",
+                },
             )
         )
     return points
@@ -562,3 +579,162 @@ def fp64_sweep_points(thesis: pd.DataFrame, mode: str, tier: str, ws_gib: float 
             )
         )
     return points
+
+
+# ----------------------------------------------------------- master tables
+def library_ceiling(gm: pd.DataFrame, path: str, mode: str = "flat", tier: str = "hbm"):
+    """What a library GEMM achieved at its best shape and batch: a ``measured_achievable`` ceiling."""
+
+    from hwbench.roofline import Ceiling
+
+    dtype = {"amx_bf16": "bf16", "amx_int8": "int8"}[path]
+    sel = gm[gm.memory_mode.eq(mode) & gm.memory_target.eq(tier) & gm.dtype.eq(dtype)]
+    best = sel.loc[sel.gops.idxmax()]
+    return Ceiling(
+        kind="measured_achievable",
+        precision=dtype,
+        path=path,
+        gops=float(best.gops),
+        unit="GOP/s",
+        scope="1S",
+        mode=mode,
+        cores=56,
+        source_campaign=best.campaign_id,
+        note=f"oneDNN {best['shape']} at M={int(best.m)}",
+        cv_percent=float(best.cv_percent) if best.cv_percent == best.cv_percent else None,
+    )
+
+
+def local_remote_table(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
+    """Local and remote bandwidth per tier and kernel, averaged over the two sockets.
+
+    ``*_spread`` is half the difference between the sockets (their own spread), so the
+    bar shows how far apart the two sockets are, not a sample-to-sample figure.
+    """
+
+    loc = locality_ratio(ext, thesis)
+    loc = loc[loc.kernel.isin(["read", "triad_nt"])]
+    g = loc.groupby(["config", "kernel"])
+    out = g[["local", "remote"]].mean()
+    for col in ("local", "remote"):
+        out[f"{col}_spread"] = (g[col].max() - g[col].min()) / 2
+    out = out.reset_index()
+    tier = out.config.map({"flat_ddr": "DDR", "flat_hbm": "HBM"})
+    out["label"] = tier + " " + out.kernel.map({"read": "read", "triad_nt": "NT Triad"})
+    order = {"DDR read": 0, "DDR NT Triad": 1, "HBM read": 2, "HBM NT Triad": 3}
+    return out.sort_values("label", key=lambda s: s.map(order)).reset_index(drop=True)
+
+
+def span_reference(ext: pd.DataFrame, thesis: pd.DataFrame, kernel: str = "read") -> pd.DataFrame:
+    """One 112-thread process by placement, with the two-isolated-sockets sum.
+
+    ``kernel`` is ``read`` or ``triad``; the isolated sockets use the same kernel at 8 GiB.
+    """
+
+    sp = span_table(ext)
+    sp = sp[sp.memory_mode.eq("flat") & sp.benchmark.eq(f"stream_{kernel}") & sp.placement.isin(["firsttouch", "interleave"])]
+    bw = bandwidth_summary(ext, thesis)
+    iso = bw[bw.locality.eq("local") & bw.socket_scope.eq("single") & bw.kernel.eq(kernel) & bw.working_set_gib.sub(8).abs().lt(0.5)]
+    sums = iso.groupby("config").gbs.sum()
+    out = sp[["config", "placement", "gbs"]].copy()
+    out["isolated_sum"] = out.config.map(sums)
+    name = {"read": "read", "triad": "Triad"}[kernel]
+    out["label"] = out.config.map({"flat_ddr": "DDR", "flat_hbm": "HBM"}) + " " + name
+    return out.sort_values("label", ascending=False).reset_index(drop=True)
+
+
+def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> pd.DataFrame:
+    """T1: the headline ceilings of one socket, median with the range of the samples.
+
+    ``kind`` says what sort of number it is: *measured* rates are operation counts or
+    kernel bytes over a timed window; bandwidth bytes are modeled, not counted by the
+    memory controller.
+    """
+
+    peaks = isa_peaks(ext, theory)
+    peaks = peaks[peaks.scope.eq("1S") & peaks.cores.eq(56) & peaks.memory_mode.eq("flat") & peaks.socket.eq(0)]
+    rows = []
+    for key in ["fp64", "fp32", "avx512_bf16", "vnni_int8", "amx_bf16", "amx_int8"]:
+        r = peaks[peaks.path.eq(key)].iloc[0]
+        rows.append(
+            dict(
+                quantity=f"{theory.isa(key).label} peak", unit="TOP/s", median=r.gops / 1000, low=r.gops_min / 1000,
+                high=r.gops_max / 1000, n=int(r.n_samples), kind="measured, ops counted",
+            )
+        )
+    bw = bandwidth_summary(ext, thesis)
+    bw = bw[bw.locality.eq("local") & bw.socket_scope.eq("single") & bw.socket.eq(0) & bw.working_set_gib.sub(8).abs().lt(0.5)]
+    for cfg, kernel, name in [
+        ("flat_hbm", "read", "Flat HBM read-only"),
+        ("flat_hbm", "triad", "Flat HBM Triad"),
+        ("flat_ddr", "read", "Flat DDR read-only"),
+        ("flat_ddr", "triad", "Flat DDR Triad"),
+        ("cache", "read", "Cache read-only, 8 GiB"),
+    ]:
+        r = bw[bw.config.eq(cfg) & bw.kernel.eq(kernel)].iloc[0]
+        rows.append(
+            dict(
+                quantity=f"{name} (56 cores)", unit="GB/s", median=r.gbs, low=r.gbs_min, high=r.gbs_max, n=int(r.n_samples),
+                kind="measured, bytes modeled",
+            )
+        )
+    return pd.DataFrame(rows)
+
+
+def ridge_table(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
+    """T2: ridge point (operations per byte) of each compute path on each tier, one socket."""
+
+    from hwbench.roofline import ridge as _ridge
+
+    tiers = {
+        "HBM": memory_ceiling(ext, thesis, "flat", "hbm"),
+        "DDR": memory_ceiling(ext, thesis, "flat", "ddr"),
+        "Cache, 16 GiB": memory_ceiling(ext, thesis, "cache", "effective_cache", resident_gib=16),
+    }
+    rows = []
+    for key, label in [("fp64", "AVX-512 FP64"), ("fp32", "AVX-512 FP32"), ("avx512_bf16", "AVX-512 BF16"), ("vnni_int8", "VNNI INT8"), ("amx_bf16", "AMX BF16"), ("amx_int8", "AMX INT8")]:
+        c = compute_ceiling(ext, key, "flat", 56)
+        rows.append({"path": label, "peak (TOP/s)": c.gops / 1000, **{f"{n} ({m.gbs:.0f} GB/s)": _ridge(c.gops, m.gbs) for n, m in tiers.items()}})
+    return pd.DataFrame(rows)
+
+
+def measured_theory_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, hmat: dict[str, float]) -> pd.DataFrame:
+    """T3: measured against vendor or derived peak and against the firmware-advertised figure."""
+
+    peaks = isa_peaks(ext, theory)
+    peaks = peaks[peaks.scope.eq("1S") & peaks.cores.eq(56) & peaks.memory_mode.eq("flat") & peaks.socket.eq(0)].set_index("path")
+    rows = []
+    for key in ["fp64", "fp32", "avx512_bf16", "vnni_int8", "amx_bf16", "amx_int8"]:
+        r = peaks.loc[key]
+        rows.append(
+            dict(
+                quantity=f"{theory.isa(key).label} (TOP/s)", measured=r.gops / 1000, theoretical=r.theory_gops_at_clock / 1000 if "theory_gops_at_clock" in r else r.gops / r.efficiency_at_clock / 1000,
+                theory_status=r.theory_status, firmware=math.nan,
+            )
+        )
+    hbm_read = memory_ceiling(ext, thesis, "flat", "hbm", access="read").gbs
+    ddr_read = memory_ceiling(ext, thesis, "flat", "ddr", access="read").gbs
+    rows.append(dict(quantity="DDR read (GB/s)", measured=ddr_read, theoretical=theory.memory_gbs("ddr"), theory_status="derived", firmware=hmat["ddr"]))
+    rows.append(dict(quantity="HBM read (GB/s)", measured=hbm_read, theoretical=theory.memory_gbs("hbm"), theory_status="vendor, rounded", firmware=hmat["hbm"]))
+    out = pd.DataFrame(rows)
+    out["measured_over_theoretical"] = out.measured / out.theoretical
+    out["measured_over_firmware"] = out.measured / out.firmware
+    return out
+
+
+def unmeasured_table() -> pd.DataFrame:
+    """T4: what this study does not measure, and what blocks it."""
+
+    return pd.DataFrame(
+        [
+            ("Memory traffic of GEMM and sweeps (counted bytes)", "uncore_imc counters need CAP_PERFMON or paranoid ≤ 0", "bandwidth and intensity are modeled"),
+            ("Cache-mode hit rate", "memory-side-cache tag events are uncore (M2M)", "conflict misses are inferred from bandwidth"),
+            ("Why remote HBM collapses", "UPI and CHA counters are uncore", "mechanism unidentified; one campaign"),
+            ("Why the clock falls while HBM streams", "power and turbostat counters need privileges", "cause unidentified"),
+            ("Energy", "RAPL needs privileges", "no energy figures"),
+            ("Latency of a Cache-mode miss", "not run (pointer chase beyond 64 GiB)", "spilled latency is blank"),
+            ("HBM device capability beyond 56 cores", "SNC4 / HBM-only modes are not available on the node", "HBM ceiling is a 56-core figure"),
+            ("SMT", "SMT is off on CRESCO8", "no SMT effect"),
+        ],
+        columns=["not measured", "what blocks it", "consequence here"],
+    )

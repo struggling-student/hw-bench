@@ -48,13 +48,23 @@ NOTEBOOKS["00_master_analysis"] = [
 
 **Question.** What can one CRESCO8 Xeon CPU Max 9480 node sustain, per precision and memory configuration, and where do those limits sit relative to the vendor's peaks?
 
-This notebook carries only the findings. Every number comes from a measured campaign (five steady one-second samples per point) and links back to its campaign id in the supporting notebooks: [platform and methodology](01_platform_and_methodology.ipynb), [memory](02_memory_hierarchy_and_bandwidth.ipynb), [NUMA and sockets](03_numa_and_socket_scaling.ipynb), [compute](04_compute_throughput.ipynb), [roofline atlas](05_roofline_atlas.ipynb).
+This notebook carries the findings in six figures and four tables; the supporting notebooks hold the detail: [platform and methodology](01_platform_and_methodology.ipynb), [memory](02_memory_hierarchy_and_bandwidth.ipynb), [NUMA and sockets](03_numa_and_socket_scaling.ipynb), [compute](04_compute_throughput.ipynb), [roofline atlas](05_roofline_atlas.ipynb). Every number is computed from the selected campaigns (five steady one-second samples per point).
+
+**Kinds of number.** *Measured*: time, operation counts, user-mode cycles, load latency, checksums. *Modeled*: every byte count and therefore every GB/s, arithmetic intensity, GEMM traffic and ridge point. *Theoretical*: vendor or derived per-cycle peaks, DDR5 transfer rate, "up to 1 TB/s" for HBM. *Firmware-advertised*: the ACPI HMAT figures, which are neither measured nor derived here. *Inferred* statements say so where they occur.
+
+**Colour.** Blue is Flat DDR, orange is Flat HBM, aqua is Cache mode; the violet ramp is the compute path (darker means more operations per cycle); hatching means a worse placement (remote or interleaved); line style says what a ceiling is (dashed vendor, solid measured, dotted library-achievable).
 """),
     code(setup("00_master_analysis")),
     md("""
-## 1. Platform and what was measured
+## 1. Platform and headline ceilings
 
 Two sockets × 56 cores, SMT off, 64 GiB HBM2e and 8-channel DDR5-4800 per socket. *Flat* mode exposes HBM and DDR as separate NUMA nodes; *Cache* mode makes HBM a memory-side cache in front of DDR. Flat results were taken on one dedicated node outside Slurm (the October runs went through an exclusive Slurm allocation on the same node and are labelled as such); Cache results come from Slurm allocations on other nodes.
+
+**Table 1 — headline ceilings of one socket.** Median of the samples with their minimum and maximum.
+"""),
+    code("""
+t1 = report.headline_table(ext, thesis, theory)
+table(t1.rename(columns={'low': 'min', 'high': 'max', 'n': 'samples'}), 1)
 """),
     code("""
 prov = (ctx.everything[ctx.everything.campaign_id.isin(
@@ -64,153 +74,110 @@ prov = (ctx.everything[ctx.everything.campaign_id.isin(
 table(prov)
 """),
     md("""
-## 2. Compute: peak per execution path
+## 2. Compute: what each path delivers per cycle
 
-The *efficiency at clock* column is the honest one: the cores do not run at the 1.9 GHz base clock, so a datasheet comparison at base clock can read above 100%. The measured clocks are stated below the figure.
+The only quantity comparable across paths is the fraction of the per-cycle figure, read at the clock the cores actually ran at. A datasheet comparison at base clock can read above 100%.
 """),
     code("""
 peaks = report.isa_peaks(ext, theory)
-one = peaks[(peaks.scope == '1S') & (peaks.cores == 56)].groupby(['memory_mode', 'path'], as_index=False).first()
-shown = one.pivot(index='path', columns='memory_mode', values='gops') / 1000
-shown['ops/cycle/core (flat)'] = one[one.memory_mode == 'flat'].set_index('path').ops_per_cycle_per_core
-shown['theory ops/cycle'] = one[one.memory_mode == 'flat'].set_index('path').theory_ops_per_cycle
-shown['efficiency at clock (flat)'] = one[one.memory_mode == 'flat'].set_index('path').efficiency_at_clock
-shown = shown.rename(columns={'cache': 'Cache TOP/s', 'flat': 'Flat TOP/s'}).reset_index()
-table(shown)
-"""),
-    code("""
-fig = plotting.go.Figure()
-flat = one[one.memory_mode == 'flat'].set_index('path')
-order = ['fp64', 'fp32', 'avx512_bf16', 'vnni_int8', 'amx_bf16', 'amx_int8']
-fig.add_bar(x=order, y=[flat.loc[p, 'gops'] / 1000 for p in order], name='Measured (1 socket, 56 cores)',
-            marker_color=[plotting.PATH_COLORS[p] for p in order])
-fig.add_scatter(x=order, y=[theory.peak_gops(p, 56) / 1000 for p in order], mode='markers', name='Theoretical at 1.9 GHz base',
-                marker=dict(symbol='line-ew', size=26, line=dict(width=3, color='#6B7480')))
-plotting.style(fig, 'Peak throughput by execution path · one socket', 'Execution path', 'TOP/s (operations = multiply + add)', 520)
-fig.update_yaxes(type='log')
-figure(fig, 'compute_peaks')
-say_claims(claims.compute_paths(ext, theory), ['clocks'])
-"""),
-    code("""
-amx = flat.loc['amx_bf16']; i8 = flat.loc['amx_int8']; vb = flat.loc['avx512_bf16']; f32 = flat.loc['fp32']
+one = peaks[(peaks.scope == '1S') & (peaks.cores == 56) & (peaks.memory_mode == 'flat') & (peaks.socket == 0)].copy()
+fig = plotting.compute_efficiency_figure(one, {'avx512_bf16': 'two-port bound is assumed'})
+figure(fig, 'compute_efficiency')
+flat = one.set_index('path')
+amx, i8, vb, f32 = flat.loc['amx_bf16'], flat.loc['amx_int8'], flat.loc['avx512_bf16'], flat.loc['fp32']
 say(f"**Result.** One socket sustains {i8.gops/1000:.0f} TOP/s on AMX INT8 and {amx.gops/1000:.0f} TOP/s on AMX BF16 "
-    f"({amx.efficiency_at_clock:.1%} of the peak at the {amx.ghz_effective:.2f} GHz the cores actually ran). "
-    f"The AVX-512 BF16 dot-product path reaches only {vb.gops/1000:.1f} TOP/s ({vb.ops_per_cycle_per_core:.0f} ops/cycle/core, {vb.ops_per_cycle_per_core/64:.2f} instruction per cycle at 64 operations each), "
-    f"less than half of FP32 FMA ({f32.gops/1000:.1f} TOP/s): software that cannot use AMX gains little from BF16 weights in compute-bound regimes.")
+    f"({amx.efficiency_at_clock:.1%} of the peak at the {amx.ghz_effective:.2f} GHz the cores ran at). "
+    f"The AVX-512 BF16 dot product reaches {vb.ops_per_cycle_per_core:.0f} operations per cycle, {vb.ops_per_cycle_per_core/64:.2f} instruction per cycle at 64 operations each; "
+    f"its 128-operation bound is a two-port assumption of this study, not a vendor figure, so its {vb.efficiency_at_clock:.0%} efficiency depends on that assumption. "
+    f"It is not a faster path than FP32 FMA ({f32.gops/1000:.1f} versus {vb.gops/1000:.1f} TOP/s).")
+say_claims(claims.compute_paths(ext, theory), ['clocks', 'amx_busy'])
 """),
     md("""
-## 3. Memory: sustained bandwidth by tier and kernel
+## 3. Memory: bandwidth against cores and against working set
+"""),
+    code("""
+rs = report.read_scaling(ext)
+rs = rs[rs.socket == 0]
+fig = plotting.memory_scaling_figure(rs, report.read_scaling_clock(ext))
+figure(fig, 'memory_scaling')
+say_claims(claims.core_scaling(ext, thesis, ROOT), ['ddr_saturates', 'hbm_still_scaling', 'hbm_clock_drop', 'hmat_gap'])
 """),
     code("""
 bw = report.bandwidth_summary(ext, thesis)
-local = bw[(bw.locality == 'local') & (bw.socket_scope == 'single') & (bw.socket == 0) & (bw.working_set_gib == 8)]
-table(local.pivot_table(index='config', columns='kernel', values='gbs').reset_index())
-"""),
-    code("""
-l1 = report.hierarchy(ext)
-lv, lat = report.level_summary(l1)
-table(lat.pivot(index='level', columns='config', values='latency_ns').reset_index())
-"""),
-    code("""
-p = local.pivot_table(index='config', columns='kernel', values='gbs')
-say(f"**Result.** One socket's HBM sustains {p.loc['flat_hbm'].max():.0f} GB/s against {p.loc['flat_ddr'].max():.0f} GB/s for DDR "
-    f"({p.loc['flat_hbm'].max()/p.loc['flat_ddr'].max():.1f}×). HBM trades latency for bandwidth: an idle dependent load costs "
-    f"{lat[(lat.config=='flat_hbm')&(lat.level=='memory')].latency_ns.iloc[0]:.0f} ns on HBM against "
-    f"{lat[(lat.config=='flat_ddr')&(lat.level=='memory')].latency_ns.iloc[0]:.0f} ns on DDR.")
+bw0 = bw[(bw.socket_scope == 'single') & (bw.socket == 0) & (bw.locality == 'local')]
+fig = plotting.cache_capacity_figure(bw0[bw0.config == 'cache'], bw0[(bw0.config != 'cache') & (bw0.working_set_gib.sub(8).abs() < 0.5)],
+                                     {'16 GiB: 8B BF16 model': 16, '64 GiB: HBM capacity': 64})
+figure(fig, 'cache_capacity')
+say_claims(claims.cache_mode(ext, thesis), ['cache_declines_before_capacity', 'cache_resident_model', 'cache_below_flat_ddr'])
+say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_resident_only'])
 """),
     md("""
-## 4. Flat versus Cache
+## 4. The headline roofline: one socket, Flat mode
 
-Compute is identical in both modes (the memory mode does not touch the cores); only the memory system differs. The table compares one resident and one spilled working set; the statements below it give the dependence on working-set size.
-"""),
-    code("""
-bwa = report.bandwidth_summary(ext, thesis)
-bwa = bwa[(bwa.socket_scope == 'single') & (bwa.socket == 0) & (bwa.locality == 'local')]
-def best(cfg, ws=None):
-    sel = bwa[bwa.config == cfg] if ws is None else bwa[(bwa.config == cfg) & (bwa.working_set_gib == ws)]
-    return sel.loc[sel.gbs.idxmax()]
-pk = report.isa_peaks(ext, theory)
-amx_by_mode = pk[(pk.path == 'amx_bf16') & (pk.scope == '1S') & (pk.cores == 56)].groupby('memory_mode').gops.median() / 1000
-rows = [
-    dict(memory='Flat · HBM', GBs=best('flat_hbm').gbs, idle_latency_ns=lat[(lat.config == 'flat_hbm') & (lat.level == 'memory')].latency_ns.iloc[0], amx_bf16_TOPs=amx_by_mode['flat']),
-    dict(memory='Flat · DDR', GBs=best('flat_ddr').gbs, idle_latency_ns=lat[(lat.config == 'flat_ddr') & (lat.level == 'memory')].latency_ns.iloc[0], amx_bf16_TOPs=amx_by_mode['flat']),
-    dict(memory='Cache · 8 GiB (resident)', GBs=best('cache', 8.0).gbs, idle_latency_ns=lat[(lat.config == 'cache') & (lat.level == 'memory')].latency_ns.iloc[0], amx_bf16_TOPs=amx_by_mode['cache']),
-    dict(memory='Cache · 96 GiB (spilled)', GBs=best('cache', 96.0).gbs, idle_latency_ns=np.nan, amx_bf16_TOPs=amx_by_mode['cache']),
-]
-fc = pd.DataFrame(rows)
-table(fc)
-say(f"**Result.** The best kernel delivers {fc.GBs[2]:.0f} GB/s at 8 GiB ({fc.GBs[2]/fc.GBs[0]:.0%} of Flat HBM's best) and {fc.GBs[3]:.0f} GB/s at 96 GiB. "
-    f"Idle memory latency was measured only inside the HBM cache ({fc.idle_latency_ns[2]:.0f} ns, against {fc.idle_latency_ns[0]:.0f} ns on Flat HBM and {fc.idle_latency_ns[1]:.0f} ns on Flat DDR); the spilled case is blank because it was not measured. "
-    f"AMX BF16 throughput differs by {abs(amx_by_mode['cache']/amx_by_mode['flat']-1):.1%} between modes.")
-say_claims(claims.cache_mode(ext, thesis) + claims.latency(ext, theory), ['cache_declines_before_capacity', 'cache_resident_model', 'cache_below_flat_ddr', 'cache_latency_resident_only'])
-"""),
-    md("""
-## 5. Placement and sockets
+Memory slopes are the read-only ceilings, because GEMM weights are only read. The dotted line is the best rate a library GEMM achieved (not a hardware limit). Points are the BF16 14336×4096 projection for batch sizes M = 1 to 4096, on HBM and on DDR; intensity is modeled. The shaded bands are decode (small M) and prefill (large M).
 
-Where memory sits matters. The statements below the result give the remote-memory penalty, the two-socket efficiency and the cost of one process spanning both sockets.
-"""),
-    code("""
-loc = report.locality_ratio(ext, thesis)
-de = report.dual_efficiency(ext, thesis)
-sp = report.span_table(ext)
-spm = sp[(sp.memory_mode == 'flat') & (sp.benchmark == 'stream_read') & (sp.config == 'flat_hbm')].set_index('placement').gbs
-local_hbm = loc[(loc.config == 'flat_hbm') & (loc.kernel == 'read')].local.mean()
-say(f"**Result.** Remote HBM reads reach {loc[(loc.config=='flat_hbm')&(loc.kernel=='read')].remote.mean():.0f} GB/s against {local_hbm:.0f} GB/s local. "
-    f"Two timed processes retain {de.efficiency.median():.1%} (median) of the sum of isolated sockets. One 112-thread process reads HBM at {spm['firsttouch']:.0f} GB/s with first-touch placement "
-    f"but {spm['interleave']:.0f} GB/s with interleaved pages ({spm['interleave']/spm['firsttouch']:.0%}).")
-say_claims(claims.placement(ext, thesis) + claims.sockets(ext, thesis) + claims.span(ext, thesis), ['remote_hbm', 'dual_efficiency', 'span_flat_hbm', 'span_interleave_cost'])
-"""),
-    md("""
-## 6. Achieved GEMM against the peaks
+**Table 2 — ridge points** (operations per byte at which each path stops being memory-bound).
 """),
     code("""
 gm = report.gemm_points(ext)
-fl = gm[gm.memory_mode == 'flat']
-rows = []
-for dtype, path in [('bf16', 'amx_bf16'), ('int8', 'amx_int8')]:
-    peak = flat.loc[path, 'gops']
-    sel = fl[(fl.dtype == dtype) & (fl.memory_target == 'hbm')]
-    rows.append(dict(precision=dtype, measured_tile_peak_TOPs=peak / 1000, best_gemm_TOPs=sel.gops.max() / 1000, fraction=sel.gops.max() / peak,
-                     M1_TOPs=sel[sel.m == 1].gops.max() / 1000, M1_traffic_GBs=sel[sel.m == 1].gbs.max()))
-table(pd.DataFrame(rows))
+mem_read = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', access='read'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', access='read')]
+compute = [report.compute_ceiling(ext, p, 'flat', 56) for p in ('fp32', 'amx_bf16', 'amx_int8')] + [report.library_ceiling(gm, 'amx_bf16')]
+sel = gm[(gm.memory_mode == 'flat') & (gm.dtype == 'bf16') & (gm['shape'] == '14336x4096')]
+pts = report.gemm_workload_points(sel, theory)
+at = {(p.memory_target, int(p.provenance['label'][2:])): p.intensity for p in pts}
+for p in pts:
+    # Label HBM points at every fourth M; DDR points are unlabelled so labels never overprint.
+    m = int(p.provenance['label'][2:])
+    p.provenance['label'] = p.provenance['label'] if p.memory_target == 'hbm' and m in (1, 4, 16, 64, 256, 1024, 4096) else ''
+regions = [(at[('hbm', 1)] / 1.3, at[('hbm', 16)] * 1.3, 'decode'), (at[('hbm', 256)] / 1.3, at[('hbm', 4096)] * 1.3, 'prefill')]
+fig = plotting.roofline_figure(compute, mem_read, pts, title='Roofline · Flat · one socket · BF16 14336×4096 by batch M', regions=regions, point_labels=True)
+figure(fig, 'headline_roofline')
+audit = roofline.audit_points(pts, mem_read, compute)
+say(f"**Result.** {int(audit.exceeds.sum())} of {len(audit)} plotted points lie above their roofline by more than their spread "
+    f"(largest excess {audit.ratio.max() - 1:.1%}); they are listed in the [atlas](05_roofline_atlas.ipynb). "
+    f"The best library rate is {compute[-1].gops/1000:.0f} TOP/s, {compute[-1].gops/compute[1].gops:.0%} of the measured AMX BF16 peak.")
+say_claims(claims.ridges(ext, thesis, theory), ['ridge_points'])
+table(report.ridge_table(ext, thesis), 1)
+"""),
+    md("""
+## 5. GEMM efficiency against batch size
+
+Two panels share the M axis: the share of the measured tile peak reached, and the share of the read-bandwidth ceiling that the modeled bytes imply.
+"""),
+    code("""
+sweeps = {}
+tile = {d: report.compute_ceiling(ext, p, 'flat', 56).gops for d, p in (('bf16', 'amx_bf16'), ('int8', 'amx_int8'))}
+for dtype, path in (('bf16', 'amx_bf16'), ('int8', 'amx_int8')):
+    part = gm[(gm.memory_mode == 'flat') & (gm.memory_target == 'hbm') & (gm.dtype == dtype) & (gm['shape'] == '14336x4096')].copy()
+    part['tile_fraction'] = part.gops / tile[dtype]
+    part['bandwidth_fraction'] = part.gbs / mem_read[0].gbs
+    sweeps[path] = part
+fig = plotting.gemm_efficiency_figure(sweeps, decode_max=16, prefill_min=256)
+figure(fig, 'gemm_efficiency')
 say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_fraction_of_tile_peak', 'gemm_asymmetry', 'gemv_fixed_cost'])
 """),
     md("""
-The [atlas](05_roofline_atlas.ipynb) compares these achieved rates with the instruction peak and lists every point above its roofline.
-
-## 7. Where the ceilings meet: ridge points
-
-The ridge is the operational intensity at which a kernel stops being limited by memory and starts being limited by compute. It sets how much reuse a workload needs before extra compute helps.
+## 6. Placement: remote memory and one process on both sockets
 """),
     code("""
-mem = report.bandwidth_summary(ext, thesis)
-best = {}
-for cfg in ['flat_hbm', 'flat_ddr', 'cache']:
-    sel = mem[(mem.config == cfg) & (mem.locality == 'local') & (mem.socket_scope == 'single') & (mem.socket == 0)]
-    if cfg == 'cache':
-        sel = sel[sel.working_set_gib <= 16]
-    best[cfg] = sel.gbs.max()
-rows = []
-for p in order:
-    for cfg, gbs in best.items():
-        rows.append(dict(path=p, memory=plotting.CONFIG_LABELS[cfg],
-                         compute_TOPs=flat.loc[p, 'gops'] / 1000, bandwidth_GBs=gbs,
-                         ridge_op_per_byte=roofline.ridge(flat.loc[p, 'gops'], gbs)))
-table(pd.DataFrame(rows).pivot(index='path', columns='memory', values='ridge_op_per_byte').reindex(order).reset_index())
-"""),
-    code("""
-say_claims(claims.ridges(ext, thesis, theory), ['ridge_points'])
+fig = plotting.placement_figure(report.local_remote_table(ext, thesis), report.span_reference(ext, thesis))
+figure(fig, 'placement')
+say_claims(claims.placement(ext, thesis) + claims.sockets(ext, thesis) + claims.span(ext, thesis), ['remote_hbm', 'dual_efficiency', 'span_flat_hbm', 'span_interleave_cost'])
 """),
     md("""
-The [roofline atlas](05_roofline_atlas.ipynb) draws these ceilings with measured GEMM points.
+## 7. Reference tables
 
-## 8. Limits of these results
-
-* Bytes are *modeled* (kernel traffic convention), not memory-controller counts: uncore counters are not readable without privileges. Write-allocate behaviour is therefore inferred, not observed.
-* No power or energy was measured (RAPL needs root).
-* SMT is off on these nodes; its effect is documented, not measured.
-* Cache-mode HBM hit rates are inferred from bandwidth versus working-set size only, and the HBM ceiling is a 56-core sustainable figure, not the capability of the HBM devices.
-* Peaks come from synthetic kernels; GEMM points show what a library achieves at representative shapes.
+**Table 3 — measured against vendor or derived peak and against the firmware figure.** Compute peaks are compared at the clock the cores ran at; the HBM "vendor" figure is a rounded 1 TB/s, and the firmware (HMAT) figures are advertised, not measured.
+"""),
+    code("""
+t3 = report.measured_theory_table(ext, thesis, theory, claims.hmat_gbs(ROOT))
+table(t3.rename(columns={'theoretical': 'theoretical (compute at measured clock)'}), 3)
+"""),
+    md("""
+**Table 4 — what is not measured, and why.**
+"""),
+    code("""
+table(report.unmeasured_table())
 """),
 ]
 
@@ -345,7 +312,7 @@ figure(fig, 'hierarchy_read_1core')
 full = h[h.notes == 'hier_read_56']
 fig = plotting.line_by_config(full, 'per_thread_bytes', 'gbs', 'config', 'Read bandwidth · 56 cores, one socket',
                               'Working set per core (bytes)', 'GB/s', log_y=True)
-plotting.mark_x(fig, {'L1d 48 KiB': 48 * 2**10, 'L2 2 MiB': 2 * 2**20, 'L3 share 2 MiB': 112.5 * 2**20 / 56 * 1.02})
+plotting.mark_x(fig, {'L1d 48 KiB': 48 * 2**10, 'L2 / L3 share 2 MiB': 2 * 2**20})
 plotting.bytes_axis(fig, 2**14, 2**28)
 figure(fig, 'hierarchy_read_56cores')
 """),
@@ -437,12 +404,8 @@ A workload that uses fewer cores than the saturation point (for example a server
 """),
     code("""
 cap = bw[(bw.config == 'cache') & (bw.socket_scope == 'single') & (bw.socket == 0)]
-fig = plotting.go.Figure()
-for kernel, part in cap.groupby('kernel'):
-    part = part.sort_values('working_set_gib')
-    fig.add_scatter(x=part.working_set_gib, y=part.gbs, mode='lines+markers', name=kernel)
-fig.add_vline(x=64, line_dash='dot', line_color='#9AA3AF', annotation_text='HBM 64 GiB', annotation_position='top')
-plotting.style(fig, 'Cache-mode bandwidth against working set · socket 0', 'Working set (GiB)', 'GB/s', 500)
+flat_ref = bw[(bw.config != 'cache') & (bw.socket_scope == 'single') & (bw.socket == 0) & (bw.locality == 'local') & ((bw.working_set_gib - 8).abs() < 0.5)]
+fig = plotting.cache_capacity_figure(cap, flat_ref, {'16 GiB: 8B BF16 model': 16, '64 GiB: HBM capacity': 64})
 figure(fig, 'cache_capacity')
 table(cap.pivot_table(index='working_set_gib', columns='kernel', values='gbs').reset_index())
 """),
@@ -480,14 +443,14 @@ Remote and local refer to the memory socket relative to the CPU socket. Two-sock
 """),
     code("""
 loc = report.locality_ratio(ext, thesis)
+lr = report.local_remote_table(ext, thesis)
 fig = plotting.go.Figure()
-for cfg in ['flat_ddr', 'flat_hbm']:
-    part = loc[loc.config == cfg].groupby('kernel')[['local', 'remote']].mean()
-    for placement, dash in [('local', None), ('remote', 'dot')]:
-        fig.add_bar(x=[f'{k}' for k in part.index], y=part[placement], name=f"{plotting.CONFIG_LABELS[cfg]} · {placement}",
-                    marker_color=plotting.CONFIG_COLORS[cfg], opacity=1.0 if placement == 'local' else 0.45)
-plotting.style(fig, 'Local and remote bandwidth · socket 0 and 1 averaged', 'Kernel', 'GB/s', 480)
-fig.update_layout(barmode='group')
+for placement, hatch in (('local', ''), ('remote', '/')):
+    fig.add_bar(x=lr.label, y=lr[placement], showlegend=False,
+                marker=dict(color=[plotting.CONFIG_COLORS[c] for c in lr.config], pattern=dict(shape=hatch, fgcolor=plotting.SURFACE, size=6, solidity=0.5), line=dict(width=0)),
+                error_y=dict(type='data', array=lr[f'{placement}_spread'], color=plotting.INK_2, thickness=1.2))
+plotting.style(fig, 'Local (solid) and remote (hatched) bandwidth · mean of the two sockets, bars show their spread', 'Tier and kernel', 'GB/s', 480)
+fig.update_layout(barmode='group', bargap=0.3, margin=dict(l=85, r=40, t=85, b=80))
 figure(fig, 'local_remote_bandwidth')
 table(loc.groupby(['config', 'kernel'], as_index=False)[['local', 'remote', 'remote_over_local']].mean())
 """),
@@ -513,15 +476,9 @@ de['label'] = np.where(bandwidth,
     de.benchmark.str.replace('stream_', '', regex=False) + ' ' + de.config.str.replace('flat_', '', regex=False) + ' ' + de.working_set_gib.round(0).fillna(0).astype(int).astype(str) + 'G',
     de.benchmark.str.replace('_peak', '', regex=False) + ' ' + de.dtype.fillna(''))
 view = de[de.working_set_gib.isna() | (de.working_set_gib <= 16)].copy()
-view = view.groupby(['memory_mode', 'label'], as_index=False).efficiency.median()
-fig = plotting.go.Figure()
-for mode, part in view.groupby('memory_mode'):
-    fig.add_bar(x=part.label, y=part.efficiency, name='Cache' if mode == 'cache' else 'Flat',
-                marker_color='#268270' if mode == 'cache' else '#C24A40')
-fig.add_hline(y=1.0, line_dash='dot', line_color='#6B7480')
-plotting.style(fig, 'Two-socket scaling efficiency · dual rate ÷ sum of isolated sockets', 'Kernel', 'Efficiency', 520)
-fig.update_layout(barmode='group')
-fig.update_yaxes(range=[0.95, 1.03])
+view['colour'] = [plotting.CONFIG_COLORS[c] if b.startswith('stream') else plotting.PATH_COLORS[theory.isa_for(b, d).key]
+                  for b, d, c in zip(view.benchmark, view.dtype, view.config)]
+fig = plotting.dual_efficiency_figure(view)
 figure(fig, 'dual_socket_efficiency')
 table(de.drop(columns=['label', 'metric']))
 """),
@@ -540,14 +497,17 @@ sp = report.span_table(ext)
 table(sp[['memory_mode', 'config', 'benchmark', 'placement', 'k', 'gbs', 'gops', 'cv_percent', 'n_samples']])
 """),
     code("""
-mem = sp[sp.benchmark.isin(['stream_read', 'stream_triad']) & sp.placement.isin(['interleave', 'firsttouch'])]
+ref = pd.concat([report.span_reference(ext, thesis, 'read'), report.span_reference(ext, thesis, 'triad')], ignore_index=True)
 fig = plotting.go.Figure()
-for placement, color in [('interleave', '#3476A6'), ('firsttouch', '#C24A40')]:
-    part = mem[mem.placement == placement]
-    fig.add_bar(x=part.config + ' · ' + part.benchmark.str.replace('stream_', ''), y=part.gbs, name=placement, marker_color=color)
-dual_ref = report.bandwidth_summary(ext, thesis)
-plotting.style(fig, 'Single process, 112 threads · bandwidth by page placement', 'Memory · kernel', 'GB/s', 500)
-fig.update_layout(barmode='group')
+for placement, hatch in (('firsttouch', ''), ('interleave', '/')):
+    part = ref[ref.placement == placement]
+    fig.add_bar(x=part.label, y=part.gbs, showlegend=False,
+                marker=dict(color=[plotting.CONFIG_COLORS[c] for c in part.config], pattern=dict(shape=hatch, fgcolor=plotting.SURFACE, size=6, solidity=0.5), line=dict(width=0)))
+once = ref.drop_duplicates('label')
+fig.add_scatter(x=once.label, y=once.isolated_sum, mode='markers', name='two isolated sockets, summed',
+                marker=dict(symbol='diamond', size=12, color=plotting.INK, line=dict(color=plotting.SURFACE, width=1.5)))
+plotting.style(fig, 'One 112-thread process · first-touch (solid) and interleaved (hatched)', 'Tier and kernel', 'GB/s', 500)
+fig.update_layout(barmode='group', bargap=0.3, margin=dict(l=85, r=40, t=85, b=110))
 figure(fig, 'span_bandwidth')
 """),
     code("""
@@ -612,12 +572,7 @@ one = one.set_index('path').loc[order].reset_index()
 table(one[['path', 'label', 'gops', 'cv_percent', 'ghz_effective', 'amx_busy_frac', 'ops_per_cycle_per_core', 'theory_ops_per_cycle', 'efficiency_base', 'efficiency_at_clock', 'theory_status']])
 """),
     code("""
-fig = plotting.go.Figure()
-fig.add_bar(x=one.path, y=one.ops_per_cycle_per_core, name='Measured', marker_color=[plotting.PATH_COLORS[p] for p in one.path])
-fig.add_scatter(x=one.path, y=one.theory_ops_per_cycle, mode='markers', name='Vendor / derived peak',
-                marker=dict(symbol='line-ew', size=26, line=dict(width=3, color='#6B7480')))
-plotting.style(fig, 'Operations per cycle per core · Flat, 56 cores', 'Execution path', 'Operations per cycle', 480)
-fig.update_yaxes(type='log')
+fig = plotting.compute_efficiency_figure(one, {'avx512_bf16': 'two-port bound is assumed'})
 figure(fig, 'ops_per_cycle')
 """),
     code("""
@@ -656,24 +611,38 @@ table(gm.groupby(['config', 'dtype', 'memory_target']).agg(best_TOPs=('gops', la
 """),
     code("""
 sel = gm[(gm.memory_target == 'hbm') & (gm.dtype == 'bf16')]
+raw = ext[(ext.benchmark == 'onednn_gemm_sweep') & (ext.memory_mode == 'flat') & (ext.memory_target == 'hbm') & (ext.dtype == 'bf16')].copy()
+raw['shape'] = raw.n.astype(int).astype(str) + 'x' + raw.k.astype(int).astype(str)
 fig = plotting.go.Figure()
 for shape, part in sel.groupby('shape'):
     part = part.sort_values('m')
-    fig.add_scatter(x=part.m, y=part.gops / 1000, mode='lines+markers', name=f'{shape}')
-plotting.mark_y(fig, tile['bf16'] / 1000, 'AMX BF16 tile peak')
-plotting.style(fig, 'BF16 GEMM against batch M · Flat HBM, 56 cores', 'M (tokens per batch)', 'TOP/s', 520)
-fig.update_xaxes(type='log'); fig.update_yaxes(type='log')
+    color = plotting.SHAPE_COLORS[shape]
+    samples = raw[raw['shape'] == shape]
+    fig.add_scatter(x=samples.m, y=samples.performance_gops / 1000, mode='markers', showlegend=False, hoverinfo='skip',
+                    marker=dict(size=5, color=color, opacity=0.35))
+    fig.add_scatter(x=part.m, y=part.gops / 1000, mode='lines+markers', name=f'{shape}', line=dict(color=color, width=2.2),
+                    marker=dict(size=7, line=dict(color=plotting.SURFACE, width=1.5)))
+plotting.mark_y(fig, tile['bf16'] / 1000, 'AMX BF16 tile peak (measured)')
+plotting.style(fig, 'BF16 GEMM against batch M · Flat HBM, 56 cores · line: median, dots: every sample', 'M (tokens per batch)', 'TOP/s', 520)
+fig.update_xaxes(type='log', dtick=1, tickformat='~g'); fig.update_yaxes(type='log', dtick=1, tickformat='~g')
 figure(fig, 'gemm_bf16_m_sweep')
 """),
     code("""
 sel = gm[(gm.memory_target == 'hbm') & (gm.dtype == 'int8')]
+raw = ext[(ext.benchmark == 'onednn_gemm_sweep') & (ext.memory_mode == 'flat') & (ext.memory_target == 'hbm') & (ext.dtype == 'int8')].copy()
+raw['shape'] = raw.n.astype(int).astype(str) + 'x' + raw.k.astype(int).astype(str)
 fig = plotting.go.Figure()
 for shape, part in sel.groupby('shape'):
     part = part.sort_values('m')
-    fig.add_scatter(x=part.m, y=part.gops / 1000, mode='lines+markers', name=f'{shape}')
-plotting.mark_y(fig, tile['int8'] / 1000, 'AMX INT8 tile peak')
-plotting.style(fig, 'INT8 GEMM against batch M · Flat HBM, 56 cores', 'M (tokens per batch)', 'TOP/s', 520)
-fig.update_xaxes(type='log'); fig.update_yaxes(type='log')
+    color = plotting.SHAPE_COLORS[shape]
+    samples = raw[raw['shape'] == shape]
+    fig.add_scatter(x=samples.m, y=samples.performance_gops / 1000, mode='markers', showlegend=False, hoverinfo='skip',
+                    marker=dict(size=5, color=color, opacity=0.35))
+    fig.add_scatter(x=part.m, y=part.gops / 1000, mode='lines+markers', name=f'{shape}', line=dict(color=color, width=2.2),
+                    marker=dict(size=7, line=dict(color=plotting.SURFACE, width=1.5)))
+plotting.mark_y(fig, tile['int8'] / 1000, 'AMX INT8 tile peak (measured)')
+plotting.style(fig, 'INT8 GEMM against batch M · Flat HBM, 56 cores · line: median, dots: every sample', 'M (tokens per batch)', 'TOP/s', 520)
+fig.update_xaxes(type='log', dtick=1, tickformat='~g'); fig.update_yaxes(type='log', dtick=1, tickformat='~g')
 figure(fig, 'gemm_int8_m_sweep')
 """),
     code("""
