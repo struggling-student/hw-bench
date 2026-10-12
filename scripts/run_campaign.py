@@ -506,7 +506,7 @@ def main():
                 for t in ISA_THREAD_STEPS:
                     execute(spec(socket, kind, t, label="isa_scaling"))
             # Reference kinds are already measured in October without counters;
-            # rerun the points that matter with them (all cores and the LLM's 55).
+            # rerun the points that matter with them (all cores and 55).
             for kind in ISA_REFERENCE_KINDS:
                 for t in (55, 56):
                     execute(spec(socket, kind, t, label="isa_scaling"))

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Verified oneDNN GEMM at LLM projection shapes, with weights streamed from memory.
+"""Verified oneDNN GEMM at representative projection shapes, with weights streamed from memory.
 
 One process measures one (M, N, K) point.  Weights are a *pool* of identical
 N x K matrices at distinct addresses, sized well beyond the last-level cache and
-visited round-robin, so each call reads its weights from memory the way a decoder
-layer does.  ``y = x @ W^T`` with x of shape M x K, as in ``nn.Linear``.
+visited round-robin, so each call reads its weights from memory to model repeated
+streaming access.  ``y = x @ W^T`` with x of shape M x K, as in ``nn.Linear``.
 
 Modeled traffic per call is the weight matrix + activations in + result out;
 operations are 2*M*N*K.  The two together place the point on a roofline.

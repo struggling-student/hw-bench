@@ -34,8 +34,6 @@ Statistics are medians and sample standard deviations of five windows within a r
 
 ## Rooflines and reference values
 
-`P(I) = min(P_compute, B × I)` and `I_ridge = P_compute / B`. Operations, decimal GB/s and binary GiB are kept distinct. Every pair matches mode and socket scope; campaign ids stay in the tables. The primary memory ceiling is the best sustained of Triad, non-temporal Triad and read-only (ERT convention); Cache mode distinguishes data resident in the HBM cache (≤ 16 GiB) from data spilled to DDR (96 GiB). Compute ceilings are measured per execution path at the core count of the workload (56, or 55 for the LLM servers).
+`P(I) = min(P_compute, B × I)` and `I_ridge = P_compute / B`. Operations, decimal GB/s and binary GiB are kept distinct. Every pair matches mode and socket scope; campaign ids stay in the tables. The primary memory ceiling is the best sustained of Triad, non-temporal Triad and read-only (ERT convention); Cache mode distinguishes data resident in the HBM cache (≤ 16 GiB) from data spilled to DDR (96 GiB). Compute ceilings are measured per execution path at the core count of the workload.
 
 Theoretical peaks come from `configs/theory.toml`: per-path operations per cycle (vendor statement or derivation, flagged), 56 cores per socket, and the 1.9 GHz base clock. Because the cores run at 2.0 GHz (AMX) to 2.6 GHz (VNNI) in these kernels, efficiency at the effective clock is the meaningful figure. DDR5-4800 × 8 channels = 307.2 GB/s per socket; the HBM figure is Intel's rounded "up to 1 TB/s" and no bottom-up peak is derived. The firmware (ACPI HMAT) advertises 262 GB/s DDR and 869 GB/s HBM read bandwidth per socket; these appear in the platform record, not as ceilings.
-
-**Traffic convention for LLM points.** Workload points carry `bytes_source`: `modeled` (tensor sizes) or `pmu_l3miss` (beyond-L3 counters). They are not mixed within a series.

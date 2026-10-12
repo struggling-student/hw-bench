@@ -91,6 +91,6 @@ def test_memory_ceiling_prefers_best_sustained_kernel():
 
 def test_workload_point_round_trips_to_a_dict():
     p = WorkloadPoint(
-        "decode", "bf16", "avx512_bf16", 50.0, 1.0, bytes_source="pmu_l3miss"
+        "workload", "bf16", "avx512_bf16", 50.0, 1.0, bytes_source="pmu_l3miss"
     )
     assert p.as_dict()["bytes_source"] == "pmu_l3miss"

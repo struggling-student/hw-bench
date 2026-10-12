@@ -62,7 +62,7 @@ class MemoryCeiling:
 
 @dataclass
 class WorkloadPoint:
-    """One achieved operating point, shared with the LLM backend analysis.
+    """One achieved operating point on a measured roofline.
 
     ``bytes_source`` says whether traffic was modeled from tensor sizes or read from
     hardware counters; the two are not interchangeable and must not be mixed

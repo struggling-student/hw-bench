@@ -318,8 +318,8 @@ PATH_BENCHMARK = {
 def compute_ceiling(ext: pd.DataFrame, path: str, mode: str, cores: int = 56, scope: str = "1S"):
     """Measured peak of one ISA path at a core count: the matching ceiling for a workload.
 
-    ``cores`` must be one that was measured (the scaling sweep includes 55, the
-    core count of the LLM servers).  Socket 0 is the reference, as in the thesis.
+    ``cores`` must be one that was measured in the scaling sweep.  Socket 0 is the
+    reference, as in the thesis.
     """
 
     from hwbench.roofline import Ceiling

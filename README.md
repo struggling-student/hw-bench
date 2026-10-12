@@ -1,6 +1,12 @@
-# HW Bench: measured CPU and memory limits
+![HW Bench measured hardware rooflines](assets/banner.svg)
 
-Reproducible hardware characterization of the Intel Xeon CPU Max 9480 nodes on CRESCO8: two sockets × 56 cores, SMT off, 64 GiB HBM2e and 8-channel DDR5-4800 per socket. The primary result is a **measured roofline** for Flat and Cache memory modes, for FP64, FP32, BF16 and INT8, on one and two sockets, with the achieved points of library GEMMs at LLM projection shapes placed on it. The same schema is designed to host vLLM and llama.cpp operating points from the LLM backend analysis.
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![C benchmarks](https://img.shields.io/badge/Benchmarks-C-A8B9CC?logo=c&logoColor=white)](https://en.cppreference.com/w/c)
+[![Jupyter](https://img.shields.io/badge/Analysis-Jupyter-F37626?logo=jupyter&logoColor=white)](https://jupyter.org/)
+[![Plotly](https://img.shields.io/badge/Charts-Plotly-3F4F75?logo=plotly&logoColor=white)](https://plotly.com/python/)
+[![pytest](https://img.shields.io/badge/Tests-pytest-0A9EDC?logo=pytest&logoColor=white)](https://pytest.org/)
+
+Reproducible hardware characterization of Intel Xeon CPU Max 9480 nodes on CRESCO8: two sockets × 56 cores, SMT off, 64 GiB HBM2e and 8-channel DDR5-4800 per socket. The primary result is a **measured roofline** for Flat and Cache memory modes, for FP64, FP32, BF16 and INT8, on one and two sockets, with achieved library GEMMs at representative projection shapes placed on it.
 
 Read the executed notebooks in order ([index](notebooks/README.md)):
 
@@ -10,7 +16,6 @@ Read the executed notebooks in order ([index](notebooks/README.md)):
 3. [NUMA and socket scaling](notebooks/03_numa_and_socket_scaling.ipynb)
 4. [Compute throughput](notebooks/04_compute_throughput.ipynb)
 5. [Roofline atlas](notebooks/05_roofline_atlas.ipynb)
-6. [LLM interface](notebooks/06_llm_roofline_interface.ipynb): design and preparation, no backend runs
 
 Every figure cell displays an interactive Plotly figure and saves **SVG and PNG** copies under `figures/<notebook-stem>/`. Numerical exports of the October thesis selection are under `data/processed/thesis/`.
 

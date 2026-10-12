@@ -10,7 +10,6 @@ The executed notebooks are the canonical interpretation and derive every display
 | 03 NUMA and socket scaling | Local/remote, two-socket efficiency, 112-thread span, Triad scaling | Remote penalty per tier, dual efficiency with overlap, interleave versus first-touch |
 | 04 Compute throughput | Scaling, operations per cycle, BF16 and INT8 GEMM M-sweeps | Peak per path against vendor figure, effective clock, AMX-busy, GEMM fraction of tile peak |
 | 05 Roofline atlas | Flat 1S, Cache 1S, Flat 2S, FP64 sweep, BF16 and INT8 GEMM points | Ridge points, achieved-versus-measured-versus-theoretical gap table |
-| 06 LLM interface | Analytic decode/prefill guide lines, adapter fixture | Ceiling selection rule per serving configuration; no backend measurements |
 
 Each plot cell saves SVG and PNG to `figures/<notebook-stem>/`; the expected files are listed in `configs/artifacts.json`, and `scripts/check_artifacts.py --clean-retired` verifies them. No raw records are deleted.
 
@@ -19,7 +18,7 @@ Each plot cell saves SVG and PNG to `figures/<notebook-stem>/`; the expected fil
 * **Cache bandwidth** only together with the working-set size; below 64 GiB the data lives in the HBM cache, above it the rate falls below Flat DDR's.
 * **NUMA bandwidth** with the CPU socket and memory locality: remote HBM is slower than remote DDR.
 * **Latency** is idle and serial; it does not predict saturated bandwidth or loaded latency.
-* **Peaks versus GEMM.** A tile or vector kernel shows what the instruction can do; the library GEMM shows what LLM-shaped work reaches. Use the GEMM points for prefill and the bandwidth slope for decode.
+* **Peaks versus GEMM.** A tile or vector kernel shows what the instruction can do; the library GEMM shows what representative matrix shapes reach.
 * **Efficiency** is judged at the effective clock. Above 100% against base clock is a clock effect.
 * **Two sockets** are two independent processes (or one spanning process, reported separately); this is not tensor-parallel scaling.
 

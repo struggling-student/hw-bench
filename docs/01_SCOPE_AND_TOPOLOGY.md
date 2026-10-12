@@ -1,12 +1,10 @@
 # 01 — Scope and topology
 
-HW Bench characterizes CPU and memory hardware independently of any LLM runtime. It
-measures compute peaks of every relevant execution path (AVX-512 FP64/FP32/BF16, VNNI
-INT8, AMX BF16/INT8), memory bandwidth by kernel and tier, the cache hierarchy,
-idle dependent-load latency, achieved oneDNN GEMM at LLM projection shapes, two-socket
-scaling, and how the Xeon Max HBM Cache Mode responds to the working set. The results
-form a measured roofline that LLM runtime measurements (see the LLM backend analysis
-repository) are later placed on; no model is executed here.
+HW Bench characterizes CPU and memory hardware. It measures compute peaks of every
+relevant execution path (AVX-512 FP64/FP32/BF16, VNNI INT8, AMX BF16/INT8), memory
+bandwidth by kernel and tier, the cache hierarchy, idle dependent-load latency,
+achieved oneDNN GEMM at representative projection shapes, two-socket scaling, and how
+the Xeon Max HBM Cache Mode responds to the working set.
 
 ## The two memory configurations
 
@@ -61,7 +59,8 @@ Every plotted envelope is an empirical **upper bound** built from separately mea
 bandwidth and compute kernels; it is not a strict bound on every application. Three
 kinds of ceiling are never mixed without saying so: *theoretical* (vendor or derived,
 `configs/theory.toml`), *measured peak* (a dedicated kernel) and *measured achievable*
-(a library GEMM at an LLM shape). Operation rates use FLOP/s or integer-op/s with a
-multiply and an add counted as two; intensity is operations per modeled byte. HBM hit
+(a library GEMM at a representative matrix shape). Operation rates use FLOP/s or
+integer-op/s with a multiply and an add counted as two; intensity is operations per
+modeled byte. HBM hit
 rates, energy and controller-counter traffic are not inferred. See
 [Methods and data](03_METHODS_AND_DATA.md) for the operation and traffic models.

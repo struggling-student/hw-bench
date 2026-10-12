@@ -47,7 +47,7 @@ NOTEBOOKS["00_master_analysis"] = [
 
 **Question.** What can one CRESCO8 Xeon CPU Max 9480 node sustain, per precision and memory configuration, and where do those limits sit relative to the vendor's peaks?
 
-This notebook carries only the findings. Every number comes from a measured campaign (five steady one-second samples per point) and links back to its campaign id in the supporting notebooks: [platform and methodology](01_platform_and_methodology.ipynb), [memory](02_memory_hierarchy_and_bandwidth.ipynb), [NUMA and sockets](03_numa_and_socket_scaling.ipynb), [compute](04_compute_throughput.ipynb), [roofline atlas](05_roofline_atlas.ipynb), [LLM interface](06_llm_roofline_interface.ipynb).
+This notebook carries only the findings. Every number comes from a measured campaign (five steady one-second samples per point) and links back to its campaign id in the supporting notebooks: [platform and methodology](01_platform_and_methodology.ipynb), [memory](02_memory_hierarchy_and_bandwidth.ipynb), [NUMA and sockets](03_numa_and_socket_scaling.ipynb), [compute](04_compute_throughput.ipynb), [roofline atlas](05_roofline_atlas.ipynb).
 """),
     code(setup("00_master_analysis")),
     md("""
@@ -170,7 +170,7 @@ for dtype, path in [('bf16', 'amx_bf16'), ('int8', 'amx_int8')]:
 table(pd.DataFrame(rows))
 """),
     md("""
-A library GEMM reaches about a third of the tile peak even at large batches, and at batch 1 it moves weights at well under the HBM bandwidth: the realistic compute ceiling for LLM prefill is the GEMM line, not the instruction peak ([atlas](05_roofline_atlas.ipynb)).
+A library GEMM reaches about a third of the tile peak even at large batches, and at batch 1 it moves weights at well under the HBM bandwidth. The [atlas](05_roofline_atlas.ipynb) compares these achieved rates with the instruction peak.
 
 ## 7. Where the ceilings meet: ridge points
 
@@ -193,7 +193,7 @@ for p in order:
 table(pd.DataFrame(rows).pivot(index='path', columns='memory', values='ridge_op_per_byte').reindex(order).reset_index())
 """),
     md("""
-**Implication.** On HBM the ridge for AMX BF16 sits near 200 operations per byte, for AVX-512 FP64 near 8. LLM decode at small batch has an intensity of a few operations per byte and is therefore bandwidth-bound on every path; the compute ceiling only matters for prefill and large batches. The [roofline atlas](05_roofline_atlas.ipynb) draws these ceilings with measured GEMM points; [notebook 06](06_llm_roofline_interface.ipynb) shows where decode and prefill will fall.
+**Implication.** On HBM the ridge for AMX BF16 sits near 200 operations per byte, for AVX-512 FP64 near 8. The [roofline atlas](05_roofline_atlas.ipynb) draws these ceilings with measured GEMM points.
 
 ## 8. Limits of these results
 
@@ -201,7 +201,7 @@ table(pd.DataFrame(rows).pivot(index='path', columns='memory', values='ridge_op_
 * No power or energy was measured (RAPL needs root).
 * SMT is off on these nodes; its effect is documented, not measured.
 * Cache-mode HBM hit rates are inferred from bandwidth versus working-set size only.
-* Peaks come from synthetic kernels; GEMM points show what a library achieves at LLM shapes.
+* Peaks come from synthetic kernels; GEMM points show what a library achieves at representative shapes.
 """),
 ]
 
@@ -394,7 +394,7 @@ say(f"**Result.** Triad and non-temporal Triad agree to {100*abs(p.loc['flat_ddr
     f"and {p.loc['flat_hbm','read']/p.loc['flat_hbm','triad']-1:+.0%} on HBM ({p.loc['flat_hbm','read']:.0f} GB/s): reading is not faster than a mixed read/write stream on HBM.")
 """),
     md("""
-**Implication.** Full-line vector stores do not appear to cost an extra read here (consistent with the core skipping the read for whole-line writes), so counted Triad bandwidth is a fair proxy for bus traffic; this is inferred from equal rates, not observed with controller counters. For a roofline, the primary ceiling is the best sustained of the three kernels (ERT convention), with read-only shown as the decode-relevant slope.
+**Implication.** Full-line vector stores do not appear to cost an extra read here (consistent with the core skipping the read for whole-line writes), so counted Triad bandwidth is a fair proxy for bus traffic; this is inferred from equal rates, not observed with controller counters. For a roofline, the primary ceiling is the best sustained of the three kernels (ERT convention), with read-only shown alongside the Triad ceilings.
 
 ## 4. Core count needed to saturate memory
 """),
@@ -515,7 +515,7 @@ say(f"**Result.** Across {len(de)} paired measurements the two-process rate is {
 
 ## 3. One process spanning both sockets
 
-LLM servers that do not pin to a socket run one process with threads on all 112 cores. Two placements are compared for 16 GiB of data: *interleaved* pages across both sockets' memory, and *first-touch* (each thread allocates local to its socket).
+Unpinned workloads run one process with threads on all 112 cores. Two placements are compared for 16 GiB of data: *interleaved* pages across both sockets' memory, and *first-touch* (each thread allocates local to its socket).
 """),
     code("""
 sp = report.span_table(ext)
@@ -552,7 +552,7 @@ NOTEBOOKS["04_compute_throughput"] = [
     md("""
 # 04 — Compute throughput
 
-**Question.** What does each execution path sustain, at what clock, how close is that to the vendor figure, and how much of the AMX peak does an LLM-shaped GEMM reach?
+**Question.** What does each execution path sustain, at what clock, how close is that to the vendor figure, and how much of the AMX peak does a matrix multiplication reach?
 
 Operations count a multiply and an add as two. *Execution path* means the instruction family the kernel is proven (by disassembly) to use.
 """),
@@ -616,7 +616,7 @@ table(one[['path', 'ghz_effective', 'amx_busy_frac']])
     md("""
 The `EXE.AMX_BUSY` counter confirms the AMX kernels keep the unit busy nearly all cycles (about 98–99%) and reads zero for every other path, so AMX activity can be told apart from vector activity in server runs.
 
-## 4. oneDNN GEMM at LLM projection shapes
+## 4. oneDNN GEMM at representative projection shapes
 
 **Conditions.** Socket 0, 56 cores, weights `N×K` drawn round-robin from a pool larger than four times the L3 so they stream from memory (HBM or DDR in Flat; 16 GiB resident or 96 GiB spilled in Cache). `M` is the number of tokens in the batch. Shapes are Llama-3.1-8B's `q/o` (4096×4096), `gate/up` (14336×4096) and `down` (4096×14336) projections plus a 6144² reference.
 """),
@@ -656,7 +656,7 @@ say(f"**Result.** At M=4096 oneDNN reaches {big['bf16']/1000:.1f} TOP/s BF16 ({b
     f"At M=1 it delivers {small['bf16']/1000:.2f} and {small['int8']/1000:.2f} TOP/s: weight streaming, at up to {mem_bound['bf16']:.0f} (BF16) and {mem_bound['int8']:.0f} GB/s (INT8) of modeled traffic.")
 """),
     md("""
-**Implication.** GEMM approaches only a third of the AMX tile peak even at large M because tile loads, the epilogue and data layout cost more than the tile instruction itself; and below M≈16 it is bandwidth-bound, where INT8 halves the weight traffic and therefore doubles the token rate. INT8 curves are not monotonic: for several shapes oneDNN's throughput dips between M=64 and M=256 (variation between samples is flagged in the validation report) before recovering, which looks like a switch between kernel implementations rather than noise. The "fraction of tile peak" is the realistic compute ceiling to use for LLM prefill; the raw tile peak is an upper bound no library reaches.
+**Implication.** GEMM approaches only a third of the AMX tile peak even at large M because tile loads, the epilogue and data layout cost more than the tile instruction itself; and below M≈16 it is bandwidth-bound, where INT8 halves the weight traffic. INT8 curves are not monotonic: for several shapes oneDNN's throughput dips between M=64 and M=256 (variation between samples is flagged in the validation report) before recovering, which looks like a switch between kernel implementations rather than noise. The "fraction of tile peak" is the realistic compute ceiling for matrix multiplication; the raw tile peak is an upper bound no library reaches.
 """),
 ]
 
@@ -763,106 +763,10 @@ gap = pd.DataFrame(rows)
 table(gap)
 """),
     md("""
-**Gap analysis.** Three layers separate the vendor number from a served model: (1) the vendor peak versus what a hand-written tile kernel sustains (clock and power, a few percent); (2) the tile-kernel peak versus an optimized library GEMM (the achieved-over-measured column); (3) the library GEMM versus what a full server achieves, to be filled by the LLM measurements ([notebook 06](06_llm_roofline_interface.ipynb)).
+**Gap analysis.** Two layers separate the vendor number from library performance: (1) the vendor peak versus what a hand-written tile kernel sustains (clock and power, a few percent); (2) the tile-kernel peak versus an optimized library GEMM (the achieved-over-measured column).
 """),
 ]
 
-# --------------------------------------------------------------------------- 06
-NOTEBOOKS["06_llm_roofline_interface"] = [
-    md("""
-# 06 — Interface to the LLM backend measurements
-
-**Question.** How will vLLM and llama.cpp operating points be placed on these measured rooflines, and where should they fall?
-
-This notebook is design and preparation only: no backend was run for this analysis. It fixes the schema, the rule that picks the right ceiling for a point, and analytic guide lines showing where decode and prefill should land. Points drawn below are synthetic and labelled so; they exist to test the adapter.
-"""),
-    code(setup("06_llm_roofline_interface")),
-    md("""
-## 1. Ceiling selection rule
-
-A serving point is judged against the ceiling of the execution path its kernels actually use, at the core count and memory configuration of the server: 55 compute cores on socket 0 (one core is left for the frontend), Cache mode, memory bound to socket 0. That is why the ISA sweep includes 55 cores.
-
-| Configuration | Weight GEMM path | Notes |
-| --- | --- | --- |
-| vLLM BF16 | AMX BF16 (oneDNN `brg_matmul:avx10_1_512_amx`) | verified here with oneDNN verbose |
-| vLLM INT8 (W8A8) | AMX INT8 (`onednn.qlinear_pointwise`, u8×s8) | the only INT8 oneDNN path in the image that runs on AMX |
-| llama.cpp BF16 | AVX-512 BF16 (`vdpbf16ps`) | no AMX BF16 kernel; `AMX_BUSY` = 0 |
-| llama.cpp Q8_0 | AMX INT8 for ≥2 rows, VNNI at 1 row | |
-"""),
-    code("""
-from hwbench.llm_adapter import CONFIGURATION_PATHS, MODEL_SPECS
-rows = []
-for cfg, (prec, path) in CONFIGURATION_PATHS.items():
-    c = report.compute_ceiling(ext, path, 'cache', 55)
-    rows.append(dict(configuration=cfg, precision=prec, path=path, cores=c.cores, TOPs_measured=c.gops / 1000, ghz_effective=c.ghz,
-                     TOPs_theory_base=theory.peak_gops(path, 55) / 1000))
-table(pd.DataFrame(rows))
-"""),
-    md("""
-## 2. Analytic guide lines
-
-For Llama-3.1-8B (32 layers, hidden 4096, FFN 14336, 8 KV heads of dimension 128), one decode step at batch `B` performs about `2 × params × B` operations and reads the weights once, plus each sequence's KV cache. Prefill of `T` tokens performs `2 × params × T` operations against one read of the weights.
-"""),
-    code("""
-spec = MODEL_SPECS['llama31_8b']
-params = spec.linear_params + spec.hidden * spec.vocab
-bytes_per_param = {'BF16 weights': 2.0, 'Q8_0 (34 B per 32 weights)': 34 / 32, 'W8A8 INT8': 1.0}
-kv_per_token = 2 * spec.layers * spec.kv_heads * spec.head_dim * 2     # bytes, BF16 K and V
-batch = np.array([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 4096])
-context = 1024
-rows = []
-for name, b in bytes_per_param.items():
-    ops = 2 * params * batch
-    traffic = params * b + batch * context * kv_per_token
-    rows.append(pd.DataFrame(dict(weights=name, batch=batch, intensity=ops / traffic)))
-guide = pd.concat(rows)
-table(guide.pivot(index='batch', columns='weights', values='intensity').reset_index())
-"""),
-    code("""
-mem = [report.memory_ceiling(ext, thesis, 'cache', 'effective_cache', resident_gib=16)]
-cs = [report.compute_ceiling(ext, 'amx_bf16', 'cache', 55), report.compute_ceiling(ext, 'avx512_bf16', 'cache', 55),
-      report.compute_ceiling(ext, 'amx_int8', 'cache', 55), report.compute_ceiling(ext, 'vnni_int8', 'cache', 55)]
-fig = plotting.roofline_figure(cs, mem, title='Where LLM decode and prefill should fall · Cache · 55 cores · 16 GiB resident', x_range=(0.5, 8192))
-for name, color in zip(bytes_per_param, ['#C24A40', '#268270', '#7A3E3E']):
-    part = guide[guide.weights == name]
-    roof = cs[2].gops if 'INT8' in name or 'Q8' in name else cs[0].gops
-    fig.add_scatter(x=part.intensity, y=[min(roof, mem[0].gbs * i) / 1000 for i in part.intensity], mode='markers+lines', name=f'decode guide · {name}',
-                    line=dict(dash='dot', color=color), marker=dict(size=5, color=color))
-fig.add_vrect(x0=128, x1=4096, fillcolor='#E8EDF2', opacity=0.5, line_width=0, layer='below')
-fig.add_annotation(x=np.log10(700), y=0.02, xref='x', yref='paper', text='prefill 128–4096 tokens', showarrow=False, font=dict(size=12, color='#6B7480'))
-figure(fig, 'llm_guide_lines')
-"""),
-    code("""
-ridge_bf16 = roofline.ridge(cs[0].gops, mem[0].gbs)
-say(f"**Reading the guide.** Decode intensity equals the batch size for BF16 weights (one multiply-add per two weight bytes per sequence): at batch 1 it is about 1 operation per byte, "
-    f"far left of the AMX BF16 ridge at {ridge_bf16:.0f} operations per byte, so decode is bandwidth-bound until batches reach the hundreds. Prefill of 128–4096 tokens crosses the ridge. "
-    f"Q8_0 and W8A8 halve the weight traffic and double the intensity at the same batch.")
-"""),
-    md("""
-## 3. Adapter check on a synthetic fixture
-
-`hwbench.llm_adapter.from_online_points` converts rows of `llm-backend-analysis/data/processed/online_points.csv` into workload points. The fixture below is **synthetic** (round numbers chosen to exercise the code); it is not a measurement.
-"""),
-    code("""
-from hwbench.llm_adapter import from_online_points, to_frame
-fixture = pd.DataFrame([
-    dict(model='llama31_8b', configuration_id='vllm_bf16', backend='vllm', concurrency=1, isl=512, osl=512, output_tok_s_mean=15.0, mem_total_gbs_mean=300.0, amx_busy_frac_mean=0.05, ghz_effective_per_core_mean=2.2),
-    dict(model='llama31_8b', configuration_id='llama_cpp_bf16', backend='llama_cpp', concurrency=1, isl=512, osl=512, output_tok_s_mean=12.0, mem_total_gbs_mean=250.0, amx_busy_frac_mean=0.0, ghz_effective_per_core_mean=2.2),
-])
-points = from_online_points(fixture)
-table(to_frame(points)[['name', 'precision', 'isa_path', 'gops', 'intensity', 'bytes_source', 'cores', 'phase']])
-fig = plotting.roofline_figure(cs, mem, points, title='SYNTHETIC fixture points on the Cache roofline (adapter test only)', x_range=(0.5, 8192))
-figure(fig, 'adapter_fixture')
-"""),
-    md("""
-## 4. Methodology for real points
-
-* **Prefill and decode are separate points.** A mixed server step blends two intensities; place prefill-only and decode-only windows separately, or label a point `mixed`.
-* **Modeled operations, measured bytes.** Operations are `2 × (linear parameters + output head)` per token; attention over the KV cache is excluded and noted. Bytes come from the PMU's beyond-L3 counters (`pmu_l3miss`), which in Cache mode count traffic to the memory side as a whole; they are never mixed with modeled bytes in one series.
-* **Placement matching.** The server's cores and memory binding decide the ceiling: 55 cores → the 55-core entries above; Cache mode → the resident or spilled slope according to the model's footprint (16 GiB of BF16 weights fit; a 70 GB model does not).
-* **Flat-mode extension.** For a Flat comparison the weights would be bound with `numactl --membind` to HBM or DDR and judged against the Flat HBM or DDR slope of notebook 05.
-"""),
-]
 
 
 def main() -> None:
