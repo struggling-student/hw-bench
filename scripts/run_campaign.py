@@ -54,6 +54,8 @@ KIB, MIB, GIB = 2**10, 2**20, 2**30
 GEMM_SHAPES = [(4096, 4096), (14336, 4096), (4096, 14336), (6144, 6144)]
 GEMM_M_FLAT = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
 GEMM_M_CACHE = [1, 4, 16, 64, 256, 1024, 4096]
+# Spilled pool (96 GiB): initialising it dominates, so fewer batch sizes are taken.
+GEMM_M_SPILL = [1, 16, 256, 4096]
 LLC_BYTES_PER_SOCKET = 112_500_000 + 2**20  # 112.5 MiB L3; rounded up
 
 
@@ -615,7 +617,14 @@ def main():
                     pool = forced_pool or max(
                         2 * weight_bytes, 4 * LLC_BYTES_PER_SOCKET
                     )
-                    for m in GEMM_M_FLAT if args.mode == "flat" else GEMM_M_CACHE:
+                    sweep = (
+                        GEMM_M_FLAT
+                        if args.mode == "flat"
+                        else GEMM_M_SPILL
+                        if forced_pool and forced_pool > 64 * GIB
+                        else GEMM_M_CACHE
+                    )
+                    for m in sweep:
                         execute(
                             spec(
                                 0,
