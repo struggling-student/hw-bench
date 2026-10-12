@@ -60,11 +60,13 @@ This notebook carries the findings in six figures and four tables; the supportin
 
 Two sockets × 56 cores, SMT off, 64 GiB HBM2e and 8-channel DDR5-4800 per socket. *Flat* mode exposes HBM and DDR as separate NUMA nodes; *Cache* mode makes HBM a memory-side cache in front of DDR. Flat results were taken on one dedicated node outside Slurm (the October runs went through an exclusive Slurm allocation on the same node and are labelled as such); Cache results come from Slurm allocations on other nodes.
 
-**Table 1 — headline ceilings of one socket.** Median of the samples with their minimum and maximum.
+**Table 1 — headline ceilings of socket 0** (the reference socket for every number here). *Median* [*min*–*max*] are the five samples of one run; *spread* is half that range relative to the median. *Cross-run* is the largest deviation when the quantity, or where it was not repeated its family, was measured again in a separate run (Cache: on a second node); *basis* says which. *Total* is spread plus cross-run, a conservative sum.
 """),
     code("""
 t1 = report.headline_table(ext, thesis, theory)
-table(t1.rename(columns={'low': 'min', 'high': 'max', 'n': 'samples'}), 1)
+table(t1[['quantity', 'unit', 'median', 'low', 'high', 'spread', 'cross_run', 'basis', 'total', 'n', 'kind']]
+      .rename(columns={'low': 'min', 'high': 'max', 'spread': 'spread %', 'cross_run': 'cross-run %', 'total': 'total %', 'n': 'samples'}), 2)
+say_claims(claims.headline_uncertainty(ext, thesis, theory))
 """),
     code("""
 prov = (ctx.everything[ctx.everything.campaign_id.isin(
@@ -250,12 +252,29 @@ say(f"**Validation.** status `{v['status']}`; {v['selected_samples']} thesis sam
 table(pd.DataFrame({'warning': v['warnings']}))
 """),
     code("""
-def cv(frame, metric):
-    keys = ['memory_mode', 'benchmark', 'dtype', 'socket_scope', 'socket', 'memory_target', 'threads', 'working_set_bytes', 'notes', 'campaign_id']
-    g = frame.groupby(keys, dropna=False)[metric]
-    return (100 * g.std() / g.mean()).dropna()
-c = pd.concat([cv(ext[ext.bandwidth_gbs.notna()], 'bandwidth_gbs'), cv(ext[ext.performance_gops.notna() & ext.bandwidth_gbs.isna()], 'performance_gops')])
-table(c.describe(percentiles=[.5, .9, .99]).to_frame('CV % across configurations').reset_index())
+cvt = report.sample_cv(ext)
+summary = cvt.groupby('family').cv_percent.describe(percentiles=[.5, .9, .99])[['count', '50%', '90%', '99%', 'max']]
+summary.loc['all'] = cvt.cv_percent.describe(percentiles=[.5, .9, .99])[['count', '50%', '90%', '99%', 'max']]
+table(summary.rename(columns={'count': 'configurations', '50%': 'median CV %', '90%': '90th %', '99%': '99th %', 'max': 'max %'}).reset_index(), 1)
+"""),
+    md("""
+The table groups samples by *configuration*: benchmark, tier, thread count, working set and, for GEMM, shape and batch. The ten largest spreads are listed rather than hidden:
+"""),
+    code("""
+worst = cvt.sort_values('cv_percent', ascending=False).head(10)
+table(worst[['memory_mode', 'benchmark', 'dtype', 'memory_target', 'm', 'n', 'k', 'cv_percent', 'n_samples']], 1)
+say_claims(claims.repeatability(ext, thesis), ['per_configuration_cv'])
+"""),
+    md("""
+The first of the five windows of a configuration can differ from the rest. The table compares it with the median of the other four:
+"""),
+    code("""
+fw = report.first_window_effect(ext)
+fw['pool'] = np.where(fw.working_set_bytes > 64 * 2**30, 'spilled (>64 GiB)', 'other')
+view = fw.groupby(['memory_mode', 'family', 'pool']).agg(configurations=('ratio', 'size'), median_ratio=('ratio', 'median'),
+        lowest_ratio=('ratio', 'min'), below_90_percent=('ratio', lambda r: (r < 0.9).mean()), median_shift=('median_shift', lambda r: r.abs().max())).reset_index()
+table(view[(view.configurations > 0)], 3)
+say_claims(claims.repeatability(ext, thesis), ['cold_first_window'])
 """),
     md("""
 ## 4. Repeat run against the October values
@@ -358,7 +377,7 @@ Cache levels are identical across configurations; only beyond the L3 do tiers di
 """),
     code("""
 bw = report.bandwidth_summary(ext, thesis)
-local = bw[(bw.locality == 'local') & (bw.socket_scope == 'single') & (bw.working_set_gib == 8)]
+local = bw[(bw.locality == 'local') & (bw.socket_scope == 'single') & (bw.socket == 0) & (bw.working_set_gib == 8)]
 fig = plotting.go.Figure()
 for cfg in ['flat_ddr', 'flat_hbm', 'cache']:
     part = local[local.config == cfg].groupby('kernel').gbs.mean()
@@ -449,15 +468,10 @@ for placement, hatch in (('local', ''), ('remote', '/')):
     fig.add_bar(x=lr.label, y=lr[placement], showlegend=False,
                 marker=dict(color=[plotting.CONFIG_COLORS[c] for c in lr.config], pattern=dict(shape=hatch, fgcolor=plotting.SURFACE, size=6, solidity=0.5), line=dict(width=0)),
                 error_y=dict(type='data', array=lr[f'{placement}_spread'], color=plotting.INK_2, thickness=1.2))
-plotting.style(fig, 'Local (solid) and remote (hatched) bandwidth · mean of the two sockets, bars show their spread', 'Tier and kernel', 'GB/s', 480)
+plotting.style(fig, 'Local (solid) and remote (hatched) bandwidth · socket 0, bars show the difference to socket 1', 'Tier and kernel', 'GB/s', 480)
 fig.update_layout(barmode='group', bargap=0.3, margin=dict(l=85, r=40, t=85, b=80))
 figure(fig, 'local_remote_bandwidth')
-table(loc.groupby(['config', 'kernel'], as_index=False)[['local', 'remote', 'remote_over_local']].mean())
-"""),
-    code("""
-g = loc.groupby(['config', 'kernel'])[['remote_over_local']].mean().remote_over_local
-say(f"**Result.** Remote DDR retains {g[('flat_ddr','read')]:.0%} (read) to {g[('flat_ddr','triad_nt')]:.0%} (non-temporal Triad) of local DDR bandwidth. "
-    f"Remote HBM retains only {g[('flat_hbm','read')]:.0%} to {g[('flat_hbm','triad_nt')]:.0%} of local HBM, which is {loc[(loc.config=='flat_hbm')&(loc.kernel=='read')].remote.mean():.0f} GB/s: below remote DDR.")
+table(lr[['label', 'local', 'remote', 'remote_over_local', 'local_spread', 'remote_spread']].rename(columns={'local_spread': 'local, |socket 1 − 0|', 'remote_spread': 'remote, |socket 1 − 0|'}), 2)
 """),
     code("""
 say_claims(claims.placement(ext, thesis))

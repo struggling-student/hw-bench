@@ -400,27 +400,30 @@ def concurrent(thesis: pd.DataFrame) -> list[Claim]:
 
 
 def placement(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
-    loc = report.locality_ratio(ext, thesis)
-    g = loc.groupby(["config", "kernel"])[["local", "remote", "remote_over_local"]].mean()
+    """Remote against local bandwidth, for socket 0 (the reference socket)."""
+
+    lr = report.local_remote_table(ext, thesis).set_index(["config", "kernel"])
     bw = report.bandwidth_summary(ext, thesis)
     cv = bw[bw.locality.eq("remote") & bw.config.eq("flat_hbm") & bw.kernel.eq("read")].cv_percent
-    ddr_r, hbm_r = g.loc[("flat_ddr", "read")], g.loc[("flat_hbm", "read")]
+    ddr_r, hbm_r = lr.loc[("flat_ddr", "read")], lr.loc[("flat_hbm", "read")]
+    other = report.locality_ratio(ext, thesis)
+    s1 = other[other.socket.eq(1) & other.config.eq("flat_hbm") & other.kernel.eq("read")].iloc[0]
     return [
         Claim(
             "remote_ddr",
             ddr_r.remote_over_local < 0.6,
-            f"Remote DDR keeps {_pct(g.loc[('flat_ddr', 'read')].remote_over_local)} (read) to "
-            f"{_pct(g.loc[('flat_ddr', 'triad_nt')].remote_over_local)} (non-temporal Triad) of local DDR bandwidth.",
+            f"Socket 0 reaches {_pct(ddr_r.remote_over_local)} (read) to {_pct(lr.loc[('flat_ddr', 'triad_nt')].remote_over_local)} "
+            f"(non-temporal Triad) of its local DDR bandwidth when the memory is on the other socket.",
         ),
         Claim(
             "remote_hbm",
             hbm_r.remote < ddr_r.remote and hbm_r.remote_over_local < 0.2,
-            f"Remote HBM keeps {_pct(hbm_r.remote_over_local)} (read, {hbm_r.remote:.0f} GB/s) to "
-            f"{_pct(g.loc[('flat_hbm', 'triad_nt')].remote_over_local)} (non-temporal Triad) of local HBM, below remote DDR "
-            f"({ddr_r.remote:.0f} GB/s). The remote-HBM read figure comes from one campaign with a coefficient of variation of "
-            f"{cv.min():.0f}–{cv.max():.0f}% and should be repeated before it is quoted as a headline. Link bandwidth alone does "
-            "not explain it; the mechanism (for example directory updates) is not identified, because the UPI and CHA counters "
-            "are not readable.",
+            f"Remote HBM keeps {_pct(hbm_r.remote_over_local)} (read, {hbm_r.remote:.0f} GB/s against {hbm_r.local:.0f} GB/s local) to "
+            f"{_pct(lr.loc[('flat_hbm', 'triad_nt')].remote_over_local)} (non-temporal Triad), below remote DDR "
+            f"({ddr_r.remote:.0f} GB/s); socket 1 gives {s1.remote:.0f} GB/s ({_pct(s1.remote_over_local)}). The remote-HBM read "
+            f"figure comes from one campaign with a coefficient of variation of {cv.min():.0f}–{cv.max():.0f}% and should be repeated "
+            "before it is quoted as a headline. Link bandwidth alone does not explain it; the mechanism (for example directory "
+            "updates) is not identified, because the UPI and CHA counters are not readable.",
         ),
     ]
 
@@ -590,6 +593,53 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
     ]
 
 
+def repeatability(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
+    cv = report.sample_cv(ext)
+    q = cv.cv_percent.quantile([0.5, 0.9, 0.99])
+    over = cv[cv.cv_percent > 5]
+    worst = cv.loc[cv.cv_percent.idxmax()]
+    fw = report.first_window_effect(ext)
+    g = fw[fw.family.eq("gemm") & fw.memory_mode.eq("cache")].assign(pool=lambda f: (f.working_set_bytes / 2**30).round())
+    spilled, resident = g[g.pool.gt(64)], g[g.pool.le(64)]
+    flat = fw[fw.memory_mode.eq("flat")]
+    return [
+        Claim(
+            "per_configuration_cv",
+            float(q[0.5]) < 2 and float(q[0.99]) < 25 and float(cv.cv_percent.max()) < 50,
+            f"Across {len(cv)} configurations (each a benchmark, tier, thread count, working set and, for GEMM, shape and batch) the "
+            f"sample-to-sample coefficient of variation has a median of {q[0.5]:.1f}%, a 90th percentile of {q[0.9]:.1f}%, a 99th of "
+            f"{q[0.99]:.1f}% and a maximum of {cv.cv_percent.max():.0f}% ({worst.benchmark} {worst['dtype']}, M={worst.m:.0f}). "
+            f"{len(over)} configurations exceed 5%, {int((over.family == 'gemm').sum())} of them GEMM. An earlier version of this table "
+            "grouped without the GEMM shape and reported a 99th percentile of 65%; that mixed different GEMMs.",
+        ),
+        Claim(
+            "cold_first_window",
+            float(spilled.ratio.median()) < 0.95 and float(resident.ratio.median()) > 0.98 and float(g.median_shift.abs().max()) < 0.03,
+            f"In Cache mode the first timed window of a GEMM on the spilled 96 GiB pool is cold: it runs at {_pct(float(spilled.ratio.median()))} "
+            f"of the later windows in the median (lowest {_pct(float(spilled.ratio.min()))}; {_pct(float((spilled.ratio < 0.9).mean()))} of the "
+            f"configurations are below 90%), while on the 16 GiB pool it matches ({_pct(float(resident.ratio.median()))}). The median of five moves by "
+            f"at most {_pct(float(g.median_shift.abs().max()), 1)} when that window is dropped, so the medians are unchanged but the "
+            "minimum of those samples is not a steady-state value. Flat windows show no such effect "
+            f"(median ratio {_pct(float(flat.ratio.median()), 1)}). The cause (the weight pool still being pulled into the HBM cache) is inferred.",
+        ),
+    ]
+
+
+def headline_uncertainty(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Claim]:
+    t1 = report.headline_table(ext, thesis, theory)
+    worst = t1.loc[t1.total.idxmax()]
+    best = t1.loc[t1.total.idxmin()]
+    return [
+        Claim(
+            "headline_uncertainty",
+            bool(t1.total.notna().all() and t1.basis.ne("").all()),
+            f"Every headline ceiling carries an uncertainty: the sum of the sample spread and the largest repeat-run deviation is "
+            f"{best.total:.1f}% for {best.quantity} and up to {worst.total:.1f}% for {worst.quantity}. Where a quantity was not "
+            "repeated, the deviation of its family is used and labelled as such.",
+        )
+    ]
+
+
 def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = ROOT) -> dict[str, list[Claim]]:
     return {
         "compute": compute_paths(ext, theory),
@@ -599,6 +649,8 @@ def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Pa
         "hierarchy": hierarchy(ext, theory),
         "latency": latency(ext, theory, root),
         "xcheck": xcheck(ext, thesis),
+        "repeatability": repeatability(ext, thesis),
+        "headline_uncertainty": headline_uncertainty(ext, thesis, theory),
         "concurrent": concurrent(thesis),
         "placement": placement(ext, thesis),
         "sockets": sockets(ext, thesis),

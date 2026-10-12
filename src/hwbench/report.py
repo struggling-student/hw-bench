@@ -226,7 +226,12 @@ def level_summary(table: pd.DataFrame) -> pd.DataFrame:
 
 # --------------------------------------------------------------------- GEMM
 def gemm_points(ext: pd.DataFrame) -> pd.DataFrame:
-    """Achieved oneDNN GEMM points: rate, modeled traffic and intensity per shape and M."""
+    """Achieved oneDNN GEMM points: rate, modeled traffic and intensity per shape and M.
+
+    All timed windows are kept.  In Cache mode the first window of a spilled (96 GiB)
+    pool is often cold, but the median of five moves by under 1% when it is dropped
+    (``first_window_effect``), so the medians are not adjusted.
+    """
 
     data = with_config(ext[ext.benchmark.eq("onednn_gemm_sweep") & ext.notes.eq("gemm_sweep")])
     keys = ["memory_mode", "config", "memory_target", "dtype", "n", "k", "m", "working_set_bytes"]
@@ -606,23 +611,26 @@ def library_ceiling(gm: pd.DataFrame, path: str, mode: str = "flat", tier: str =
 
 
 def local_remote_table(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
-    """Local and remote bandwidth per tier and kernel, averaged over the two sockets.
+    """Local and remote bandwidth per tier and kernel, for socket 0.
 
-    ``*_spread`` is half the difference between the sockets (their own spread), so the
-    bar shows how far apart the two sockets are, not a sample-to-sample figure.
+    Socket 0 is the reference for every headline number in this study.  ``*_spread`` is the
+    absolute difference to socket 1, shown so the reader sees how far the two sockets
+    differ; it is not a sample-to-sample figure.
     """
 
     loc = locality_ratio(ext, thesis)
     loc = loc[loc.kernel.isin(["read", "triad_nt"])]
-    g = loc.groupby(["config", "kernel"])
-    out = g[["local", "remote"]].mean()
+    s0 = loc[loc.socket.eq(0)].set_index(["config", "kernel"])
+    s1 = loc[loc.socket.eq(1)].set_index(["config", "kernel"])
+    out = s0[["local", "remote"]].copy()
     for col in ("local", "remote"):
-        out[f"{col}_spread"] = (g[col].max() - g[col].min()) / 2
+        out[f"{col}_spread"] = (s1[col] - s0[col]).abs()
     out = out.reset_index()
+    out["remote_over_local"] = out.remote / out.local
     tier = out.config.map({"flat_ddr": "DDR", "flat_hbm": "HBM"})
     out["label"] = tier + " " + out.kernel.map({"read": "read", "triad_nt": "NT Triad"})
     order = {"DDR read": 0, "DDR NT Triad": 1, "HBM read": 2, "HBM NT Triad": 3}
-    return out.sort_values("label", key=lambda s: s.map(order)).reset_index(drop=True)
+    return out.sort_values("label", key=lambda s_: s_.map(order)).reset_index(drop=True)
 
 
 def span_reference(ext: pd.DataFrame, thesis: pd.DataFrame, kernel: str = "read") -> pd.DataFrame:
@@ -644,41 +652,56 @@ def span_reference(ext: pd.DataFrame, thesis: pd.DataFrame, kernel: str = "read"
 
 
 def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> pd.DataFrame:
-    """T1: the headline ceilings of one socket, median with the range of the samples.
+    """T1: the headline ceilings of one socket (socket 0), each with its uncertainty.
 
-    ``kind`` says what sort of number it is: *measured* rates are operation counts or
-    kernel bytes over a timed window; bandwidth bytes are modeled, not counted by the
-    memory controller.
+    ``median``, ``min`` and ``max`` are the five samples of one run.  ``spread`` is half
+    that range relative to the median.  ``cross_run`` is the largest deviation seen when
+    the quantity (or, where it was not repeated, its family) was measured again in a
+    separate run; ``basis`` says which.  ``total`` is spread plus cross-run, a
+    conservative linear sum.  ``kind`` says what sort of number it is: operation counts
+    over a timed window, or kernel bytes over a timed window (modeled, not counted by the
+    memory controller).
     """
 
+    cross = cross_run_percent(ext, thesis)
     peaks = isa_peaks(ext, theory)
     peaks = peaks[peaks.scope.eq("1S") & peaks.cores.eq(56) & peaks.memory_mode.eq("flat") & peaks.socket.eq(0)]
+    bench_of = {key: b for b, key in [(b, k) for (b, d), k in KERNEL_PATHS.items()]}
     rows = []
     for key in ["fp64", "fp32", "avx512_bf16", "vnni_int8", "amx_bf16", "amx_int8"]:
         r = peaks[peaks.path.eq(key)].iloc[0]
+        c = cross.get(("flat", bench_of[key])) or cross[("flat", "compute")]
         rows.append(
             dict(
                 quantity=f"{theory.isa(key).label} peak", unit="TOP/s", median=r.gops / 1000, low=r.gops_min / 1000,
                 high=r.gops_max / 1000, n=int(r.n_samples), kind="measured, ops counted",
+                cross_run=c["percent"], basis=c["basis"] if c["basis"] != "repeat of this path" else "repeat of this path",
             )
         )
     bw = bandwidth_summary(ext, thesis)
     bw = bw[bw.locality.eq("local") & bw.socket_scope.eq("single") & bw.socket.eq(0) & bw.working_set_gib.sub(8).abs().lt(0.5)]
-    for cfg, kernel, name in [
-        ("flat_hbm", "read", "Flat HBM read-only"),
-        ("flat_hbm", "triad", "Flat HBM Triad"),
-        ("flat_ddr", "read", "Flat DDR read-only"),
-        ("flat_ddr", "triad", "Flat DDR Triad"),
-        ("cache", "read", "Cache read-only, 8 GiB"),
+    for cfg, kernel, name, mode, tier in [
+        ("flat_hbm", "read", "Flat HBM read-only", "flat", "hbm"),
+        ("flat_hbm", "triad", "Flat HBM Triad", "flat", "hbm"),
+        ("flat_ddr", "read", "Flat DDR read-only", "flat", "ddr"),
+        ("flat_ddr", "triad", "Flat DDR Triad", "flat", "ddr"),
+        ("cache", "read", "Cache read-only, 8 GiB", "cache", "effective_cache"),
     ]:
         r = bw[bw.config.eq(cfg) & bw.kernel.eq(kernel)].iloc[0]
+        c = cross[(mode, tier)]
+        basis = c["basis"] if kernel != "triad" or mode == "cache" else "repeat of this quantity"
+        if mode == "cache":
+            basis = "Triad repeat on a second node" if kernel == "triad" else "Triad repeat on a second node (node-to-node)"
         rows.append(
             dict(
                 quantity=f"{name} (56 cores)", unit="GB/s", median=r.gbs, low=r.gbs_min, high=r.gbs_max, n=int(r.n_samples),
-                kind="measured, bytes modeled",
+                kind="measured, bytes modeled", cross_run=c["percent"], basis=basis,
             )
         )
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    out["spread"] = 100 * (out.high - out.low) / 2 / out["median"]
+    out["total"] = out.spread + out.cross_run
+    return out
 
 
 def ridge_table(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
@@ -738,3 +761,89 @@ def unmeasured_table() -> pd.DataFrame:
         ],
         columns=["not measured", "what blocks it", "consequence here"],
     )
+
+
+# --------------------------------------------------------------- uncertainty
+FAMILIES = {
+    "compute": ["amx_peak", "avx512_bf16_peak", "avx512_peak", "int8_amx_peak", "vnni_peak"],
+    "bandwidth": ["stream_read", "stream_triad", "stream_triad_nt"],
+    "gemm": ["onednn_gemm_sweep"],
+    "latency": ["pointer_chase"],
+    "sweep": ["roofline_sweep"],
+}
+
+
+def _family(benchmark: str) -> str:
+    return next((f for f, names in FAMILIES.items() if benchmark in names), "other")
+
+
+def sample_cv(ext: pd.DataFrame) -> pd.DataFrame:
+    """Coefficient of variation of the samples of every *configuration*, one row each.
+
+    A configuration is everything that defines one measurement: benchmark, dtype, scope,
+    socket, tier, threads, working set, GEMM shape and batch (``m``, ``n``, ``k``),
+    notes and campaign.  Grouping without the shape would pool different GEMMs into one
+    spread; the first version of this table did that and overstated the tail.
+    """
+
+    keys = [
+        "memory_mode", "benchmark", "dtype", "socket_scope", "socket", "memory_target", "threads",
+        "working_set_bytes", "m", "n", "k", "notes", "campaign_id",
+    ]
+    metric = ext.bandwidth_gbs.where(ext.benchmark.isin(FAMILIES["bandwidth"] + FAMILIES["gemm"]), ext.performance_gops)
+    metric = metric.fillna(ext.performance_gops).fillna(ext.latency_ns)
+    g = ext.assign(_metric=metric).groupby(keys, dropna=False)._metric
+    out = pd.DataFrame({"cv_percent": 100 * g.std() / g.mean(), "n_samples": g.size()}).dropna().reset_index()
+    out["family"] = out.benchmark.map(_family)
+    return out
+
+
+def first_window_effect(ext: pd.DataFrame) -> pd.DataFrame:
+    """How far the first timed window of a configuration lies from the later ones.
+
+    ``ratio`` is the first window over the median of the others.  ``median_shift`` is how
+    much keeping the first window moves the five-sample median relative to dropping it.
+    """
+
+    keys = [
+        "memory_mode", "benchmark", "dtype", "socket", "memory_target", "threads", "working_set_bytes",
+        "m", "n", "k", "notes", "campaign_id",
+    ]
+    metric = ext.bandwidth_gbs.where(ext.benchmark.isin(FAMILIES["bandwidth"] + FAMILIES["gemm"]), ext.performance_gops)
+    data = ext[~ext.benchmark.eq("pointer_chase")].assign(_metric=metric.fillna(ext.performance_gops))
+    rows = []
+    for key, part in data.groupby(keys, dropna=False):
+        part = part.sort_values("iteration")
+        if len(part) < 5 or part.iteration.iloc[0] != 0:
+            continue
+        rest = part._metric.iloc[1:].median()
+        rows.append(
+            dict(
+                zip(keys, key),
+                family=_family(key[1]),
+                ratio=part._metric.iloc[0] / rest,
+                median_shift=part._metric.median() / rest - 1,
+            )
+        )
+    return pd.DataFrame(rows)
+
+
+def cross_run_percent(ext: pd.DataFrame, thesis: pd.DataFrame) -> dict[tuple[str, str], dict]:
+    """Largest repeat-run deviation (percent) by (mode, key), with the basis it rests on.
+
+    Keys are compute benchmarks (``("flat", "amx_peak")``), tiers for Triad
+    (``("flat", "hbm")``) and the pooled compute family (``("flat", "compute")``).  Flat
+    repeats ran on the same node; Cache repeats ran on a second node, so that figure
+    is node-to-node variance.
+    """
+
+    x = xcheck_table(ext, thesis)
+    out: dict[tuple[str, str], dict] = {}
+    for mode, part in x.groupby("memory_mode"):
+        comp = part[~part.benchmark.eq("stream_triad")]
+        for bench, rows in comp.groupby("benchmark"):
+            out[(mode, bench)] = dict(percent=float(rows.deviation_percent.abs().max()), basis="repeat of this path")
+        out[(mode, "compute")] = dict(percent=float(comp.deviation_percent.abs().max()), basis="largest repeated compute path")
+        for tier, rows in part[part.benchmark.eq("stream_triad")].groupby("memory_target"):
+            out[(mode, tier)] = dict(percent=float(rows.deviation_percent.abs().max()), basis="Triad repeat, same tier")
+    return out

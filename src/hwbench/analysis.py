@@ -288,6 +288,7 @@ def knees_table(df):
                     dtype=c["dtype"],
                     implementation=c.implementation,
                     compute_gflops=c["median"],
+                    bandwidth_kernel="triad (October core scaling)",
                     bandwidth_gbs=m["median"],
                     knee_flop_per_byte=c["median"] / m["median"],
                 )
