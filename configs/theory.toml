@@ -30,9 +30,10 @@ basis = "2 FMA ports x 16 lanes x 2 operations"
 [isa.avx512_bf16]
 label = "AVX-512 BF16 (vdpbf16ps)"
 dtype = "bf16"
-ops_per_cycle = 128
-status = "derived"
-basis = "upper bound: 2 ports x 16 lanes x 2 products x 2 operations; the measured issue rate is lower and is reported separately"
+ops_per_cycle = 32
+status = "table"
+basis = "uops.info lists vdpbf16ps (zmm) at 2.0 cycles per instruction (4 uops, latency 8) on Alder Lake-P and Emerald Rapids, the same core family as Sapphire Rapids; 64 operations per instruction at 0.5 instruction per cycle give 32 per cycle. Sapphire Rapids itself is not listed; the chain sweep (campaign part `chains`) is the confirmation on this node. Earlier versions assumed 128 (two 512-bit ports), which the instruction table contradicts."
+source = "https://uops.info/html-instr/VDPBF16PS_ZMM_ZMM_ZMM.html"
 
 [isa.vnni_int8]
 label = "AVX-512 VNNI (vpdpbusd)"

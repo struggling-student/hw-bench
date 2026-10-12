@@ -83,16 +83,15 @@ The only quantity comparable across paths is the fraction of the per-cycle figur
     code("""
 peaks = report.isa_peaks(ext, theory)
 one = peaks[(peaks.scope == '1S') & (peaks.cores == 56) & (peaks.memory_mode == 'flat') & (peaks.socket == 0)].copy()
-fig = plotting.compute_efficiency_figure(one, {'avx512_bf16': 'two-port bound is assumed'})
+fig = plotting.compute_efficiency_figure(one, {'avx512_bf16': 'bound from instruction table'})
 figure(fig, 'compute_efficiency')
 flat = one.set_index('path')
 amx, i8, vb, f32 = flat.loc['amx_bf16'], flat.loc['amx_int8'], flat.loc['avx512_bf16'], flat.loc['fp32']
 say(f"**Result.** One socket sustains {i8.gops/1000:.0f} TOP/s on AMX INT8 and {amx.gops/1000:.0f} TOP/s on AMX BF16 "
     f"({amx.efficiency_at_clock:.1%} of the peak at the {amx.ghz_effective:.2f} GHz the cores ran at). "
-    f"The AVX-512 BF16 dot product reaches {vb.ops_per_cycle_per_core:.0f} operations per cycle, {vb.ops_per_cycle_per_core/64:.2f} instruction per cycle at 64 operations each; "
-    f"its 128-operation bound is a two-port assumption of this study, not a vendor figure, so its {vb.efficiency_at_clock:.0%} efficiency depends on that assumption. "
-    f"It is not a faster path than FP32 FMA ({f32.gops/1000:.1f} versus {vb.gops/1000:.1f} TOP/s).")
-say_claims(claims.compute_paths(ext, theory), ['clocks', 'amx_busy'])
+    f"The AVX-512 BF16 dot product reaches {vb.ops_per_cycle_per_core:.0f} of {vb.theory_ops_per_cycle:.0f} operations per cycle ({vb.efficiency_at_clock:.0%}); "
+    f"it is not a faster path than FP32 FMA ({f32.gops/1000:.1f} versus {vb.gops/1000:.1f} TOP/s).")
+say_claims(claims.compute_paths(ext, theory), ['avx512_bf16_bound', 'clocks', 'amx_busy'])
 """),
     md("""
 ## 3. Memory: bandwidth against cores and against working set
@@ -586,15 +585,16 @@ one = one.set_index('path').loc[order].reset_index()
 table(one[['path', 'label', 'gops', 'cv_percent', 'ghz_effective', 'amx_busy_frac', 'ops_per_cycle_per_core', 'theory_ops_per_cycle', 'efficiency_base', 'efficiency_at_clock', 'theory_status']])
 """),
     code("""
-fig = plotting.compute_efficiency_figure(one, {'avx512_bf16': 'two-port bound is assumed'})
+fig = plotting.compute_efficiency_figure(one, {'avx512_bf16': 'bound from instruction table'})
 figure(fig, 'ops_per_cycle')
 """),
     code("""
 i = one.set_index('path')
 say(f"**Result.** AMX BF16 reaches {i.loc['amx_bf16','ops_per_cycle_per_core']:.0f} of 1024 operations per cycle ({i.loc['amx_bf16','efficiency_at_clock']:.1%}), "
     f"AMX INT8 {i.loc['amx_int8','ops_per_cycle_per_core']:.0f} of 2048, VNNI {i.loc['vnni_int8','ops_per_cycle_per_core']:.0f} of 256, FP32/FP64 {i.loc['fp32','ops_per_cycle_per_core']:.0f}/{i.loc['fp64','ops_per_cycle_per_core']:.0f} of 64/32. "
-    f"The AVX-512 BF16 dot product reaches only {i.loc['avx512_bf16','ops_per_cycle_per_core']:.0f} of the 128 two-port upper bound — roughly one instruction every two cycles — "
-    f"so it is not a faster path than FP32 FMA ({i.loc['fp32','gops']/1000:.1f} versus {i.loc['avx512_bf16','gops']/1000:.1f} TOP/s).")
+    f"The AVX-512 BF16 dot product reaches {i.loc['avx512_bf16','ops_per_cycle_per_core']:.0f} of {i.loc['avx512_bf16','theory_ops_per_cycle']:.0f} "
+    f"({i.loc['avx512_bf16','efficiency_at_clock']:.0%}), so it is not a faster path than FP32 FMA ({i.loc['fp32','gops']/1000:.1f} versus {i.loc['avx512_bf16','gops']/1000:.1f} TOP/s).")
+say_claims(claims.compute_paths(ext, theory), ['avx512_bf16_bound'])
 """),
     code("""
 say_claims(claims.compute_paths(ext, theory), ['clocks'], lead='Apparent efficiencies above 100% at base clock are clock effects.')

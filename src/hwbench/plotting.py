@@ -339,7 +339,7 @@ def compute_efficiency_figure(peaks: pd.DataFrame, notes: dict[str, str] | None 
         showlegend=False,
         hovertemplate="%{y}: %{x:.1%} of the per-cycle figure<extra></extra>",
     )
-    style(fig, "Operations per cycle against the vendor figure · one core", "Measured ÷ per-cycle figure", "", 440)
+    style(fig, "Operations per cycle against the per-cycle figure · one core", "Measured ÷ per-cycle figure", "", 440)
     fig.update_xaxes(range=[0, 1.8], tickformat=".0%", tickvals=[0, 0.25, 0.5, 0.75, 1.0])
     fig.update_yaxes(autorange="reversed", showgrid=False)
     fig.update_layout(margin=dict(l=130, r=40, t=85, b=70))

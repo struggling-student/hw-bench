@@ -19,5 +19,13 @@ def test_every_path_states_where_its_number_came_from():
     t = Theory.load()
     for key in t.data["isa"]:
         peak = t.isa(key)
-        assert peak.status in {"vendor", "derived"} and peak.basis
+        assert peak.status in {"vendor", "derived", "table"} and peak.basis
     assert t.isa_for("int8_amx_peak", "int8").key == "amx_int8"
+
+
+def test_avx512_bf16_bound_comes_from_the_instruction_table():
+    """vdpbf16ps is 2.0 cycles per instruction of 64 operations: 32 per cycle, not 128."""
+
+    peak = Theory.load().isa("avx512_bf16")
+    assert peak.ops_per_cycle == 64 / 2.0
+    assert peak.status == "table" and "uops.info" in peak.basis

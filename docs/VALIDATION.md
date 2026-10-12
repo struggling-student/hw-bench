@@ -102,9 +102,11 @@ only because a completed campaign declares it resumed.
 ### Observations that are not defects
 
 * **AVX-512 BF16** (`vdpbf16ps`) reaches about 30 operations per cycle per core, roughly one
-  instruction every two cycles, against a 128 upper bound from two 512-bit ports. The inner loop
+  instruction every two cycles. uops.info lists 2.0 cycles per instruction (32 operations per cycle)
+  for the same core family, so the path runs at about 94% of its bound; the 128 used before the
+  2026-10-12 review was an unsourced two-port assumption and has been replaced. The inner loop
   is twelve independent `vdpbf16ps` (checked in the disassembly), so this is a property of the
-  instruction on this part, not of the kernel.
+  instruction on this part, not of the kernel; the `chains` campaign part confirms it on the node.
 * **`torch._int_mm`** gives correct INT8 results but never reaches oneDNN, so it is rejected
   by the AMX-evidence rule; `onednn.qlinear_pointwise` (u8×s8, `brg_matmul:avx10_1_512_amx`) is
   the verified INT8 path.

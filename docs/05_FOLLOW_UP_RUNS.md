@@ -91,14 +91,14 @@ results join existing series and others stay separate until analysed on purpose:
 | `sweep_c12`, `sweep_c8` | nothing yet | extend `fp64_sweep_points` and the claim `sweep_plateau_not_reached` |
 | `repeat` | nothing yet | add the three launches to Table 1 as the between-run spread |
 
-## A finding that does not need a run
+## The AVX-512 BF16 bound (applied)
 
-The AVX-512 BF16 bound (A13) can already be sourced: [uops.info lists `VDPBF16PS`
-(ZMM, ZMM, ZMM)](https://uops.info/html-instr/VDPBF16PS_ZMM_ZMM_ZMM.html) at a throughput
-of **2.0 cycles per instruction** (four µops, latency 8) on Alder Lake-P, which has the
-same Golden Cove core as Sapphire Rapids, and on Emerald Rapids. At 64 operations per
-instruction that is **32 operations per cycle**, not the 128 in `configs/theory.toml`,
-and the measured 30 is then 94% of the bound rather than 23%. Sapphire Rapids itself is
-not on that page, so the `chains` sweep remains the confirmation on this hardware;
-Intel also publishes an instruction throughput and latency document for the 4th
-generation Xeon Scalable that has not been read here. `theory.toml` has not been changed.
+The bound (review A13) is now sourced and `configs/theory.toml` is corrected:
+[uops.info lists `VDPBF16PS` (ZMM, ZMM, ZMM)](https://uops.info/html-instr/VDPBF16PS_ZMM_ZMM_ZMM.html)
+at **2.0 cycles per instruction** (four µops, latency 8) on Alder Lake-P, which has the same
+Golden Cove core as Sapphire Rapids, and on Emerald Rapids. At 64 operations per instruction
+that is **32 operations per cycle**, not the 128 that was assumed, and the measured 30 is
+94% of it rather than 23%. Sapphire Rapids itself is not on that page, so the bound has
+status `table` (a published value for related parts), and the `chains` sweep is the
+confirmation on this hardware; Intel's instruction throughput and latency document for the
+4th generation Xeon Scalable has not been read here.

@@ -128,6 +128,7 @@ def compute_paths(ext: pd.DataFrame, theory: Theory) -> list[Claim]:
     vnni = one.loc["vnni_int8"].ghz_effective
     amx = one.loc[["amx_bf16", "amx_int8"]].ghz_effective
     busy = one.loc[["amx_bf16", "amx_int8"]].amx_busy_frac
+    bf = one.loc["avx512_bf16"]
     others = one.drop(["amx_bf16", "amx_int8"]).amx_busy_frac
     sc = report.isa_scaling(ext)
     sc = sc[sc.memory_mode.eq("flat") & sc.socket.eq(0)]
@@ -143,6 +144,15 @@ def compute_paths(ext: pd.DataFrame, theory: Theory) -> list[Claim]:
             f"The cores ran at about {avx.median():.2f} GHz on AVX-512 FMA/BF16 code, {vnni:.2f} GHz on VNNI and "
             f"{amx.median():.2f} GHz on AMX code, against a {theory.base_ghz:.1f} GHz base clock; AMX ran at the lowest clock. "
             "A power-related limit is plausible but was not measured.",
+        ),
+        Claim(
+            "avx512_bf16_bound",
+            0.85 < float(bf.efficiency_at_clock) < 1.02 and theory.isa("avx512_bf16").status == "table",
+            f"The AVX-512 BF16 dot product reaches {bf.ops_per_cycle_per_core:.0f} of {bf.theory_ops_per_cycle:.0f} operations per cycle "
+            f"({_pct(float(bf.efficiency_at_clock))}), that is {bf.ops_per_cycle_per_core / 64:.2f} instruction per cycle where the "
+            "instruction table lists 0.5 (2.0 cycles per `vdpbf16ps`, uops.info for Alder Lake-P and Emerald Rapids, the same core "
+            "family; Sapphire Rapids itself is not listed). The path is limited by the instruction, not by the kernel, and is slower than "
+            "FP32 FMA. The bound is a table value for related parts and is to be confirmed on this node by the accumulator-chain sweep.",
         ),
         Claim(
             "linear_scaling",
