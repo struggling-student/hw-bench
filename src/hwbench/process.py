@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import math
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -129,8 +130,10 @@ def _reasons(record, compiler):
         affinity = r.get("implementation") or record.get("notes") or ""
         if benchmark == "amx_onednn_gemm" and "numactl_only" not in affinity:
             reasons.append("superseded_onednn_affinity")
-    if benchmark == "roofline_sweep" and "avx512_8_independent_chains" not in (
-        r.get("implementation") or record.get("notes") or ""
+    # Sweeps with fewer than eight independent FMA chains are latency-limited and superseded;
+    # eight (the October kernel), twelve and sixteen are the supported chain counts.
+    if benchmark == "roofline_sweep" and not re.search(
+        r"avx512_(8|12|16)_independent_chains", r.get("implementation") or record.get("notes") or ""
     ):
         reasons.append("superseded_dependency_limited_sweep")
     if benchmark in REQUIRED_VERIFICATION:

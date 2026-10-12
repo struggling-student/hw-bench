@@ -219,3 +219,23 @@ def test_counted_bytes_stay_empty_without_both_events() -> None:
     rec = record()
     rec["result"] = dict(rec["result"], samples=[sample])
     assert rows_from_record(rec, Path("raw.json"), {})[0]["counted_bytes"] is None
+
+
+def _sweep_record(implementation: str) -> dict:
+    rec = record()
+    rec["result"] = dict(
+        rec["result"], benchmark="roofline_sweep", implementation=implementation,
+        samples=[dict(elapsed_seconds=1.0, operations=1e9, modeled_bytes=1e9)],
+    )
+    return rec
+
+
+def test_sweeps_with_eight_or_more_chains_are_accepted_and_fewer_are_superseded() -> None:
+    for impl, accepted in [
+        ("avx512_8_independent_chains", True),
+        ("avx512_12_independent_chains", True),
+        ("avx512_16_independent_chains", True),
+        ("avx512_dependent_chain", False),
+    ]:
+        reasons = [r for row in rows_from_record(_sweep_record(impl), Path("raw.json"), {}) for r in str(row.get("exclusion_reason", "")).split(";")]
+        assert ("superseded_dependency_limited_sweep" in reasons) is (not accepted), impl
