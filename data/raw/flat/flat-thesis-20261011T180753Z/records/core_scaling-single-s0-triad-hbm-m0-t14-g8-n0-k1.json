@@ -1,0 +1,109 @@
+{
+  "campaign_id": "flat-thesis-20261011T180753Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13",
+    "--membind=2",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/flat-thesis-20261011T180753Z/build/hardware",
+    "--kind",
+    "triad",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "1",
+    "--bytes",
+    "8589934592"
+  ],
+  "cpu_bind": "0,1,2,3,4,5,6,7,8,9,10,11,12,13",
+  "cpu_frequency_khz_after": 944766.0267857143,
+  "cpu_frequency_khz_before": 828589.2857142857,
+  "environment": {
+    "HWBENCH_PARTICIPANT": null,
+    "HWBENCH_PARTICIPANTS": null,
+    "HWBENCH_SYNC_DIR": null,
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "14",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm14.portici.enea.it",
+  "mem_bind": "2",
+  "memory_mode": "flat",
+  "memory_socket": 0,
+  "memory_target": "hbm",
+  "notes": "core_scaling",
+  "pair_id": null,
+  "physical_cores": 14,
+  "result": {
+    "benchmark": "stream_triad",
+    "checksum": 7164.76099999999,
+    "dtype": "",
+    "implementation": "native_avx512",
+    "k": 1,
+    "kernel": "triad",
+    "samples": [
+      {
+        "elapsed_seconds": 1.024135873,
+        "end_ns": 208025796757955,
+        "loads": 0,
+        "modeled_bytes": 249108088320,
+        "operations": 20759007360,
+        "planned_start_ns": 208024772622017,
+        "start_ns": 208024772622082
+      },
+      {
+        "elapsed_seconds": 1.02499028,
+        "end_ns": 208026821780303,
+        "loads": 0,
+        "modeled_bytes": 249108088320,
+        "operations": 20759007360,
+        "planned_start_ns": 208025796789984,
+        "start_ns": 208025796790023
+      },
+      {
+        "elapsed_seconds": 1.008654803,
+        "end_ns": 208027830446068,
+        "loads": 0,
+        "modeled_bytes": 240518154240,
+        "operations": 20043179520,
+        "planned_start_ns": 208026821791243,
+        "start_ns": 208026821791265
+      },
+      {
+        "elapsed_seconds": 1.031921548,
+        "end_ns": 208028862375411,
+        "loads": 0,
+        "modeled_bytes": 249108088320,
+        "operations": 20759007360,
+        "planned_start_ns": 208027830453839,
+        "start_ns": 208027830453863
+      },
+      {
+        "elapsed_seconds": 1.001428974,
+        "end_ns": 208029863812825,
+        "loads": 0,
+        "modeled_bytes": 240518154240,
+        "operations": 20043179520,
+        "planned_start_ns": 208028862383828,
+        "start_ns": 208028862383851
+      }
+    ],
+    "seed": 7,
+    "threads": 14,
+    "valid": true,
+    "working_set_bytes": 8589934080
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 0,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"stream_triad\",\"kernel\":\"triad\",\"dtype\":\"\",\"implementation\":\"native_avx512\",\"threads\":14,\"working_set_bytes\":8589934080,\"k\":1,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.024135873,\"start_ns\":208024772622082,\"end_ns\":208025796757955,\"planned_start_ns\":208024772622017,\"operations\":20759007360,\"modeled_bytes\":249108088320,\"loads\":0},{\"elapsed_seconds\":1.02499028,\"start_ns\":208025796790023,\"end_ns\":208026821780303,\"planned_start_ns\":208025796789984,\"operations\":20759007360,\"modeled_bytes\":249108088320,\"loads\":0},{\"elapsed_seconds\":1.008654803,\"start_ns\":208026821791265,\"end_ns\":208027830446068,\"planned_start_ns\":208026821791243,\"operations\":20043179520,\"modeled_bytes\":240518154240,\"loads\":0},{\"elapsed_seconds\":1.031921548,\"start_ns\":208027830453863,\"end_ns\":208028862375411,\"planned_start_ns\":208027830453839,\"operations\":20759007360,\"modeled_bytes\":249108088320,\"loads\":0},{\"elapsed_seconds\":1.001428974,\"start_ns\":208028862383851,\"end_ns\":208029863812825,\"planned_start_ns\":208028862383828,\"operations\":20043179520,\"modeled_bytes\":240518154240,\"loads\":0}],\"checksum\":7164.76099999999,\"valid\":true}\n",
+  "synchronized": false,
+  "threads": 14,
+  "timestamp": "2026-10-11T18:09:23.584659+00:00",
+  "working_set_bytes": null
+}

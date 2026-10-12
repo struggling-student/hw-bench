@@ -1,0 +1,5 @@
++ g++ -O3 -march=native -fopenmp -std=c++17 -Wall -Wextra -o /afs/enea.it/por/user/user/dev/hw-bench/build/stream_triad /afs/enea.it/por/user/user/dev/hw-bench/benchmarks/stream/stream_triad.cpp
++ g++ -O3 -march=native -fopenmp -std=c++17 -Wall -Wextra -mavx512f -mfma -o /afs/enea.it/por/user/user/dev/hw-bench/build/compute_peak /afs/enea.it/por/user/user/dev/hw-bench/benchmarks/avx512/compute_peak.cpp
++ g++ -O3 -march=native -fopenmp -std=c++17 -Wall -Wextra -mamx-tile -mamx-bf16 -mamx-int8 -o /afs/enea.it/por/user/user/dev/hw-bench/build/amx_peak /afs/enea.it/por/user/user/dev/hw-bench/benchmarks/amx/amx_peak.cpp
++ g++ -O3 -march=native -fopenmp -std=c++17 -Wall -Wextra -ffp-contract=fast -o /afs/enea.it/por/user/user/dev/hw-bench/build/intensity /afs/enea.it/por/user/user/dev/hw-bench/benchmarks/roofline_sweep/intensity.cpp
++ set +x

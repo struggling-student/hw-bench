@@ -1,0 +1,107 @@
+{
+  "campaign_id": "cache-thesis-20261011T182120Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=56,57,58,59",
+    "--membind=1",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/cache-thesis-20261011T182120Z/build/hardware",
+    "--kind",
+    "fp32",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "1"
+  ],
+  "cpu_bind": "56,57,58,59",
+  "cpu_frequency_khz_after": 846464.2857142857,
+  "cpu_frequency_khz_before": 808928.5714285715,
+  "environment": {
+    "HWBENCH_PARTICIPANT": null,
+    "HWBENCH_PARTICIPANTS": null,
+    "HWBENCH_SYNC_DIR": null,
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "4",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm01.portici.enea.it",
+  "mem_bind": "1",
+  "memory_mode": "cache",
+  "memory_socket": 1,
+  "memory_target": "registers",
+  "notes": "compute_scaling",
+  "pair_id": null,
+  "physical_cores": 4,
+  "result": {
+    "benchmark": "avx512_peak",
+    "checksum": 5014.88818359375,
+    "dtype": "fp32",
+    "implementation": "native_avx512",
+    "k": 1,
+    "kernel": "fp32",
+    "samples": [
+      {
+        "elapsed_seconds": 1.000776321,
+        "end_ns": 209019489125120,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 612864000000,
+        "planned_start_ns": 209018488348645,
+        "start_ns": 209018488348799
+      },
+      {
+        "elapsed_seconds": 1.005218189,
+        "end_ns": 209020494373640,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 635904000000,
+        "planned_start_ns": 209019489155406,
+        "start_ns": 209019489155451
+      },
+      {
+        "elapsed_seconds": 1.005008205,
+        "end_ns": 209021499386510,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 635904000000,
+        "planned_start_ns": 209020494378283,
+        "start_ns": 209020494378305
+      },
+      {
+        "elapsed_seconds": 1.004616959,
+        "end_ns": 209022504005563,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 635904000000,
+        "planned_start_ns": 209021499388581,
+        "start_ns": 209021499388604
+      },
+      {
+        "elapsed_seconds": 1.004045298,
+        "end_ns": 209023508052875,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 635904000000,
+        "planned_start_ns": 209022504007554,
+        "start_ns": 209022504007577
+      }
+    ],
+    "seed": 7,
+    "threads": 4,
+    "valid": true,
+    "working_set_bytes": 0
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 1,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"avx512_peak\",\"kernel\":\"fp32\",\"dtype\":\"fp32\",\"implementation\":\"native_avx512\",\"threads\":4,\"working_set_bytes\":0,\"k\":1,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.000776321,\"start_ns\":209018488348799,\"end_ns\":209019489125120,\"planned_start_ns\":209018488348645,\"operations\":612864000000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.005218189,\"start_ns\":209019489155451,\"end_ns\":209020494373640,\"planned_start_ns\":209019489155406,\"operations\":635904000000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.005008205,\"start_ns\":209020494378305,\"end_ns\":209021499386510,\"planned_start_ns\":209020494378283,\"operations\":635904000000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.004616959,\"start_ns\":209021499388604,\"end_ns\":209022504005563,\"planned_start_ns\":209021499388581,\"operations\":635904000000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.004045298,\"start_ns\":209022504007577,\"end_ns\":209023508052875,\"planned_start_ns\":209022504007554,\"operations\":635904000000,\"modeled_bytes\":0,\"loads\":0}],\"checksum\":5014.88818359375,\"valid\":true}\n",
+  "synchronized": false,
+  "threads": 4,
+  "timestamp": "2026-10-11T18:25:52.893675+00:00",
+  "working_set_bytes": null
+}

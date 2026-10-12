@@ -1,0 +1,107 @@
+{
+  "campaign_id": "cache-thesis-20261011T180757Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=56,57,58,59,60,61,62,63,64,65,66,67,68,69",
+    "--membind=1",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/cache-thesis-20261011T180757Z/build/hardware",
+    "--kind",
+    "bf16",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "1"
+  ],
+  "cpu_bind": "56,57,58,59,60,61,62,63,64,65,66,67,68,69",
+  "cpu_frequency_khz_after": 944767.125,
+  "cpu_frequency_khz_before": 808929.9642857143,
+  "environment": {
+    "HWBENCH_PARTICIPANT": null,
+    "HWBENCH_PARTICIPANTS": null,
+    "HWBENCH_SYNC_DIR": null,
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "14",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm01.portici.enea.it",
+  "mem_bind": "1",
+  "memory_mode": "cache",
+  "memory_socket": 1,
+  "memory_target": "registers",
+  "notes": "compute_scaling",
+  "pair_id": null,
+  "physical_cores": 14,
+  "result": {
+    "benchmark": "amx_peak",
+    "checksum": 117440512,
+    "dtype": "bf16",
+    "implementation": "native_amx_4_tiles",
+    "k": 1,
+    "kernel": "bf16",
+    "samples": [
+      {
+        "elapsed_seconds": 1.000547546,
+        "end_ns": 208529818596584,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 26577257627648,
+        "planned_start_ns": 208528818048934,
+        "start_ns": 208528818049038
+      },
+      {
+        "elapsed_seconds": 1.000399629,
+        "end_ns": 208530819026566,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 27494233145344,
+        "planned_start_ns": 208529818626903,
+        "start_ns": 208529818626937
+      },
+      {
+        "elapsed_seconds": 1.000201239,
+        "end_ns": 208531819231138,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 27494233145344,
+        "planned_start_ns": 208530819029876,
+        "start_ns": 208530819029899
+      },
+      {
+        "elapsed_seconds": 1.000257334,
+        "end_ns": 208532819490693,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 27494233145344,
+        "planned_start_ns": 208531819233335,
+        "start_ns": 208531819233359
+      },
+      {
+        "elapsed_seconds": 1.000372014,
+        "end_ns": 208533819864380,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 27494233145344,
+        "planned_start_ns": 208532819492342,
+        "start_ns": 208532819492366
+      }
+    ],
+    "seed": 7,
+    "threads": 14,
+    "valid": true,
+    "working_set_bytes": 0
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 1,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"amx_peak\",\"kernel\":\"bf16\",\"dtype\":\"bf16\",\"implementation\":\"native_amx_4_tiles\",\"threads\":14,\"working_set_bytes\":0,\"k\":1,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.000547546,\"start_ns\":208528818049038,\"end_ns\":208529818596584,\"planned_start_ns\":208528818048934,\"operations\":26577257627648,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000399629,\"start_ns\":208529818626937,\"end_ns\":208530819026566,\"planned_start_ns\":208529818626903,\"operations\":27494233145344,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000201239,\"start_ns\":208530819029899,\"end_ns\":208531819231138,\"planned_start_ns\":208530819029876,\"operations\":27494233145344,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000257334,\"start_ns\":208531819233359,\"end_ns\":208532819490693,\"planned_start_ns\":208531819233335,\"operations\":27494233145344,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000372014,\"start_ns\":208532819492366,\"end_ns\":208533819864380,\"planned_start_ns\":208532819492342,\"operations\":27494233145344,\"modeled_bytes\":0,\"loads\":0}],\"checksum\":117440512,\"valid\":true}\n",
+  "synchronized": false,
+  "threads": 14,
+  "timestamp": "2026-10-11T18:17:43.205336+00:00",
+  "working_set_bytes": null
+}

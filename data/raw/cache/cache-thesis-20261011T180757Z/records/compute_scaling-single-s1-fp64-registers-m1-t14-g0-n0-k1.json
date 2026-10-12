@@ -1,0 +1,107 @@
+{
+  "campaign_id": "cache-thesis-20261011T180757Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=56,57,58,59,60,61,62,63,64,65,66,67,68,69",
+    "--membind=1",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/cache-thesis-20261011T180757Z/build/hardware",
+    "--kind",
+    "fp64",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "1"
+  ],
+  "cpu_bind": "56,57,58,59,60,61,62,63,64,65,66,67,68,69",
+  "cpu_frequency_khz_after": 946553.5714285715,
+  "cpu_frequency_khz_before": 804612.9464285715,
+  "environment": {
+    "HWBENCH_PARTICIPANT": null,
+    "HWBENCH_PARTICIPANTS": null,
+    "HWBENCH_SYNC_DIR": null,
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "14",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm01.portici.enea.it",
+  "mem_bind": "1",
+  "memory_mode": "cache",
+  "memory_socket": 1,
+  "memory_target": "registers",
+  "notes": "compute_scaling",
+  "pair_id": null,
+  "physical_cores": 14,
+  "result": {
+    "benchmark": "avx512_peak",
+    "checksum": 8736.00013441195,
+    "dtype": "fp64",
+    "implementation": "native_avx512",
+    "k": 1,
+    "kernel": "fp64",
+    "samples": [
+      {
+        "elapsed_seconds": 1.000145773,
+        "end_ns": 208493630888420,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 1010150400000,
+        "planned_start_ns": 208492630742516,
+        "start_ns": 208492630742647
+      },
+      {
+        "elapsed_seconds": 1.000103575,
+        "end_ns": 208494631023923,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 1060416000000,
+        "planned_start_ns": 208493630920326,
+        "start_ns": 208493630920348
+      },
+      {
+        "elapsed_seconds": 1.000032885,
+        "end_ns": 208495631060483,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 1060416000000,
+        "planned_start_ns": 208494631027566,
+        "start_ns": 208494631027598
+      },
+      {
+        "elapsed_seconds": 1.000113637,
+        "end_ns": 208496631175758,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 1061222400000,
+        "planned_start_ns": 208495631062098,
+        "start_ns": 208495631062121
+      },
+      {
+        "elapsed_seconds": 1.000200789,
+        "end_ns": 208497631378344,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 1061222400000,
+        "planned_start_ns": 208496631177531,
+        "start_ns": 208496631177555
+      }
+    ],
+    "seed": 7,
+    "threads": 14,
+    "valid": true,
+    "working_set_bytes": 0
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 1,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"avx512_peak\",\"kernel\":\"fp64\",\"dtype\":\"fp64\",\"implementation\":\"native_avx512\",\"threads\":14,\"working_set_bytes\":0,\"k\":1,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.000145773,\"start_ns\":208492630742647,\"end_ns\":208493630888420,\"planned_start_ns\":208492630742516,\"operations\":1010150400000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000103575,\"start_ns\":208493630920348,\"end_ns\":208494631023923,\"planned_start_ns\":208493630920326,\"operations\":1060416000000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000032885,\"start_ns\":208494631027598,\"end_ns\":208495631060483,\"planned_start_ns\":208494631027566,\"operations\":1060416000000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000113637,\"start_ns\":208495631062121,\"end_ns\":208496631175758,\"planned_start_ns\":208495631062098,\"operations\":1061222400000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000200789,\"start_ns\":208496631177555,\"end_ns\":208497631378344,\"planned_start_ns\":208496631177531,\"operations\":1061222400000,\"modeled_bytes\":0,\"loads\":0}],\"checksum\":8736.00013441195,\"valid\":true}\n",
+  "synchronized": false,
+  "threads": 14,
+  "timestamp": "2026-10-11T18:17:07.017639+00:00",
+  "working_set_bytes": null
+}

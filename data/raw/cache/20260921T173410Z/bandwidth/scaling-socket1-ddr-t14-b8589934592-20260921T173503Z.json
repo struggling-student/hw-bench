@@ -1,0 +1,60 @@
+{
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=56,57,58,59,60,61,62,63,64,65,66,67,68,69",
+    "--membind=1",
+    "/afs/enea.it/por/user/user/dev/hw-bench/build/stream_triad",
+    "--bytes",
+    "8589934592",
+    "--warmups",
+    "2",
+    "--repetitions",
+    "5"
+  ],
+  "cpu_bind": "56,57,58,59,60,61,62,63,64,65,66,67,68,69",
+  "cpu_frequency_khz_after": 940432.2142857143,
+  "cpu_frequency_khz_before": 833035.7142857143,
+  "environment": {
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "14",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm15.portici.enea.it",
+  "mem_bind": "1",
+  "memory_mode": "cache",
+  "memory_target": "ddr",
+  "notes": "",
+  "pair_id": null,
+  "physical_cores": 14,
+  "result": {
+    "benchmark": "stream_triad",
+    "checksum": 7164.761,
+    "elements": 357913941,
+    "first_elapsed_seconds": 0.0389760592952,
+    "kernel": "triad",
+    "modeled_bytes_per_iteration": 8589934584,
+    "operations_per_iteration": 715827882,
+    "steady_elapsed_seconds": [
+      0.0387588450685,
+      0.0388433681801,
+      0.0387993287295,
+      0.038813745603,
+      0.0387899242342
+    ],
+    "threads": 14,
+    "valid": true,
+    "warmup_iterations": 2,
+    "working_set_bytes": 8589934584
+  },
+  "returncode": 0,
+  "schema_version": "1.0",
+  "socket": 1,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"stream_triad\",\"kernel\":\"triad\",\"threads\":14,\"elements\":357913941,\"working_set_bytes\":8589934584,\"modeled_bytes_per_iteration\":8589934584,\"operations_per_iteration\":715827882,\"first_elapsed_seconds\":0.0389760592952,\"steady_elapsed_seconds\":[0.0387588450685,0.0388433681801,0.0387993287295,0.038813745603,0.0387899242342],\"warmup_iterations\":2,\"checksum\":7164.761,\"valid\":true}\n",
+  "threads": 14,
+  "timestamp": "2026-09-21T17:35:03.762773+00:00",
+  "working_set_bytes": 8589934592
+}

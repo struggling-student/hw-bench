@@ -1,0 +1,107 @@
+{
+  "campaign_id": "flat-thesis-20261011T180753Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55",
+    "--membind=0",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/flat-thesis-20261011T180753Z/build/hardware",
+    "--kind",
+    "bf16",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "1"
+  ],
+  "cpu_bind": "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55",
+  "cpu_frequency_khz_after": 1913375.4285714286,
+  "cpu_frequency_khz_before": 847563.5714285715,
+  "environment": {
+    "HWBENCH_PARTICIPANT": "0",
+    "HWBENCH_PARTICIPANTS": "2",
+    "HWBENCH_SYNC_DIR": "/lpor1/store_0/usr/user/hw-bench-thesis-results/flat-thesis-20261011T180753Z/sync/dual-bf16",
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "56",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm14.portici.enea.it",
+  "mem_bind": "0",
+  "memory_mode": "flat",
+  "memory_socket": 0,
+  "memory_target": "registers",
+  "notes": "dual",
+  "pair_id": "dual-bf16",
+  "physical_cores": 56,
+  "result": {
+    "benchmark": "amx_peak",
+    "checksum": 469762048,
+    "dtype": "bf16",
+    "implementation": "native_amx_4_tiles",
+    "k": 1,
+    "kernel": "bf16",
+    "samples": [
+      {
+        "elapsed_seconds": 1.000001099,
+        "end_ns": 208788793283180,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 96267396972544,
+        "planned_start_ns": 208787793208883,
+        "start_ns": 208787793282081
+      },
+      {
+        "elapsed_seconds": 1.000505861,
+        "end_ns": 208790121724441,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 96928821936128,
+        "planned_start_ns": 208789121165647,
+        "start_ns": 208789121218580
+      },
+      {
+        "elapsed_seconds": 1.000197904,
+        "end_ns": 208791401763017,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 97890894610432,
+        "planned_start_ns": 208790401239845,
+        "start_ns": 208790401565113
+      },
+      {
+        "elapsed_seconds": 1.000475468,
+        "end_ns": 208792679520885,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 93441308491776,
+        "planned_start_ns": 208791678976679,
+        "start_ns": 208791679045417
+      },
+      {
+        "elapsed_seconds": 1.000226006,
+        "end_ns": 208793967587231,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 90975997263872,
+        "planned_start_ns": 208792967320167,
+        "start_ns": 208792967361225
+      }
+    ],
+    "seed": 7,
+    "threads": 56,
+    "valid": true,
+    "working_set_bytes": 0
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 0,
+  "socket_scope": "dual_component",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"amx_peak\",\"kernel\":\"bf16\",\"dtype\":\"bf16\",\"implementation\":\"native_amx_4_tiles\",\"threads\":56,\"working_set_bytes\":0,\"k\":1,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.000001099,\"start_ns\":208787793282081,\"end_ns\":208788793283180,\"planned_start_ns\":208787793208883,\"operations\":96267396972544,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000505861,\"start_ns\":208789121218580,\"end_ns\":208790121724441,\"planned_start_ns\":208789121165647,\"operations\":96928821936128,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000197904,\"start_ns\":208790401565113,\"end_ns\":208791401763017,\"planned_start_ns\":208790401239845,\"operations\":97890894610432,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000475468,\"start_ns\":208791679045417,\"end_ns\":208792679520885,\"planned_start_ns\":208791678976679,\"operations\":93441308491776,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000226006,\"start_ns\":208792967361225,\"end_ns\":208793967587231,\"planned_start_ns\":208792967320167,\"operations\":90975997263872,\"modeled_bytes\":0,\"loads\":0}],\"checksum\":469762048,\"valid\":true}\n",
+  "synchronized": true,
+  "threads": 56,
+  "timestamp": "2026-10-11T18:22:07.681366+00:00",
+  "working_set_bytes": null
+}

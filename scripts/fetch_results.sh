@@ -23,3 +23,5 @@ for mode,campaign in sorted(campaigns):
         target=root/'data/processed'/f'platform_{campaign}.json';target.parent.mkdir(parents=True,exist_ok=True);target.write_text(platform.read_text())
     print('Retrieved',campaign)
 PY
+# Raw data is committed, so strip account-identifying strings straight after retrieval.
+python3 "${ROOT}/scripts/scrub_raw.py"

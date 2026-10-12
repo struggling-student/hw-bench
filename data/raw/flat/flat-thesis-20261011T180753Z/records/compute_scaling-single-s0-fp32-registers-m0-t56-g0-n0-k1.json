@@ -1,0 +1,107 @@
+{
+  "campaign_id": "flat-thesis-20261011T180753Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55",
+    "--membind=0",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/flat-thesis-20261011T180753Z/build/hardware",
+    "--kind",
+    "fp32",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "1"
+  ],
+  "cpu_bind": "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55",
+  "cpu_frequency_khz_after": 1346874.669642857,
+  "cpu_frequency_khz_before": 808928.5714285715,
+  "environment": {
+    "HWBENCH_PARTICIPANT": null,
+    "HWBENCH_PARTICIPANTS": null,
+    "HWBENCH_SYNC_DIR": null,
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "56",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm14.portici.enea.it",
+  "mem_bind": "0",
+  "memory_mode": "flat",
+  "memory_socket": 0,
+  "memory_target": "registers",
+  "notes": "compute_scaling",
+  "pair_id": null,
+  "physical_cores": 56,
+  "result": {
+    "benchmark": "avx512_peak",
+    "checksum": 69898.6811523438,
+    "dtype": "fp32",
+    "implementation": "native_avx512",
+    "k": 1,
+    "kernel": "fp32",
+    "samples": [
+      {
+        "elapsed_seconds": 1.00001691,
+        "end_ns": 208312001764164,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 6870528000000,
+        "planned_start_ns": 208311001746723,
+        "start_ns": 208311001747254
+      },
+      {
+        "elapsed_seconds": 1.000255038,
+        "end_ns": 208313002031919,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 7201689600000,
+        "planned_start_ns": 208312001776574,
+        "start_ns": 208312001776881
+      },
+      {
+        "elapsed_seconds": 1.000238639,
+        "end_ns": 208314002274204,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 7205990400000,
+        "planned_start_ns": 208313002035530,
+        "start_ns": 208313002035565
+      },
+      {
+        "elapsed_seconds": 1.00005304,
+        "end_ns": 208315002329459,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 7186636800000,
+        "planned_start_ns": 208314002276396,
+        "start_ns": 208314002276419
+      },
+      {
+        "elapsed_seconds": 1.000008559,
+        "end_ns": 208316002340489,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 7175884800000,
+        "planned_start_ns": 208315002331907,
+        "start_ns": 208315002331930
+      }
+    ],
+    "seed": 7,
+    "threads": 56,
+    "valid": true,
+    "working_set_bytes": 0
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 0,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"avx512_peak\",\"kernel\":\"fp32\",\"dtype\":\"fp32\",\"implementation\":\"native_avx512\",\"threads\":56,\"working_set_bytes\":0,\"k\":1,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.00001691,\"start_ns\":208311001747254,\"end_ns\":208312001764164,\"planned_start_ns\":208311001746723,\"operations\":6870528000000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000255038,\"start_ns\":208312001776881,\"end_ns\":208313002031919,\"planned_start_ns\":208312001776574,\"operations\":7201689600000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000238639,\"start_ns\":208313002035565,\"end_ns\":208314002274204,\"planned_start_ns\":208313002035530,\"operations\":7205990400000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.00005304,\"start_ns\":208314002276419,\"end_ns\":208315002329459,\"planned_start_ns\":208314002276396,\"operations\":7186636800000,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000008559,\"start_ns\":208315002331930,\"end_ns\":208316002340489,\"planned_start_ns\":208315002331907,\"operations\":7175884800000,\"modeled_bytes\":0,\"loads\":0}],\"checksum\":69898.6811523438,\"valid\":true}\n",
+  "synchronized": false,
+  "threads": 56,
+  "timestamp": "2026-10-11T18:14:09.703717+00:00",
+  "working_set_bytes": null
+}

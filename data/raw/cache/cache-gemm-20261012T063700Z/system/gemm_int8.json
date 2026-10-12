@@ -1,0 +1,42 @@
+{
+  "accepted": true,
+  "candidates": [
+    {
+      "accepted": false,
+      "amx_lines": [],
+      "correct": true,
+      "dtype": "torch.int32",
+      "name": "torch._int_mm",
+      "verbose_head": [
+        "onednn_verbose,v1,info,oneDNN v3.12.0 (commit 80afa71049cd69a3df32adcccb623b12cd7baa22)",
+        "onednn_verbose,v1,info,cpu,runtime:OpenMP,nthr:56",
+        "onednn_verbose,v1,info,cpu,isa:Intel AVX10.1 and Intel AMX with bfloat16 and 8-bit integer support",
+        "onednn_verbose,v1,info,gpu,runtime:none",
+        "onednn_verbose,v1,info,graph,backend,0:dnnl_backend"
+      ]
+    },
+    {
+      "accepted": true,
+      "amx_lines": [
+        "onednn_verbose,v1,primitive,exec,cpu,matmul,brg_matmul:avx10_1_512_amx,undef,src:u8:a:blocked:ab::f0 wei:s8::blocked:BA16a64b4a::f8:zpm2 dst:f32:a:blocked:ab::f0,attr-scratchpad:user attr-scales:wei:2:f32,,256x1024:1024x512,8.99902",
+        "onednn_verbose,v1,primitive,exec,cpu,matmul,brg_matmul:avx10_1_512_amx,undef,src:u8:a:blocked:ab::f0 wei:s8::blocked:BA16a64b4a::f8:zpm2 dst:f32:a:blocked:ab::f0,attr-scratchpad:user attr-scales:wei:2:f32,,256x1024:1024x512,0.0400391"
+      ],
+      "correct": true,
+      "errors": [],
+      "name": "onednn.qlinear_pointwise",
+      "variant": "prepack(weight, x_shape)",
+      "verbose_head": [
+        "onednn_verbose,v1,primitive,exec,cpu,reorder,simple:any,undef,src:s8::blocked:ba::f0 dst:s8::blocked:BA16a64b4a::f8:zpm2,attr-scratchpad:user,,1024x512,0.748047",
+        "onednn_verbose,v1,primitive,exec,cpu,matmul,brg_matmul:avx10_1_512_amx,undef,src:u8:a:blocked:ab::f0 wei:s8::blocked:BA16a64b4a::f8:zpm2 dst:f32:a:blocked:ab::f0,attr-scratchpad:user attr-scales:wei:2:f32,,256x1024:1024x512,8.99902",
+        "onednn_verbose,v1,primitive,exec,cpu,matmul,brg_matmul:avx10_1_512_amx,undef,src:u8:a:blocked:ab::f0 wei:s8::blocked:BA16a64b4a::f8:zpm2 dst:f32:a:blocked:ab::f0,attr-scratchpad:user attr-scales:wei:2:f32,,256x1024:1024x512,0.0400391"
+      ]
+    }
+  ],
+  "onednn_quantized_ops": [
+    "qconv2d_pointwise",
+    "qconv_pointwise",
+    "qlinear_pointwise"
+  ],
+  "path": "onednn.qlinear_pointwise",
+  "torch": "2.13.0+cpu"
+}

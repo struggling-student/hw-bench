@@ -1,0 +1,107 @@
+{
+  "campaign_id": "flat-thesis-20261011T180753Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111",
+    "--membind=1",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/flat-thesis-20261011T180753Z/build/hardware",
+    "--kind",
+    "bf16",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "1"
+  ],
+  "cpu_bind": "56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111",
+  "cpu_frequency_khz_after": 1903647.2589285714,
+  "cpu_frequency_khz_before": 832972.3839285715,
+  "environment": {
+    "HWBENCH_PARTICIPANT": "1",
+    "HWBENCH_PARTICIPANTS": "2",
+    "HWBENCH_SYNC_DIR": "/lpor1/store_0/usr/user/hw-bench-thesis-results/flat-thesis-20261011T180753Z/sync/dual-bf16",
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "56",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm14.portici.enea.it",
+  "mem_bind": "1",
+  "memory_mode": "flat",
+  "memory_socket": 1,
+  "memory_target": "registers",
+  "notes": "dual",
+  "pair_id": "dual-bf16",
+  "physical_cores": 56,
+  "result": {
+    "benchmark": "amx_peak",
+    "checksum": 469762048,
+    "dtype": "bf16",
+    "implementation": "native_amx_4_tiles",
+    "k": 1,
+    "kernel": "bf16",
+    "samples": [
+      {
+        "elapsed_seconds": 1.054587916,
+        "end_ns": 208788847870273,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 96087008346112,
+        "planned_start_ns": 208787793208883,
+        "start_ns": 208787793282357
+      },
+      {
+        "elapsed_seconds": 1.000327732,
+        "end_ns": 208790121540961,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 96628174225408,
+        "planned_start_ns": 208789121165647,
+        "start_ns": 208789121213229
+      },
+      {
+        "elapsed_seconds": 1.00011477,
+        "end_ns": 208791401650214,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 98011153694720,
+        "planned_start_ns": 208790401239845,
+        "start_ns": 208790401535444
+      },
+      {
+        "elapsed_seconds": 1.000523346,
+        "end_ns": 208792679572216,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 92479235817472,
+        "planned_start_ns": 208791678976679,
+        "start_ns": 208791679048870
+      },
+      {
+        "elapsed_seconds": 1.000163266,
+        "end_ns": 208793967558193,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 88691074662400,
+        "planned_start_ns": 208792967320167,
+        "start_ns": 208792967394927
+      }
+    ],
+    "seed": 7,
+    "threads": 56,
+    "valid": true,
+    "working_set_bytes": 0
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 1,
+  "socket_scope": "dual_component",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"amx_peak\",\"kernel\":\"bf16\",\"dtype\":\"bf16\",\"implementation\":\"native_amx_4_tiles\",\"threads\":56,\"working_set_bytes\":0,\"k\":1,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.054587916,\"start_ns\":208787793282357,\"end_ns\":208788847870273,\"planned_start_ns\":208787793208883,\"operations\":96087008346112,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000327732,\"start_ns\":208789121213229,\"end_ns\":208790121540961,\"planned_start_ns\":208789121165647,\"operations\":96628174225408,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.00011477,\"start_ns\":208790401535444,\"end_ns\":208791401650214,\"planned_start_ns\":208790401239845,\"operations\":98011153694720,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000523346,\"start_ns\":208791679048870,\"end_ns\":208792679572216,\"planned_start_ns\":208791678976679,\"operations\":92479235817472,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000163266,\"start_ns\":208792967394927,\"end_ns\":208793967558193,\"planned_start_ns\":208792967320167,\"operations\":88691074662400,\"modeled_bytes\":0,\"loads\":0}],\"checksum\":469762048,\"valid\":true}\n",
+  "synchronized": true,
+  "threads": 56,
+  "timestamp": "2026-10-11T18:22:07.658327+00:00",
+  "working_set_bytes": null
+}

@@ -1,0 +1,107 @@
+{
+  "campaign_id": "flat-thesis-20261011T180753Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=56,57,58,59,60,61,62,63,64,65,66,67,68,69",
+    "--membind=1",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/flat-thesis-20261011T180753Z/build/hardware",
+    "--kind",
+    "bf16",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "1"
+  ],
+  "cpu_bind": "56,57,58,59,60,61,62,63,64,65,66,67,68,69",
+  "cpu_frequency_khz_after": 944767.8571428572,
+  "cpu_frequency_khz_before": 811605.6964285715,
+  "environment": {
+    "HWBENCH_PARTICIPANT": null,
+    "HWBENCH_PARTICIPANTS": null,
+    "HWBENCH_SYNC_DIR": null,
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "14",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm14.portici.enea.it",
+  "mem_bind": "1",
+  "memory_mode": "flat",
+  "memory_socket": 1,
+  "memory_target": "registers",
+  "notes": "compute_scaling",
+  "pair_id": null,
+  "physical_cores": 14,
+  "result": {
+    "benchmark": "amx_peak",
+    "checksum": 117440512,
+    "dtype": "bf16",
+    "implementation": "native_amx_4_tiles",
+    "k": 1,
+    "kernel": "bf16",
+    "samples": [
+      {
+        "elapsed_seconds": 1.000305957,
+        "end_ns": 208620588854686,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 26652419555328,
+        "planned_start_ns": 208619588548651,
+        "start_ns": 208619588548729
+      },
+      {
+        "elapsed_seconds": 1.000503688,
+        "end_ns": 208621589369630,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 27629524615168,
+        "planned_start_ns": 208620588865910,
+        "start_ns": 208620588865942
+      },
+      {
+        "elapsed_seconds": 1.00053208,
+        "end_ns": 208622589903739,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 27629524615168,
+        "planned_start_ns": 208621589371636,
+        "start_ns": 208621589371659
+      },
+      {
+        "elapsed_seconds": 1.000350166,
+        "end_ns": 208623590255368,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 27629524615168,
+        "planned_start_ns": 208622589905179,
+        "start_ns": 208622589905202
+      },
+      {
+        "elapsed_seconds": 1.000345306,
+        "end_ns": 208624590602156,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 27629524615168,
+        "planned_start_ns": 208623590256827,
+        "start_ns": 208623590256850
+      }
+    ],
+    "seed": 7,
+    "threads": 14,
+    "valid": true,
+    "working_set_bytes": 0
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 1,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"amx_peak\",\"kernel\":\"bf16\",\"dtype\":\"bf16\",\"implementation\":\"native_amx_4_tiles\",\"threads\":14,\"working_set_bytes\":0,\"k\":1,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.000305957,\"start_ns\":208619588548729,\"end_ns\":208620588854686,\"planned_start_ns\":208619588548651,\"operations\":26652419555328,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000503688,\"start_ns\":208620588865942,\"end_ns\":208621589369630,\"planned_start_ns\":208620588865910,\"operations\":27629524615168,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.00053208,\"start_ns\":208621589371659,\"end_ns\":208622589903739,\"planned_start_ns\":208621589371636,\"operations\":27629524615168,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000350166,\"start_ns\":208622589905202,\"end_ns\":208623590255368,\"planned_start_ns\":208622589905179,\"operations\":27629524615168,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.000345306,\"start_ns\":208623590256850,\"end_ns\":208624590602156,\"planned_start_ns\":208623590256827,\"operations\":27629524615168,\"modeled_bytes\":0,\"loads\":0}],\"checksum\":117440512,\"valid\":true}\n",
+  "synchronized": false,
+  "threads": 14,
+  "timestamp": "2026-10-11T18:19:18.294059+00:00",
+  "working_set_bytes": null
+}

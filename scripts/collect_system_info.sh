@@ -24,7 +24,7 @@ fi
   printf '\n=== infiniband ===\n'
   ibstat 2>&1 || true
   printf '\n=== modules ===\n'
-  bash -lc 'module -t list' 2>&1 || true
+  bash -lc 'module -t list' 2>&1 | grep -viE 'password|expiration' || true
 } >"${OUT}/site.txt" 2>&1
 {
   hostname

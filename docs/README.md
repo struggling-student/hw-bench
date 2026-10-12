@@ -11,6 +11,8 @@ interpret a CRESCO8 campaign.
 | [03 — Methods and data](03_METHODS_AND_DATA.md) | Kernel definitions, working sets, affinity, normalization, statistics, and Roofline equations. |
 | [04 — Analysis and results](04_ANALYSIS_AND_RESULTS.md) | Measured ceilings, plot-by-plot reading guide, knees, theory, and limitations. |
 | [Validation appendix](VALIDATION.md) | Preserved failed/superseded runs and the explicit acceptance rules. |
+| [Scientific review, 2026-10-12](REVIEW_2026-10-12.md) | Independent audit of the roofline analysis: prioritized findings and the follow-up roadmap. |
 
-`data/raw/`, `data/processed/`, and generated `figures/` are local, git-ignored campaign
-artifacts. The seven executed [notebooks](../notebooks/README.md) are versioned; rebuilding them requires the selected local raw campaigns.
+`data/raw/` (scrubbed of account-identifying strings by `scripts/scrub_raw.py`),
+`data/processed/`, and the exported `figures/` are versioned, so a clone can rebuild the
+analysis with `scripts/make_analysis.sh`. The seven executed [notebooks](../notebooks/README.md) are versioned; rebuilding them requires the selected local raw campaigns.

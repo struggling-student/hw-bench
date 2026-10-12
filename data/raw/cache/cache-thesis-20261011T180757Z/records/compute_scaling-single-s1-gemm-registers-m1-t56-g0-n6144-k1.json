@@ -1,0 +1,111 @@
+{
+  "campaign_id": "cache-thesis-20261011T180757Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111",
+    "--membind=1",
+    "env",
+    "-u",
+    "OMP_PROC_BIND",
+    "-u",
+    "OMP_PLACES",
+    "apptainer",
+    "exec",
+    "--bind",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-source/cache-thesis-20261011T180757Z:/lpor1/store_0/usr/user/hw-bench-thesis-source/cache-thesis-20261011T180757Z:ro",
+    "/lpor1/store_0/usr/user/images/vllm-cpu-v0.29.0.sif",
+    "python3",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-source/cache-thesis-20261011T180757Z/benchmarks/amx/torch_amx.py",
+    "--dtype",
+    "bf16",
+    "--size",
+    "6144",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5"
+  ],
+  "cpu_bind": "56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111",
+  "cpu_frequency_khz_after": 1027874.4285714285,
+  "cpu_frequency_khz_before": 818760.7232142857,
+  "environment": {
+    "HWBENCH_PARTICIPANT": null,
+    "HWBENCH_PARTICIPANTS": null,
+    "HWBENCH_SYNC_DIR": null,
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "56",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm01.portici.enea.it",
+  "mem_bind": "1",
+  "memory_mode": "cache",
+  "memory_socket": 1,
+  "memory_target": "registers",
+  "notes": "compute_scaling",
+  "pair_id": null,
+  "physical_cores": 56,
+  "result": {
+    "benchmark": "amx_onednn_gemm",
+    "checksum": -23.21484375,
+    "dtype": "bf16",
+    "implementation": "onednn_numactl_only_omp_affinity_unset",
+    "k": 6144,
+    "kernel": "gemm",
+    "m": 6144,
+    "n": 6144,
+    "samples": [
+      {
+        "elapsed_seconds": 1.005867726,
+        "end_ns": 208648167725995,
+        "operations": 37572373905408,
+        "planned_start_ns": 208647161853328,
+        "start_ns": 208647161858269
+      },
+      {
+        "elapsed_seconds": 1.009418372,
+        "end_ns": 208649177190861,
+        "operations": 40355512713216,
+        "planned_start_ns": 208648167767351,
+        "start_ns": 208648167772489
+      },
+      {
+        "elapsed_seconds": 1.001779013,
+        "end_ns": 208650179009994,
+        "operations": 34789235097600,
+        "planned_start_ns": 208649177228037,
+        "start_ns": 208649177230981
+      },
+      {
+        "elapsed_seconds": 1.011753499,
+        "end_ns": 208651190790356,
+        "operations": 37108517437440,
+        "planned_start_ns": 208650179034044,
+        "start_ns": 208650179036857
+      },
+      {
+        "elapsed_seconds": 1.007518755,
+        "end_ns": 208652198337202,
+        "operations": 36644660969472,
+        "planned_start_ns": 208651190815646,
+        "start_ns": 208651190818447
+      }
+    ],
+    "threads": 56,
+    "torch_configuration": "PyTorch built with:\n  - GCC 13.3\n  - C++ Version: 202002\n  - Intel(R) oneAPI Math Kernel Library Version 2024.2-Product Build 20240605 for Intel(R) 64 architecture applications\n  - Intel(R) MKL-DNN v3.12.0 (Git Hash 80afa71049cd69a3df32adcccb623b12cd7baa22)\n  - OpenMP 201511 (a.k.a. OpenMP 4.5)\n  - LAPACK is enabled (usually provided by MKL)\n  - NNPACK is enabled\n  - CPU capability usage: AVX512\n  - Build settings: BLAS_INFO=mkl, BUILD_TYPE=Release, COMMIT_SHA=cf30153c4c131c8164ee7798e5022d810682e2cb, CUDA_FLAGS= -DLIBCUDACXX_ENABLE_SIMPLIFIED_COMPLEX_OPERATIONS -Xfatbin -compress-all  -Wno-deprecated-gpu-targets --expt-extended-lambda -DCUB_WRAPPED_NAMESPACE=at_cuda_detail -DDISABLE_CUSPARSE_DEPRECATED -DCUDA_HAS_FP16=1 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -DC10_NODEPRECATED, CXX_COMPILER=/opt/rh/gcc-toolset-13/root/usr/bin/c++, CXX_FLAGS= -fvisibility-inlines-hidden -DUSE_PTHREADPOOL -DNDEBUG -DUSE_KINETO -DUSE_FBGEMM -DUSE_PYTORCH_QNNPACK -DSYMBOLICATE_MOBILE_DEBUG_HANDLE -O2 -fPIC -DC10_NODEPRECATED -Wall -Wextra -Werror=return-type -Werror=non-virtual-dtor -Werror=range-loop-construct -Werror=bool-operation -Wnarrowing -Wno-missing-field-initializers -Wno-unknown-pragmas -Wno-unused-parameter -Wno-strict-overflow -Wno-strict-aliasing -Wno-stringop-overflow -Wsuggest-override -Wno-psabi -Wno-error=old-style-cast -faligned-new -Wno-maybe-uninitialized -fno-math-errno -fno-trapping-math -Werror=format -Wno-dangling-reference -Wno-error=dangling-reference -Wno-stringop-overflow, LAPACK_INFO=mkl, PERF_WITH_AVX=1, PERF_WITH_AVX2=1, TORCH_VERSION=2.13.0, USE_CUDA=0, USE_CUDNN=OFF, USE_CUSPARSELT=OFF, USE_GFLAGS=OFF, USE_GLOG=OFF, USE_GLOO=ON, USE_MKL=ON, USE_MKLDNN=ON, USE_MPI=OFF, USE_NCCL=OFF, USE_NNPACK=ON, USE_OPENMP=ON, USE_ROCM=OFF, USE_ROCM_KERNEL_ASSERT=OFF, USE_XCCL=OFF, USE_XPU=OFF, \n",
+    "torch_version": "2.13.0+cpu",
+    "valid": true,
+    "working_set_bytes": 226492416
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 1,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "onednn_verbose,v1,info,oneDNN v3.12.0 (commit 80afa71049cd69a3df32adcccb623b12cd7baa22)\nonednn_verbose,v1,info,cpu,runtime:OpenMP,nthr:56\nonednn_verbose,v1,info,cpu,isa:Intel AVX10.1 and Intel AMX with bfloat16 and 8-bit integer support\nonednn_verbose,v1,info,gpu,runtime:none\nonednn_verbose,v1,info,graph,backend,0:dnnl_backend\nonednn_verbose,v1,primitive,info,template:operation,engine,primitive,implementation,prop_kind,memory_descriptors,attributes,auxiliary,problem_desc,exec_time\nonednn_verbose,v1,graph,info,template:operation,engine,partition_id,partition_kind,op_names,data_formats,logical_tensors,fpmath_mode,implementation,backend,exec_time\nonednn_verbose,v1,primitive,exec,cpu,matmul,brg_matmul:avx10_1_512_amx,undef,src:bf16::blocked:ab::f0 wei:bf16::blocked:ab::f0 dst:bf16::blocked:ab::f0,attr-scratchpad:user,,6144x6144:6144x6144,45.3379\n{\"benchmark\": \"amx_onednn_gemm\", \"kernel\": \"gemm\", \"dtype\": \"bf16\", \"implementation\": \"onednn_numactl_only_omp_affinity_unset\", \"threads\": 56, \"m\": 6144, \"n\": 6144, \"k\": 6144, \"working_set_bytes\": 226492416, \"torch_version\": \"2.13.0+cpu\", \"torch_configuration\": \"PyTorch built with:\\n  - GCC 13.3\\n  - C++ Version: 202002\\n  - Intel(R) oneAPI Math Kernel Library Version 2024.2-Product Build 20240605 for Intel(R) 64 architecture applications\\n  - Intel(R) MKL-DNN v3.12.0 (Git Hash 80afa71049cd69a3df32adcccb623b12cd7baa22)\\n  - OpenMP 201511 (a.k.a. OpenMP 4.5)\\n  - LAPACK is enabled (usually provided by MKL)\\n  - NNPACK is enabled\\n  - CPU capability usage: AVX512\\n  - Build settings: BLAS_INFO=mkl, BUILD_TYPE=Release, COMMIT_SHA=cf30153c4c131c8164ee7798e5022d810682e2cb, CUDA_FLAGS= -DLIBCUDACXX_ENABLE_SIMPLIFIED_COMPLEX_OPERATIONS -Xfatbin -compress-all  -Wno-deprecated-gpu-targets --expt-extended-lambda -DCUB_WRAPPED_NAMESPACE=at_cuda_detail -DDISABLE_CUSPARSE_DEPRECATED -DCUDA_HAS_FP16=1 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -DC10_NODEPRECATED, CXX_COMPILER=/opt/rh/gcc-toolset-13/root/usr/bin/c++, CXX_FLAGS= -fvisibility-inlines-hidden -DUSE_PTHREADPOOL -DNDEBUG -DUSE_KINETO -DUSE_FBGEMM -DUSE_PYTORCH_QNNPACK -DSYMBOLICATE_MOBILE_DEBUG_HANDLE -O2 -fPIC -DC10_NODEPRECATED -Wall -Wextra -Werror=return-type -Werror=non-virtual-dtor -Werror=range-loop-construct -Werror=bool-operation -Wnarrowing -Wno-missing-field-initializers -Wno-unknown-pragmas -Wno-unused-parameter -Wno-strict-overflow -Wno-strict-aliasing -Wno-stringop-overflow -Wsuggest-override -Wno-psabi -Wno-error=old-style-cast -faligned-new -Wno-maybe-uninitialized -fno-math-errno -fno-trapping-math -Werror=format -Wno-dangling-reference -Wno-error=dangling-reference -Wno-stringop-overflow, LAPACK_INFO=mkl, PERF_WITH_AVX=1, PERF_WITH_AVX2=1, TORCH_VERSION=2.13.0, USE_CUDA=0, USE_CUDNN=OFF, USE_CUSPARSELT=OFF, USE_GFLAGS=OFF, USE_GLOG=OFF, USE_GLOO=ON, USE_MKL=ON, USE_MKLDNN=ON, USE_MPI=OFF, USE_NCCL=OFF, USE_NNPACK=ON, USE_OPENMP=ON, USE_ROCM=OFF, USE_ROCM_KERNEL_ASSERT=OFF, USE_XCCL=OFF, USE_XPU=OFF, \\n\", \"samples\": [{\"start_ns\": 208647161858269, \"end_ns\": 208648167725995, \"planned_start_ns\": 208647161853328, \"elapsed_seconds\": 1.005867726, \"operations\": 37572373905408}, {\"start_ns\": 208648167772489, \"end_ns\": 208649177190861, \"planned_start_ns\": 208648167767351, \"elapsed_seconds\": 1.009418372, \"operations\": 40355512713216}, {\"start_ns\": 208649177230981, \"end_ns\": 208650179009994, \"planned_start_ns\": 208649177228037, \"elapsed_seconds\": 1.001779013, \"operations\": 34789235097600}, {\"start_ns\": 208650179036857, \"end_ns\": 208651190790356, \"planned_start_ns\": 208650179034044, \"elapsed_seconds\": 1.011753499, \"operations\": 37108517437440}, {\"start_ns\": 208651190818447, \"end_ns\": 208652198337202, \"planned_start_ns\": 208651190815646, \"elapsed_seconds\": 1.007518755, \"operations\": 36644660969472}], \"valid\": true, \"checksum\": -23.21484375}\n",
+  "synchronized": false,
+  "threads": 56,
+  "timestamp": "2026-10-11T18:19:42.160413+00:00",
+  "working_set_bytes": null
+}

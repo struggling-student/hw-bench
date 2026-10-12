@@ -1,0 +1,50 @@
+{
+  "campaign_repetition": 4,
+  "command": [
+    "numactl",
+    "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13",
+    "--membind=0",
+    "/lpor1/store_0/usr/user/hw-bench-stage-v2/build/compute_peak",
+    "--mode",
+    "fp64",
+    "--iterations",
+    "300000000"
+  ],
+  "cpu_bind": "0,1,2,3,4,5,6,7,8,9,10,11,12,13",
+  "cpu_frequency_khz_after": 1908804.7421875,
+  "cpu_frequency_khz_before": 1908804.6875,
+  "environment": {
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "14",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8x001.portici.enea.it",
+  "mem_bind": "0",
+  "memory_mode": "cache",
+  "memory_target": "registers",
+  "notes": "",
+  "pair_id": null,
+  "physical_cores": 14,
+  "result": {
+    "benchmark": "avx512_peak",
+    "checksum": 874.003204137,
+    "dtype": "fp64",
+    "elapsed_seconds": 0.698991214857,
+    "iterations": 300000000,
+    "kernel": "avx512_fp64_fma",
+    "operations": 806400000000,
+    "performance_gops": 1153.66256808,
+    "threads": 14,
+    "valid": true
+  },
+  "returncode": 0,
+  "schema_version": "1.0",
+  "socket": 0,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"avx512_peak\",\"kernel\":\"avx512_fp64_fma\",\"dtype\":\"fp64\",\"threads\":14,\"iterations\":300000000,\"operations\":806400000000,\"elapsed_seconds\":0.698991214857,\"performance_gops\":1153.66256808,\"checksum\":874.003204137,\"valid\":true}\n",
+  "threads": 14,
+  "timestamp": "2026-09-21T18:07:21.661065+00:00",
+  "working_set_bytes": null
+}

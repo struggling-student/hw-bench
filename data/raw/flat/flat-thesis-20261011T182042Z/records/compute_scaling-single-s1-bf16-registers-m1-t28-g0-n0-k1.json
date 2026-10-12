@@ -1,0 +1,107 @@
+{
+  "campaign_id": "flat-thesis-20261011T182042Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83",
+    "--membind=1",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/flat-thesis-20261011T182042Z/build/hardware",
+    "--kind",
+    "bf16",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "1"
+  ],
+  "cpu_bind": "56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83",
+  "cpu_frequency_khz_after": 1080557.580357143,
+  "cpu_frequency_khz_before": 916171.7410714285,
+  "environment": {
+    "HWBENCH_PARTICIPANT": null,
+    "HWBENCH_PARTICIPANTS": null,
+    "HWBENCH_SYNC_DIR": null,
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "28",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm14.portici.enea.it",
+  "mem_bind": "1",
+  "memory_mode": "flat",
+  "memory_socket": 1,
+  "memory_target": "registers",
+  "notes": "compute_scaling",
+  "pair_id": null,
+  "physical_cores": 28,
+  "result": {
+    "benchmark": "amx_peak",
+    "checksum": 234881024,
+    "dtype": "bf16",
+    "implementation": "native_amx_4_tiles",
+    "k": 1,
+    "kernel": "bf16",
+    "samples": [
+      {
+        "elapsed_seconds": 1.007554275,
+        "end_ns": 209158266560900,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 56281251446784,
+        "planned_start_ns": 209157259006511,
+        "start_ns": 209157259006625
+      },
+      {
+        "elapsed_seconds": 1.001312837,
+        "end_ns": 209159267888778,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 56762287783936,
+        "planned_start_ns": 209158266575897,
+        "start_ns": 209158266575941
+      },
+      {
+        "elapsed_seconds": 1.001195107,
+        "end_ns": 209160269086129,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 56762287783936,
+        "planned_start_ns": 209159267890999,
+        "start_ns": 209159267891022
+      },
+      {
+        "elapsed_seconds": 1.001251089,
+        "end_ns": 209161270338936,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 56762287783936,
+        "planned_start_ns": 209160269087825,
+        "start_ns": 209160269087847
+      },
+      {
+        "elapsed_seconds": 1.001360689,
+        "end_ns": 209162271701134,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 56762287783936,
+        "planned_start_ns": 209161270340421,
+        "start_ns": 209161270340445
+      }
+    ],
+    "seed": 7,
+    "threads": 28,
+    "valid": true,
+    "working_set_bytes": 0
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 1,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"amx_peak\",\"kernel\":\"bf16\",\"dtype\":\"bf16\",\"implementation\":\"native_amx_4_tiles\",\"threads\":28,\"working_set_bytes\":0,\"k\":1,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.007554275,\"start_ns\":209157259006625,\"end_ns\":209158266560900,\"planned_start_ns\":209157259006511,\"operations\":56281251446784,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.001312837,\"start_ns\":209158266575941,\"end_ns\":209159267888778,\"planned_start_ns\":209158266575897,\"operations\":56762287783936,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.001195107,\"start_ns\":209159267891022,\"end_ns\":209160269086129,\"planned_start_ns\":209159267890999,\"operations\":56762287783936,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.001251089,\"start_ns\":209160269087847,\"end_ns\":209161270338936,\"planned_start_ns\":209160269087825,\"operations\":56762287783936,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.001360689,\"start_ns\":209161270340445,\"end_ns\":209162271701134,\"planned_start_ns\":209161270340421,\"operations\":56762287783936,\"modeled_bytes\":0,\"loads\":0}],\"checksum\":234881024,\"valid\":true}\n",
+  "synchronized": false,
+  "threads": 28,
+  "timestamp": "2026-10-11T18:28:15.977330+00:00",
+  "working_set_bytes": null
+}

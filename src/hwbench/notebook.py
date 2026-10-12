@@ -44,7 +44,9 @@ def setup(name: str) -> Context:
     report, so a stale ``measurements.csv`` can never feed a figure.
     """
 
-    pio.renderers.default = "notebook"
+    # "+png" adds a static image next to the interactive HTML, so viewers that do not run
+    # scripts (GitHub) still show every figure.
+    pio.renderers.default = "notebook+png"
     validation = json.loads((ROOT / "data/processed/validation.json").read_text())
     assert validation["status"] == "passed", validation["errors"]
     assert validation["dataset_sha256"] == hashlib.sha256(

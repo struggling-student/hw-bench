@@ -1,0 +1,61 @@
+{
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55",
+    "--membind=0",
+    "/lpor1/store_0/usr/user/hw-bench-stage-v3/build/intensity",
+    "--bytes",
+    "8589934592",
+    "--k",
+    "64",
+    "--repetitions",
+    "5"
+  ],
+  "cpu_bind": "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55",
+  "cpu_frequency_khz_after": 1355727.767857143,
+  "cpu_frequency_khz_before": 841964.2857142857,
+  "environment": {
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "56",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm14.portici.enea.it",
+  "mem_bind": "0",
+  "memory_mode": "flat",
+  "memory_target": "ddr",
+  "notes": "flat;avx512_8_independent_chains",
+  "pair_id": null,
+  "physical_cores": 56,
+  "result": {
+    "arithmetic_intensity": 8,
+    "benchmark": "roofline_sweep",
+    "checksum": 1024.15345007,
+    "dtype": "fp64",
+    "implementation": "avx512_8_independent_chains",
+    "k": 64,
+    "kernel": "fma_intensity",
+    "measurements": [
+      0.0399134719046,
+      0.0400288089877,
+      0.0399646869628,
+      0.0400372609729,
+      0.0399840009632
+    ],
+    "modeled_bytes_per_iteration": 8589934592,
+    "operations_per_iteration": 68719476736,
+    "threads": 56,
+    "valid": true,
+    "working_set_bytes": 8589934592
+  },
+  "returncode": 0,
+  "schema_version": "1.0",
+  "socket": 0,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"roofline_sweep\",\"kernel\":\"fma_intensity\",\"dtype\":\"fp64\",\"implementation\":\"avx512_8_independent_chains\",\"threads\":56,\"k\":64,\"working_set_bytes\":8589934592,\"modeled_bytes_per_iteration\":8589934592,\"operations_per_iteration\":68719476736,\"arithmetic_intensity\":8,\"measurements\":[0.0399134719046,0.0400288089877,0.0399646869628,0.0400372609729,0.0399840009632],\"checksum\":1024.15345007,\"valid\":true}\n",
+  "threads": 56,
+  "timestamp": "2026-09-21T18:27:57.950130+00:00",
+  "working_set_bytes": 8589934592
+}

@@ -28,7 +28,7 @@ difference.
 
 ## Local analysis
 
-Install with `.venv/bin/python -m pip install -r requirements.txt`. Plotly static export needs Kaleido and Chrome/Chromium. `bash scripts/make_analysis.sh` normalizes local raw records, validates, writes thesis tables, builds and executes the seven notebooks in independent kernels, and checks the figure exports. Raw data and generated exports are git-ignored.
+Install with `.venv/bin/python -m pip install -r requirements.txt`. Plotly static export needs Kaleido and Chrome/Chromium. `bash scripts/make_analysis.sh` normalizes local raw records, validates, writes thesis tables, builds and executes the seven notebooks in independent kernels, and checks the figure exports. Raw data, processed tables and figure exports are versioned; `scripts/fetch_results.sh` runs `scripts/scrub_raw.py` after every retrieval so no account name or password-expiry line is committed, and `make_analysis.sh` refuses to run on unscrubbed data.
 
 ## Cluster measurements
 

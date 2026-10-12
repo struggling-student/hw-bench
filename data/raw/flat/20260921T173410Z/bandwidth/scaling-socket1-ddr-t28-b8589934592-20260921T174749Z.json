@@ -1,0 +1,60 @@
+{
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83",
+    "--membind=1",
+    "/lpor1/store_0/usr/user/hw-bench-stage/build/stream_triad",
+    "--bytes",
+    "8589934592",
+    "--warmups",
+    "2",
+    "--repetitions",
+    "5"
+  ],
+  "cpu_bind": "56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83",
+  "cpu_frequency_khz_after": 1083362.0089285714,
+  "cpu_frequency_khz_before": 838408.5178571428,
+  "environment": {
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "28",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm14.portici.enea.it",
+  "mem_bind": "1",
+  "memory_mode": "flat",
+  "memory_target": "ddr",
+  "notes": "",
+  "pair_id": null,
+  "physical_cores": 28,
+  "result": {
+    "benchmark": "stream_triad",
+    "checksum": 7164.761,
+    "elements": 357913941,
+    "first_elapsed_seconds": 0.036722412915,
+    "kernel": "triad",
+    "modeled_bytes_per_iteration": 8589934584,
+    "operations_per_iteration": 715827882,
+    "steady_elapsed_seconds": [
+      0.0363494909834,
+      0.0363568379544,
+      0.0363452569582,
+      0.0363247429486,
+      0.0363482860848
+    ],
+    "threads": 28,
+    "valid": true,
+    "warmup_iterations": 2,
+    "working_set_bytes": 8589934584
+  },
+  "returncode": 0,
+  "schema_version": "1.0",
+  "socket": 1,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"stream_triad\",\"kernel\":\"triad\",\"threads\":28,\"elements\":357913941,\"working_set_bytes\":8589934584,\"modeled_bytes_per_iteration\":8589934584,\"operations_per_iteration\":715827882,\"first_elapsed_seconds\":0.036722412915,\"steady_elapsed_seconds\":[0.0363494909834,0.0363568379544,0.0363452569582,0.0363247429486,0.0363482860848],\"warmup_iterations\":2,\"checksum\":7164.761,\"valid\":true}\n",
+  "threads": 28,
+  "timestamp": "2026-09-21T17:47:49.609180+00:00",
+  "working_set_bytes": 8589934592
+}

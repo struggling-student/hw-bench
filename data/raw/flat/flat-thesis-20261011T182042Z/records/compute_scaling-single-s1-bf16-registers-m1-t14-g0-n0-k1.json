@@ -1,0 +1,107 @@
+{
+  "campaign_id": "flat-thesis-20261011T182042Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=56,57,58,59,60,61,62,63,64,65,66,67,68,69",
+    "--membind=1",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/flat-thesis-20261011T182042Z/build/hardware",
+    "--kind",
+    "bf16",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "1"
+  ],
+  "cpu_bind": "56,57,58,59,60,61,62,63,64,65,66,67,68,69",
+  "cpu_frequency_khz_after": 943875.0,
+  "cpu_frequency_khz_before": 807144.5357142857,
+  "environment": {
+    "HWBENCH_PARTICIPANT": null,
+    "HWBENCH_PARTICIPANTS": null,
+    "HWBENCH_SYNC_DIR": null,
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "14",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm14.portici.enea.it",
+  "mem_bind": "1",
+  "memory_mode": "flat",
+  "memory_socket": 1,
+  "memory_target": "registers",
+  "notes": "compute_scaling",
+  "pair_id": null,
+  "physical_cores": 14,
+  "result": {
+    "benchmark": "amx_peak",
+    "checksum": 117440512,
+    "dtype": "bf16",
+    "implementation": "native_amx_4_tiles",
+    "k": 1,
+    "kernel": "bf16",
+    "samples": [
+      {
+        "elapsed_seconds": 1.004858484,
+        "end_ns": 209153014857284,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 28140625723392,
+        "planned_start_ns": 209152009998680,
+        "start_ns": 209152009998800
+      },
+      {
+        "elapsed_seconds": 1.008170339,
+        "end_ns": 209154023040033,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 28621662060544,
+        "planned_start_ns": 209153014869660,
+        "start_ns": 209153014869694
+      },
+      {
+        "elapsed_seconds": 1.008318767,
+        "end_ns": 209155031360909,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 28621662060544,
+        "planned_start_ns": 209154023042119,
+        "start_ns": 209154023042142
+      },
+      {
+        "elapsed_seconds": 1.008343014,
+        "end_ns": 209156039705461,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 28621662060544,
+        "planned_start_ns": 209155031362423,
+        "start_ns": 209155031362447
+      },
+      {
+        "elapsed_seconds": 1.008083788,
+        "end_ns": 209157047790507,
+        "loads": 0,
+        "modeled_bytes": 0,
+        "operations": 28621662060544,
+        "planned_start_ns": 209156039706696,
+        "start_ns": 209156039706719
+      }
+    ],
+    "seed": 7,
+    "threads": 14,
+    "valid": true,
+    "working_set_bytes": 0
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 1,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"amx_peak\",\"kernel\":\"bf16\",\"dtype\":\"bf16\",\"implementation\":\"native_amx_4_tiles\",\"threads\":14,\"working_set_bytes\":0,\"k\":1,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.004858484,\"start_ns\":209152009998800,\"end_ns\":209153014857284,\"planned_start_ns\":209152009998680,\"operations\":28140625723392,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.008170339,\"start_ns\":209153014869694,\"end_ns\":209154023040033,\"planned_start_ns\":209153014869660,\"operations\":28621662060544,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.008318767,\"start_ns\":209154023042142,\"end_ns\":209155031360909,\"planned_start_ns\":209154023042119,\"operations\":28621662060544,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.008343014,\"start_ns\":209155031362447,\"end_ns\":209156039705461,\"planned_start_ns\":209155031362423,\"operations\":28621662060544,\"modeled_bytes\":0,\"loads\":0},{\"elapsed_seconds\":1.008083788,\"start_ns\":209156039706719,\"end_ns\":209157047790507,\"planned_start_ns\":209156039706696,\"operations\":28621662060544,\"modeled_bytes\":0,\"loads\":0}],\"checksum\":117440512,\"valid\":true}\n",
+  "synchronized": false,
+  "threads": 14,
+  "timestamp": "2026-10-11T18:28:10.752914+00:00",
+  "working_set_bytes": null
+}

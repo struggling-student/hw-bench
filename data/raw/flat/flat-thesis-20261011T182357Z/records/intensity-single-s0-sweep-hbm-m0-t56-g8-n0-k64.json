@@ -1,0 +1,111 @@
+{
+  "campaign_id": "flat-thesis-20261011T182357Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55",
+    "--membind=2",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/flat-thesis-20261011T182357Z/build/hardware",
+    "--kind",
+    "sweep",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "64",
+    "--bytes",
+    "8589934592"
+  ],
+  "cpu_bind": "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55",
+  "cpu_frequency_khz_after": 1349596.857142857,
+  "cpu_frequency_khz_before": 808035.7142857143,
+  "environment": {
+    "HWBENCH_PARTICIPANT": null,
+    "HWBENCH_PARTICIPANTS": null,
+    "HWBENCH_SYNC_DIR": null,
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "56",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm14.portici.enea.it",
+  "mem_bind": "2",
+  "memory_mode": "flat",
+  "memory_socket": 0,
+  "memory_target": "hbm",
+  "notes": "intensity",
+  "pair_id": null,
+  "physical_cores": 56,
+  "process_end_ns": 209764108748645,
+  "process_start_ns": 209758861256092,
+  "result": {
+    "benchmark": "roofline_sweep",
+    "checksum": 1032.19100006561,
+    "dtype": "fp64",
+    "implementation": "avx512_8_independent_chains",
+    "k": 64,
+    "kernel": "sweep",
+    "samples": [
+      {
+        "elapsed_seconds": 1.013376619,
+        "end_ns": 209759999631276,
+        "loads": 0,
+        "modeled_bytes": 352187318272,
+        "operations": 2817498546176,
+        "planned_start_ns": 209758986254445,
+        "start_ns": 209758986254657
+      },
+      {
+        "elapsed_seconds": 1.023896894,
+        "end_ns": 209761023579588,
+        "loads": 0,
+        "modeled_bytes": 335007449088,
+        "operations": 2680059592704,
+        "planned_start_ns": 209759999682647,
+        "start_ns": 209759999682694
+      },
+      {
+        "elapsed_seconds": 1.020888721,
+        "end_ns": 209762044486429,
+        "loads": 0,
+        "modeled_bytes": 335007449088,
+        "operations": 2680059592704,
+        "planned_start_ns": 209761023597562,
+        "start_ns": 209761023597708
+      },
+      {
+        "elapsed_seconds": 1.020698167,
+        "end_ns": 209763065195843,
+        "loads": 0,
+        "modeled_bytes": 335007449088,
+        "operations": 2680059592704,
+        "planned_start_ns": 209762044497645,
+        "start_ns": 209762044497676
+      },
+      {
+        "elapsed_seconds": 1.020850199,
+        "end_ns": 209764086054530,
+        "loads": 0,
+        "modeled_bytes": 335007449088,
+        "operations": 2680059592704,
+        "planned_start_ns": 209763065204299,
+        "start_ns": 209763065204331
+      }
+    ],
+    "seed": 7,
+    "threads": 56,
+    "valid": true,
+    "working_set_bytes": 8589934592
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 0,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"roofline_sweep\",\"kernel\":\"sweep\",\"dtype\":\"fp64\",\"implementation\":\"avx512_8_independent_chains\",\"threads\":56,\"working_set_bytes\":8589934592,\"k\":64,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.013376619,\"start_ns\":209758986254657,\"end_ns\":209759999631276,\"planned_start_ns\":209758986254445,\"operations\":2817498546176,\"modeled_bytes\":352187318272,\"loads\":0},{\"elapsed_seconds\":1.023896894,\"start_ns\":209759999682694,\"end_ns\":209761023579588,\"planned_start_ns\":209759999682647,\"operations\":2680059592704,\"modeled_bytes\":335007449088,\"loads\":0},{\"elapsed_seconds\":1.020888721,\"start_ns\":209761023597708,\"end_ns\":209762044486429,\"planned_start_ns\":209761023597562,\"operations\":2680059592704,\"modeled_bytes\":335007449088,\"loads\":0},{\"elapsed_seconds\":1.020698167,\"start_ns\":209762044497676,\"end_ns\":209763065195843,\"planned_start_ns\":209762044497645,\"operations\":2680059592704,\"modeled_bytes\":335007449088,\"loads\":0},{\"elapsed_seconds\":1.020850199,\"start_ns\":209763065204331,\"end_ns\":209764086054530,\"planned_start_ns\":209763065204299,\"operations\":2680059592704,\"modeled_bytes\":335007449088,\"loads\":0}],\"checksum\":1032.19100006561,\"valid\":true}\n",
+  "synchronized": false,
+  "threads": 56,
+  "timestamp": "2026-10-11T18:38:17.810961+00:00",
+  "working_set_bytes": null
+}

@@ -1,0 +1,177 @@
+=== os-release ===
+NAME="Red Hat Enterprise Linux"
+VERSION="9.4 (Plow)"
+ID="rhel"
+ID_LIKE="fedora"
+VERSION_ID="9.4"
+PLATFORM_ID="platform:el9"
+PRETTY_NAME="Red Hat Enterprise Linux 9.4 (Plow)"
+ANSI_COLOR="0;31"
+LOGO="fedora-logo-icon"
+CPE_NAME="cpe:/o:redhat:enterprise_linux:9::baseos"
+HOME_URL="https://www.redhat.com/"
+DOCUMENTATION_URL="https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9"
+BUG_REPORT_URL="https://bugzilla.redhat.com/"
+
+REDHAT_BUGZILLA_PRODUCT="Red Hat Enterprise Linux 9"
+REDHAT_BUGZILLA_PRODUCT_VERSION=9.4
+REDHAT_SUPPORT_PRODUCT="Red Hat Enterprise Linux"
+REDHAT_SUPPORT_PRODUCT_VERSION="9.4"
+
+=== slurm job ===
+JobId=5317968 JobName=hw-cache-hierarchy
+   UserId=user(28376) GroupId=enea(333) MCS_label=N/A
+   Priority=463 Nice=0 Account=enea QOS=normal
+   JobState=RUNNING Reason=None Dependency=(null)
+   Requeue=1 Restarts=0 BatchFlag=1 Reboot=0 ExitCode=0:0
+   RunTime=00:00:04 TimeLimit=01:00:00 TimeMin=N/A
+   SubmitTime=2026-10-12T08:26:31 EligibleTime=2026-10-12T08:26:31
+   AccrueTime=2026-10-12T08:26:31
+   StartTime=2026-10-12T08:26:31 EndTime=2026-10-12T09:26:31 Deadline=N/A
+   SuspendTime=None SecsPreSuspend=0 LastSchedEval=2026-10-12T08:26:31 Scheduler=Main
+   Partition=cresco8_hbm AllocNode:Sid=cresco8x001:3646076
+   ReqNodeList=cresco8-hbm01 ExcNodeList=cresco8-hbm14
+   NodeList=cresco8-hbm01
+   BatchHost=cresco8-hbm01
+   NumNodes=1 NumCPUs=112 NumTasks=1 CPUs/Task=112 ReqB:S:C:T=0:0:*:*
+   ReqTRES=cpu=112,mem=1021266M,node=1,billing=112
+   AllocTRES=cpu=112,node=1,billing=112
+   Socks/Node=* NtasksPerN:B:S:C=0:0:*:* CoreSpec=*
+   MinCPUsNode=112 MinMemoryNode=0 MinTmpDiskNode=0
+   Features=(null) DelayBoot=00:00:00
+   OverSubscribe=NO Contiguous=0 Licenses=(null) LicensesAlloc=(null) Network=(null)
+   Command=/lpor1/store_0/usr/user/hw-bench-thesis-source/cache-hierarchy-20261012T062600Z/slurm/cache_campaign.sbatch
+   SubmitLine=sbatch --parsable --exclude=cresco8-hbm14 --account=enea --nodelist=cresco8-hbm01 --time=01:00:00 --job-name=hw-cache-hierarchy --output=/lpor1/store_0/usr/user/hw-bench-thesis-results/cache-hierarchy-20261012T062600Z/slurm-%j.out --error=/lpor1/store_0/usr/user/hw-bench-thesis-results/cache-hierarchy-20261012T062600Z/slurm-%j.err --export=ALL,HW_BENCH_STAGE=/lpor1/store_0/usr/user/hw-bench-thesis-source/cache-hierarchy-20261012T062600Z,HW_BENCH_OUTPUT=/lpor1/store_0/usr/user/hw-bench-thesis-results/cache-hierarchy-20261012T062600Z,HW_BENCH_CAMPAIGN_PART=hierarchy,AMX_CONTAINER=/lpor1/store_0/usr/user/images/vllm-cpu-v0.30.0.sif /lpor1/store_0/usr/user/hw-bench-thesis-source/cache-hierarchy-20261012T062600Z/slurm/cache_campaign.sbatch
+   WorkDir=/afs/enea.it/por/user/user
+   StdErr=/lpor1/store_0/usr/user/hw-bench-thesis-results/cache-hierarchy-20261012T062600Z/slurm-5317968.err
+   StdIn=/dev/null
+   StdOut=/lpor1/store_0/usr/user/hw-bench-thesis-results/cache-hierarchy-20261012T062600Z/slurm-5317968.out
+   TresPerTask=cpu=112
+
+
+=== slurm node ===
+NodeName=cresco8-hbm01 Arch=x86_64 CoresPerSocket=56 
+   CPUAlloc=112 CPUEfctv=112 CPUTot=112 CPULoad=0.01
+   AvailableFeatures=(null)
+   ActiveFeatures=(null)
+   Gres=(null)
+   NodeAddr=cresco8-hbm01 NodeHostName=cresco8-hbm01 Version=25.11.8
+   OS=Linux 5.14.0-427.13.1.el9_4.x86_64 #1 SMP PREEMPT_DYNAMIC Wed Apr 10 10:29:16 EDT 2024 
+   RealMemory=1031266 AllocMem=0 FreeMem=986481 Sockets=2 Boards=1
+   MemSpecLimit=10000
+   State=ALLOCATED ThreadsPerCore=1 TmpDisk=0 Weight=1 Owner=N/A MCS_label=N/A
+   Partitions=cresco8_hbm 
+   BootTime=2026-10-09T10:22:09 SlurmdStartTime=2026-10-09T11:08:53
+   LastBusyTime=2026-10-12T01:17:58 ResumeAfterTime=None
+   CfgTRES=cpu=112,mem=1031266M,billing=112
+   AllocTRES=cpu=112
+   CurrentWatts=399 AveWatts=384
+
+
+=== infiniband ===
+CA 'mlx5_0'
+	CA type: MT4129
+	Number of ports: 1
+	Firmware version: 28.43.2026
+	Hardware version: 0
+	Node GUID: 0x58a2e10300b1d24a
+	System image GUID: 0x58a2e10300b1d24a
+	Port 1:
+		State: Active
+		Physical state: LinkUp
+		Rate: 200
+		Base lid: 825
+		LMC: 0
+		SM lid: 1
+		Capability mask: 0xa751e848
+		Port GUID: 0x58a2e10300b1d24a
+		Link layer: InfiniBand
+CA 'mlx5_1'
+	CA type: MT4129
+	Number of ports: 1
+	Firmware version: 28.43.2026
+	Hardware version: 0
+	Node GUID: 0x58a2e10300b1d24b
+	System image GUID: 0x58a2e10300b1d24a
+	Port 1:
+		State: Down
+		Physical state: Disabled
+		Rate: 10
+		Base lid: 65535
+		LMC: 0
+		SM lid: 0
+		Capability mask: 0xa751e848
+		Port GUID: 0x58a2e10300b1d24b
+		Link layer: InfiniBand
+CA 'mlx5_2'
+	CA type: MT4117
+	Number of ports: 1
+	Firmware version: 14.32.1704
+	Hardware version: 0
+	Node GUID: 0x745d220300d7b346
+	System image GUID: 0x745d220300d7b346
+	Port 1:
+		State: Active
+		Physical state: LinkUp
+		Rate: 25
+		Base lid: 0
+		LMC: 0
+		SM lid: 0
+		Capability mask: 0x00010000
+		Port GUID: 0x765d22fffed7b346
+		Link layer: Ethernet
+CA 'mlx5_3'
+	CA type: MT4117
+	Number of ports: 1
+	Firmware version: 14.32.1704
+	Hardware version: 0
+	Node GUID: 0x745d220300d7b347
+	System image GUID: 0x745d220300d7b346
+	Port 1:
+		State: Down
+		Physical state: Disabled
+		Rate: 40
+		Base lid: 0
+		LMC: 0
+		SM lid: 0
+		Capability mask: 0x00010000
+		Port GUID: 0x765d22fffed7b347
+		Link layer: Ethernet
+
+=== modules ===
+
+ Welcome to ENEAGRID/CRESCO!
+ ============================
+
+ ENEAGRID/CRESCO is the infrastructure of the computational resources of ENEA TERIN-ICT Division
+ [Dipartimento Tecnologie energetiche e Fonti Rinnovabili (TERIN)/Divisione per lo sviluppo Sistemi per l'Informatica e l'ICT]
+ http://www.ict.enea.it
+ Information about ENEAGRID/CRESCO can be found at the page: http://www.eneagrid.enea.it
+ The main computational resources are CRESCO HPC systems: http://www.cresco.enea.it
+ located in Portici (main site),Frascati,Casaccia,Brindisi,Bologna
+
+ A primer for ENEAGRID/CRESCO can be found at: http://www.eneagrid.enea.it/ENEAGRID_info.html
+ User support is provided at http://gridticket.enea.it.
+
+ Access conditions & Citation/Acknowledgement rules for ENEA employees:
+ http://www.eneagrid.enea.it/rules/CondizionidiUtilizzoUtenzaENEA.html
+
+ Access conditions & Citation/Acknowledgement rules for non ENEA users:
+ http://www.eneagrid.enea.it/rules/CondizionidiUtilizzoEN.html
+
+ Your username is:
+ user
+ Your contact data are:
+ Mail:user.1938430@studenti.uniroma1.it Phone:3270499569 
+ You are an external user. ENEA contact Mail:marco.faltelli@enea.it
+ * Please check these data and submit a ticket via ENEAGRID ticketing 
+ system (https://gridticket.enea.it) if they are not up to date
+
+Principal: user@ENEA.IT
+
+Currently Loaded Modulefiles:
+pfs
+base
+intel/oneapi
+mpi_flavour/openmpi_intel-4.1.7
+slurm_tools

@@ -1,0 +1,12 @@
+campaign_id,memory_mode,benchmark,memory_target,implementation,dtype,kernel,m,n,k,working_set_bytes,single_socket0,single_socket1,isolated_sum,dual_median,efficiency,n_samples,metric,overlap_min
+cache-thesis-20261011T183752Z,cache,amx_onednn_gemm,registers,onednn_numactl_only_omp_affinity_unset,bf16,gemm,6144,6144,6144,226492416,35921.0371,34871.967,70793.0041,73739.832,1.04162598,5,performance_gops,0.998586008
+cache-thesis-20261011T183752Z,cache,amx_peak,registers,native_amx_4_tiles,bf16,bf16,,,1,,112590.28,111779.39,224369.67,222571.964,0.991987749,5,performance_gops,0.997173065
+cache-thesis-20261011T183752Z,cache,avx512_peak,registers,native_avx512,fp32,fp32,,,1,,8764.25999,8724.85316,17489.1131,17308.065,0.989647952,5,performance_gops,0.99815987
+cache-thesis-20261011T183752Z,cache,avx512_peak,registers,native_avx512,fp64,fp64,,,1,,4396.04085,4364.77799,8760.81884,8681.9786,0.991000814,5,performance_gops,0.997998388
+cache-thesis-20261011T183752Z,cache,stream_triad,effective_cache,native_avx512,,triad,,,1,8.58993408e+09,490.709846,488.265611,978.975458,990.095289,1.01135864,5,bandwidth_gbs,0.99697228
+flat-thesis-20261011T183750Z,flat,amx_onednn_gemm,registers,onednn_numactl_only_omp_affinity_unset,bf16,gemm,6144,6144,6144,226492416,35198.0012,37095.255,72293.2562,73019.3074,1.01004314,5,performance_gops,0.99917485
+flat-thesis-20261011T183750Z,flat,amx_peak,registers,native_amx_4_tiles,bf16,bf16,,,1,,112621.186,112419.402,225040.588,223242.836,0.992011428,5,performance_gops,0.99805748
+flat-thesis-20261011T183750Z,flat,avx512_peak,registers,native_avx512,fp32,fp32,,,1,,8803.00835,8788.03045,17591.0388,17333.6582,0.985368654,5,performance_gops,0.997779153
+flat-thesis-20261011T183750Z,flat,avx512_peak,registers,native_avx512,fp64,fp64,,,1,,4401.07705,4388.21007,8789.28712,8710.62526,0.991050258,5,performance_gops,0.998626282
+flat-thesis-20261011T183750Z,flat,stream_triad,ddr,native_avx512,,triad,,,1,8.58993408e+09,234.862564,235.176069,470.038632,465.937194,0.991274254,5,bandwidth_gbs,0.997540627
+flat-thesis-20261011T183750Z,flat,stream_triad,hbm,native_avx512,,triad,,,1,8.58993408e+09,554.212793,560.078355,1114.29115,1129.93051,1.01403526,5,bandwidth_gbs,0.996553911
