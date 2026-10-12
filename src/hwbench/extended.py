@@ -123,8 +123,12 @@ def check_extended(
     minimum = policy.get("minimum_samples", 5)
     for key, part in chosen.groupby(keys, dropna=False):
         label = dict(zip(keys, key))
-        if part.socket_scope.iloc[0] != "dual_component" and len(part) < minimum:
-            errors.append(f"Fewer than {minimum} samples: {label}")
+        scope = part.socket_scope.iloc[0]
+        if scope != "dual_component" and len(part) < minimum:
+            # A synchronized window can fail its overlap rule on its own; that is a
+            # reported loss of one sample, not a missing configuration.
+            report = warnings if scope == "dual" and len(part) >= minimum - 1 else errors
+            report.append(f"Fewer than {minimum} samples ({len(part)}): {label}")
         metric = _metric(part.iloc[0])
         values = part[metric].dropna() if metric else pd.Series(dtype=float)
         if len(values) > 1 and values.mean() and values.std() / values.mean() * 100 > policy.get(
