@@ -11,6 +11,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from hwbench import disasm
+
 FIELDS = [
     "timestamp",
     "hostname",
@@ -534,14 +536,9 @@ def main(argv=None):
                 asm = campaign / "system/hardware.asm"
                 if record.get("schema_version") == "2.0":
                     evidence = asm.read_text() if asm.exists() else ""
-                    compiler["verification"] = {
-                        "avx512_fma": "vfmadd" in evidence and "%zmm" in evidence,
-                        "amx_bf16": "tdpbf16ps" in evidence,
-                        "amx_int8": "tdpbssd" in evidence,
-                        "avx512_vnni": "vpdpbusd" in evidence,
-                        "avx512_bf16": "vdpbf16ps" in evidence,
-                        "nt_store": "vmovntpd" in evidence,
-                    }
+                    # The instruction must sit in an innermost loop with enough
+                    # independent chains, not merely somewhere in the binary.
+                    compiler["verification"] = disasm.verification(evidence)
             source = Path(root.name) / path.relative_to(root)
             reasons = _reasons(record, compiler)
             audit.append(

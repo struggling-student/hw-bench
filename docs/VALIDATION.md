@@ -55,7 +55,7 @@ the dependency-limited records remain available for audit.
   normalized dataset, except that known launch failures are reported as preserved
   warnings.
 - oneDNN BF16 data requires an AMX implementation name in verbose output.
-- Native AMX binaries must contain `tdpbf16ps` in retained disassembly.
+- Native AMX binaries must hold `tdpbf16ps` four times in one innermost loop of the retained disassembly (`hwbench.disasm`).
 - Results above the model’s 3.5 GHz max-turbo architectural bound fail validation.
 - Important bandwidth groups require at least five steady timed repetitions.
 - Coefficient of variation above 5% is flagged in `summary.csv` for inspection.
@@ -125,8 +125,9 @@ only because a completed campaign declares it resumed.
 * Flat extended campaigns: dedicated node, launch `ssh` (or the October `slurm_exclusive`),
   topology Flat, no foreign Slurm job at pre- or post-flight; Cache: Slurm, other node, topology Cache.
 * A record with a foreign job seen around it is rejected as `interference_suspected`.
-* Every new instruction family needs its mnemonic in the retained disassembly
-  (`tdpbssd`, `vpdpbusd`, `vdpbf16ps`, `vmovntpd`, in addition to the earlier two).
+* Every new instruction family needs its mnemonic in an innermost loop of the retained disassembly,
+  with at least its chain or tile count (`tdpbssd`, `vpdpbusd`, `vdpbf16ps`, `vmovntpd`, in addition to
+  the earlier two); the minimums are in `hwbench.disasm.FEATURES`.
 * No compute result may exceed the theoretical peak at the measured effective clock by more than 2%.
 * Dual-socket windows should overlap by 99% (warning); five steady samples per configuration.
 
