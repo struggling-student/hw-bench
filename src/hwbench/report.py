@@ -337,15 +337,17 @@ PATH_BENCHMARK = {
 def compute_ceiling(ext: pd.DataFrame, path: str, mode: str, cores: int = 56, scope: str = "1S"):
     """Measured peak of one ISA path at a core count: the matching ceiling for a workload.
 
-    ``cores`` must be one that was measured in the scaling sweep.  Socket 0 is the
-    reference, as in the thesis.
+    ``cores`` must be one that was measured in the scaling sweep, and only the scaling and dual-socket
+    sweep rows count, so repeat, cross-check and chain-count campaigns cannot move a ceiling.
+    Socket 0 is the reference, as in the thesis.
     """
 
     from hwbench.roofline import Ceiling
 
     benchmark, dtype = PATH_BENCHMARK[path]
     wanted = ext[
-        ext.benchmark.eq(benchmark)
+        ext.notes.isin(["isa_scaling", "isa_dual"])
+        & ext.benchmark.eq(benchmark)
         & ext["dtype"].eq(dtype)
         & ext.memory_mode.eq(mode)
         & ext.threads.eq(cores * (2 if scope == "2S" else 1))
@@ -655,15 +657,23 @@ def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> p
     """T1: the headline ceilings of one socket (socket 0), each with its uncertainty.
 
     ``median``, ``min`` and ``max`` are the five samples of one run.  ``spread`` is half
-    that range relative to the median.  ``cross_run`` is the largest deviation seen when
-    the quantity (or, where it was not repeated, its family) was measured again in a
-    separate run; ``basis`` says which.  ``total`` is spread plus cross-run, a
-    conservative linear sum.  ``kind`` says what sort of number it is: operation counts
+    that range relative to the median.  ``repeat`` is the range of three independent launches
+    of the same quantity on the same node (``repeat_ranges``); ``cross_run`` is the largest
+    deviation seen in the cross-check (SSH against the October Slurm runs, or a second
+    Cache node), for the quantity or, where it was not repeated, its family; ``basis`` says
+    which.  ``total`` is spread plus the larger of the two, a conservative linear sum.  ``kind`` says what sort of number it is: operation counts
     over a timed window, or kernel bytes over a timed window (modeled, not counted by the
     memory controller).
     """
 
     cross = cross_run_percent(ext, thesis)
+    repeats = repeat_ranges(ext).set_index(["memory_mode", "quantity"])
+    inverse = {path: key for key, path in KERNEL_PATHS.items()}
+
+    def launches(mode: str, quantity: str):
+        row = repeats.loc[(mode, quantity)] if (mode, quantity) in repeats.index else None
+        return (math.nan, 0) if row is None else (float(row.repeat_range_percent), int(row.launches))
+
     peaks = isa_peaks(ext, theory)
     peaks = peaks[peaks.scope.eq("1S") & peaks.cores.eq(56) & peaks.memory_mode.eq("flat") & peaks.socket.eq(0)]
     bench_of = {key: b for b, key in [(b, k) for (b, d), k in KERNEL_PATHS.items()]}
@@ -671,11 +681,13 @@ def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> p
     for key in ["fp64", "fp32", "avx512_bf16", "vnni_int8", "amx_bf16", "amx_int8"]:
         r = peaks[peaks.path.eq(key)].iloc[0]
         c = cross.get(("flat", bench_of[key])) or cross[("flat", "compute")]
+        bench, dtype = inverse[key]
+        rep_pct, n_launch = launches("flat", f"{bench}/{dtype}")
         rows.append(
             dict(
                 quantity=f"{theory.isa(key).label} peak", unit="TOP/s", median=r.gops / 1000, low=r.gops_min / 1000,
                 high=r.gops_max / 1000, n=int(r.n_samples), kind="measured, ops counted",
-                cross_run=c["percent"], basis=c["basis"] if c["basis"] != "repeat of this path" else "repeat of this path",
+                repeat=rep_pct, launches=n_launch, cross_run=c["percent"], basis=c["basis"],
             )
         )
     bw = bandwidth_summary(ext, thesis)
@@ -689,18 +701,19 @@ def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> p
     ]:
         r = bw[bw.config.eq(cfg) & bw.kernel.eq(kernel)].iloc[0]
         c = cross[(mode, tier)]
+        rep_pct, n_launch = launches(mode, f"stream_{kernel}/{tier}")
         basis = c["basis"] if kernel != "triad" or mode == "cache" else "repeat of this quantity"
         if mode == "cache":
             basis = "Triad repeat on a second node" if kernel == "triad" else "Triad repeat on a second node (node-to-node)"
         rows.append(
             dict(
                 quantity=f"{name} (56 cores)", unit="GB/s", median=r.gbs, low=r.gbs_min, high=r.gbs_max, n=int(r.n_samples),
-                kind="measured, bytes modeled", cross_run=c["percent"], basis=basis,
+                kind="measured, bytes modeled", repeat=rep_pct, launches=n_launch, cross_run=c["percent"], basis=basis,
             )
         )
     out = pd.DataFrame(rows)
     out["spread"] = 100 * (out.high - out.low) / 2 / out["median"]
-    out["total"] = out.spread + out.cross_run
+    out["total"] = out.spread + out[["repeat", "cross_run"]].max(axis=1)
     return out
 
 
@@ -750,12 +763,11 @@ def unmeasured_table() -> pd.DataFrame:
 
     return pd.DataFrame(
         [
-            ("Memory-controller traffic (uncore_imc CAS counts)", "needs CAP_PERFMON or paranoid ≤ 0", "a per-core DRAM line count exists for new campaigns (docs/06_COUNTERS.md); none of the analysed data has it, so bandwidth and intensity here are modeled"),
+            ("Memory-controller traffic (uncore_imc CAS counts)", "needs CAP_PERFMON or paranoid ≤ 0", "per-core DRAM line counts exist for the follow-up campaigns (counted against modeled in notebook 02); the October data and the first GEMM sweep have none, and DDR and HBM bytes cannot be told apart"),
             ("Cache-mode hit rate", "memory-side-cache tag events are uncore (M2M)", "conflict misses are inferred from bandwidth"),
             ("Why remote HBM collapses", "UPI and CHA counters are uncore", "mechanism unidentified; one campaign"),
             ("Why the clock falls while HBM streams", "power and turbostat counters need privileges", "cause unidentified"),
             ("Energy", "RAPL needs privileges", "no energy figures"),
-            ("Latency of a Cache-mode miss", "not run (pointer chase beyond 64 GiB)", "spilled latency is blank"),
             ("HBM device capability beyond 56 cores", "SNC4 / HBM-only modes are not available on the node", "HBM ceiling is a 56-core figure"),
             ("SMT", "SMT is off on CRESCO8", "no SMT effect"),
         ],
@@ -880,3 +892,235 @@ def counted_table(df: pd.DataFrame) -> pd.DataFrame:
     out["intensity_modeled"] = out.operations / out.modeled_bytes
     out["intensity_counted"] = out.operations / out.counted_bytes
     return out
+
+
+# -------------------------------------------------------- follow-up campaigns
+#: On-chip capacity that can hold weights: 112.5 MiB L3 (non-inclusive) + 56 x 2 MiB L2.
+ONCHIP_BYTES = int(112.5 * 2**20) + 56 * 2 * 2**20
+POOL_MULTIPLES = (4, 16, 64)
+
+
+def _nominal_pool(working_set_bytes: float) -> int:
+    ratio = working_set_bytes / ONCHIP_BYTES
+    return min(POOL_MULTIPLES, key=lambda n: abs(math.log2(ratio / n)))
+
+
+def _gemm_frame(ext: pd.DataFrame, notes: list[str]) -> pd.DataFrame:
+    g = ext[ext.benchmark.eq("onednn_gemm_sweep") & ext.notes.isin(notes)].copy()
+    g["counted_gbs"] = g.counted_bytes / g.elapsed_seconds / 1e9
+    g["shape"] = g.n.astype(int).astype(str) + "x" + g.k.astype(int).astype(str)
+    g["pool_x"] = [_nominal_pool(w) for w in g.working_set_bytes]
+    return g
+
+
+def gemm_pool_table(ext: pd.DataFrame) -> pd.DataFrame:
+    """GEMM bandwidth against weight-pool size (4x, 16x, 64x the on-chip capacity).
+
+    ``modeled_gbs`` assumes every weight byte comes from memory; ``counted_gbs`` is what the
+    cores' DRAM counters saw.  A pool too small to defeat the caches shows as counted below
+    modeled.
+    """
+
+    g = _gemm_frame(ext, ["gemm_pool"])
+    keys = ["memory_target", "dtype", "shape", "m", "pool_x"]
+    return (
+        g.groupby(keys)
+        .agg(
+            modeled_gbs=("bandwidth_gbs", "median"),
+            counted_gbs=("counted_gbs", "median"),
+            gops=("performance_gops", "median"),
+            cv_percent=("bandwidth_gbs", _cv),
+            n_samples=("accepted", "size"),
+        )
+        .reset_index()
+    )
+
+
+def gemm_overhead_table(ext: pd.DataFrame) -> pd.DataFrame:
+    """Time per call of small GEMMs: the fixed cost of one library call from Python.
+
+    ``hot`` pools hold two copies of the weights (they stay in L2), ``stream`` pools are four
+    times the on-chip capacity.
+    """
+
+    g = _gemm_frame(ext, ["gemm_overhead"])
+    calls = g.operations / (2 * g.m * g.n * g.k)
+    g["us_per_call"] = g.elapsed_seconds * 1e6 / calls
+    g["pool"] = ["stream" if w > 1e8 else "hot" for w in g.working_set_bytes]
+    return (
+        g.groupby(["shape", "dtype", "memory_target", "pool", "m"])
+        .agg(us_per_call=("us_per_call", "median"), gops=("performance_gops", "median"), n_samples=("accepted", "size"))
+        .reset_index()
+    )
+
+
+def gemm_prepacked_table(ext: pd.DataFrame) -> pd.DataFrame:
+    """BF16 with weights prepacked once against the same call with plain weights (4x pool)."""
+
+    plain = _gemm_frame(ext, ["gemm_pool"])
+    plain = plain[plain.dtype.eq("bf16") & plain.pool_x.eq(4)]
+    packed = _gemm_frame(ext, ["gemm_prepacked"])
+    keys = ["memory_target", "shape", "m"]
+    a = plain.groupby(keys).agg(plain_gops=("performance_gops", "median"), plain_gbs=("bandwidth_gbs", "median"))
+    b = packed.groupby(keys).agg(prepacked_gops=("performance_gops", "median"), prepacked_gbs=("bandwidth_gbs", "median"))
+    out = pd.concat([a, b], axis=1).dropna().reset_index()
+    out["speedup"] = out.prepacked_gops / out.plain_gops
+    return out
+
+
+def remote_repeat_table(ext: pd.DataFrame) -> pd.DataFrame:
+    """Remote against local bandwidth by thread count (the 5 s remote-HBM repeat)."""
+
+    d = ext[ext.notes.isin(["remote_repeat", "remote_repeat_local"])].copy()
+    d["place"] = d.notes.map({"remote_repeat": "remote", "remote_repeat_local": "local"})
+    g = d.groupby(["benchmark", "memory_target", "socket", "threads", "place"]).agg(
+        gbs=("bandwidth_gbs", "median"), cv=("bandwidth_gbs", _cv)
+    )
+    out = g.unstack("place")
+    out.columns = [f"{a}_{b}" for a, b in out.columns]
+    out = out.reset_index()
+    out["remote_over_local"] = out.gbs_remote / out.gbs_local
+    out["kernel"] = out.benchmark.map(BANDWIDTH_KERNELS)
+    return out
+
+
+def chain_sweep(ext: pd.DataFrame) -> pd.DataFrame:
+    """AVX-512 BF16 dot product against the number of independent accumulator chains."""
+
+    d = ext[ext.notes.str.startswith("chains_bf16_c", na=False)].copy()
+    d["chains"] = d.notes.str.extract(r"_c(\d+)$")[0].astype(int)
+    d["ops_per_cycle_per_core"] = d.performance_gops / (d.ghz_effective * d.threads)
+    return (
+        d.groupby(["threads", "chains"])
+        .agg(
+            gops=("performance_gops", "median"),
+            ghz=("ghz_effective", "median"),
+            ops_per_cycle_per_core=("ops_per_cycle_per_core", "median"),
+            cv_percent=("performance_gops", _cv),
+            n_samples=("accepted", "size"),
+        )
+        .reset_index()
+    )
+
+
+def fp64_sweep12_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> pd.DataFrame:
+    """FP64 intensity sweep with 12 chains (and the 8-chain control), against the FP64 peak.
+
+    ``fraction_at_clock`` compares with the peak scaled to the clock the cores ran at, which
+    separates a kernel shortfall from the clock drop under heavy memory traffic.
+    """
+
+    peak = compute_ceiling(ext, "fp64", "flat", 56)
+    d = ext[ext.notes.isin(["sweep_c12", "sweep_c8"]) & ext.socket.eq(0)].copy()
+    d["chains"] = d.notes.map({"sweep_c12": 12, "sweep_c8": 8})
+    out = (
+        d.groupby(["memory_target", "chains", "k"])
+        .agg(
+            gops=("performance_gops", "median"),
+            intensity=("arithmetic_intensity", "median"),
+            gbs=("bandwidth_gbs", "median"),
+            ghz=("ghz_effective", "median"),
+            cv_percent=("performance_gops", _cv),
+            campaign_id=("campaign_id", _ids),
+        )
+        .reset_index()
+    )
+    out["fraction_of_peak"] = out.gops / peak.gops
+    out["fraction_at_clock"] = out.gops / (peak.gops * out.ghz / peak.ghz)
+    return out
+
+
+def fp64_sweep12_points(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, tier: str):
+    """The 12-chain sweep as roofline workload points."""
+
+    from hwbench.roofline import WorkloadPoint
+
+    t = fp64_sweep12_table(ext, thesis, theory)
+    t = t[t.memory_target.eq(tier) & t.chains.eq(12)]
+    return [
+        WorkloadPoint(
+            name=f"fp64 sweep K={int(r.k)} · 12 chains · {tier}", precision="fp64", isa_path="fp64", gops=float(r.gops),
+            intensity=float(r.intensity), mode="flat", scope="1S", cores=56, threads=56, memory_target=tier,
+            ghz_effective=float(r.ghz), provenance={"campaign": r.campaign_id, "series": "fp64 sweep · 12 chains", "cv_percent": r.cv_percent},
+        )
+        for r in t.itertuples()
+    ]
+
+
+def cache_latency_far(ext: pd.DataFrame) -> pd.DataFrame:
+    """Cache-mode idle latency for working sets from inside the HBM cache to far beyond it."""
+
+    d = ext[ext.notes.eq("hier_latency_far")]
+    return (
+        d.groupby(d.working_set_gib.round(0).rename("working_set_gib"))
+        .agg(latency_ns=("latency_ns", "median"), cv_percent=("latency_ns", _cv), n_samples=("accepted", "size"))
+        .reset_index()
+    )
+
+
+def counted_gemm_points(ext: pd.DataFrame, theory: Theory, tier: str = "hbm", shape: str = "14336x4096"):
+    """The counted GEMM points as paired roofline markers: modeled and counted intensity.
+
+    Both use the same operations and time; only the bytes differ (kernel convention against
+    the cores' DRAM line counts).
+    """
+
+    from hwbench.roofline import WorkloadPoint
+
+    g = _gemm_frame(ext, ["counted_gemm"])
+    g = g[g.memory_mode.eq("flat") & g.memory_target.eq(tier) & g["shape"].eq(shape)]
+    path = {"bf16": "amx_bf16", "int8": "amx_int8"}
+    rows = g.groupby(["dtype", "m"]).agg(
+        gops=("performance_gops", "median"), modeled=("modeled_bytes", "median"), counted=("counted_bytes", "median"),
+        ops=("operations", "median"), campaign=("campaign_id", _ids),
+    )
+    out = []
+    for (dtype, m), r in rows.iterrows():
+        for source, nbytes in (("modeled", r.modeled), ("pmu_ocr", r.counted)):
+            out.append(
+                WorkloadPoint(
+                    name=f"{dtype} gemm {shape} M={int(m)} · {source} bytes", precision=dtype, isa_path=path[dtype],
+                    gops=float(r.gops), intensity=float(r.ops / nbytes), bytes_source=source, mode="flat", scope="1S",
+                    cores=56, threads=56, memory_target=tier,
+                    provenance={"campaign": r.campaign, "series": f"{dtype.upper()} · {'counted' if source == 'pmu_ocr' else 'modeled'} bytes", "label": f"M={int(m)}" if source == "pmu_ocr" else ""},
+                )
+            )
+    return out
+
+
+def repeat_ranges(ext: pd.DataFrame) -> pd.DataFrame:
+    """Between-launch spread of the headline numbers: independent launches of one part.
+
+    One row per quantity: the median of each launch, then (max - min) / mean as a percentage.
+    """
+
+    d = ext[ext.notes.eq("repeat")].copy()
+    d["metric"] = d.bandwidth_gbs.fillna(d.performance_gops)
+    d["quantity"] = [
+        f"{b}/{dt}" if isinstance(dt, str) else f"{b}/{t}" for b, dt, t in zip(d.benchmark, d["dtype"], d.memory_target)
+    ]
+    per = d.groupby(["memory_mode", "quantity", "campaign_id"]).metric.median().reset_index()
+    out = per.groupby(["memory_mode", "quantity"]).metric.agg(["min", "max", "mean", "count"]).reset_index()
+    out["repeat_range_percent"] = 100 * (out["max"] - out["min"]) / out["mean"]
+    return out.rename(columns={"count": "launches"})
+
+
+def gemm_pool_points(ext: pd.DataFrame, pool_x: int = 64, shape: str = "14336x4096"):
+    """GEMM points from the pool-size sweep at one pool size, as roofline workload points (modeled bytes)."""
+
+    from hwbench.roofline import WorkloadPoint
+
+    g = _gemm_frame(ext, ["gemm_pool"])
+    g = g[g.pool_x.eq(pool_x) & g["shape"].eq(shape)]
+    rows = g.groupby(["memory_target", "dtype", "m"]).agg(
+        gops=("performance_gops", "median"), intensity=("arithmetic_intensity", "median"), cv=("performance_gops", _cv), campaign=("campaign_id", _ids)
+    )
+    path = {"bf16": "amx_bf16", "int8": "amx_int8"}
+    return [
+        WorkloadPoint(
+            name=f"{dtype} gemm {shape} M={int(m)} · {tier} · {pool_x}× pool", precision=dtype, isa_path=path[dtype], gops=float(r.gops),
+            intensity=float(r.intensity), mode="flat", scope="1S", cores=56, threads=56, memory_target=tier,
+            provenance={"campaign": r.campaign, "series": f"{dtype.upper()} {shape} · {pool_x}× pool", "cv_percent": r.cv},
+        )
+        for (tier, dtype, m), r in rows.iterrows()
+    ]

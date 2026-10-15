@@ -129,6 +129,9 @@ def compute_paths(ext: pd.DataFrame, theory: Theory) -> list[Claim]:
     amx = one.loc[["amx_bf16", "amx_int8"]].ghz_effective
     busy = one.loc[["amx_bf16", "amx_int8"]].amx_busy_frac
     bf = one.loc["avx512_bf16"]
+    cs = report.chain_sweep(ext)
+    by = cs.pivot(index="threads", columns="chains", values="ops_per_cycle_per_core")
+    chain_spread = float((by.max(axis=1) / by.min(axis=1)).max())
     others = one.drop(["amx_bf16", "amx_int8"]).amx_busy_frac
     sc = report.isa_scaling(ext)
     sc = sc[sc.memory_mode.eq("flat") & sc.socket.eq(0)]
@@ -152,7 +155,18 @@ def compute_paths(ext: pd.DataFrame, theory: Theory) -> list[Claim]:
             f"({_pct(float(bf.efficiency_at_clock))}), that is {bf.ops_per_cycle_per_core / 64:.2f} instruction per cycle where the "
             "instruction table lists 0.5 (2.0 cycles per `vdpbf16ps`, uops.info for Alder Lake-P and Emerald Rapids, the same core "
             "family; Sapphire Rapids itself is not listed). The path is limited by the instruction, not by the kernel, and is slower than "
-            "FP32 FMA. The bound is a table value for related parts and is to be confirmed on this node by the accumulator-chain sweep.",
+            "FP32 FMA.",
+        ),
+        Claim(
+            "avx512_bf16_chains",
+            chain_spread < 1.08 and float(by.max().max()) > 0.95 * float(bf.theory_ops_per_cycle),
+            "The accumulator-chain sweep confirms the bound on this node: with 6, 12 and 24 independent chains one core reaches "
+            + ", ".join(f"{by.loc[1, c]:.1f}" for c in (6, 12, 24))
+            + " operations per cycle and 56 cores "
+            + ", ".join(f"{by.loc[56, c]:.1f}" for c in (6, 12, 24))
+            + f" per core, within {_pct(chain_spread - 1, 1)} of each other, so the rate does not depend on the chain count and the "
+            f"best case reaches {_pct(float(by.max().max()) / float(bf.theory_ops_per_cycle))} of {bf.theory_ops_per_cycle:.0f}. "
+            "Two chains per cycle of latency are enough to hide the 8-cycle latency, and the 12-chain peak kernel is a sound measurement.",
         ),
         Claim(
             "linear_scaling",
@@ -366,7 +380,7 @@ def latency(ext: pd.DataFrame, theory: Theory, root: Path = ROOT) -> list[Claim]
     h = report.hierarchy(ext)
     lv, lat = report.level_summary(h)
     mem = lat[lat.level.eq("memory")].set_index("config").latency_ns
-    cache_ws = h[h.notes.eq("hier_latency") & h.config.eq("cache")].per_thread_bytes.max() / 2**30
+    far = report.cache_latency_far(ext).set_index("working_set_gib").latency_ns
     hmat = hmat_latency_ns(root)
     return [
         Claim(
@@ -383,11 +397,14 @@ def latency(ext: pd.DataFrame, theory: Theory, root: Path = ROOT) -> list[Claim]
             f"{mem['cache']:.0f} ns in Cache mode, so latency-bound code does not benefit from HBM.",
         ),
         Claim(
-            "cache_latency_resident_only",
-            cache_ws < 64,
-            f"Cache-mode latency was measured only up to {cache_ws:.0f} GiB, inside the 64 GiB memory-side cache. "
-            "The latency of a miss that goes to DDR was **not measured**, and no table in this study reuses the resident "
-            "value for the spilled case.",
+            "cache_latency_far",
+            bool(far.is_monotonic_increasing and far.loc[128] > 1.4 * mem["flat_ddr"]),
+            "Cache-mode idle latency, measured from inside the HBM cache to far beyond it, rises with the working set: "
+            + ", ".join(f"{far.loc[g]:.0f}" for g in (16, 32, 64, 96, 128))
+            + f" ns at 16, 32, 64, 96 and 128 GiB, against {mem['flat_ddr']:.0f} ns on Flat DDR and {mem['flat_hbm']:.0f} ns on Flat HBM. "
+            "There is no step at the 64 GiB capacity: the smooth rise is what a growing miss fraction would give (conflict misses in a "
+            f"direct-mapped cache, inferred), and at 128 GiB a load costs {far.loc[128] - mem['cache']:.0f} ns more than a hit "
+            f"({mem['cache']:.0f} ns at 4 GiB), {far.loc[128] / mem['flat_ddr']:.1f}× Flat DDR.",
         ),
     ]
 
@@ -423,6 +440,7 @@ def hierarchy(ext: pd.DataFrame, theory: Theory) -> list[Claim]:
 def xcheck(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
     x = report.xcheck_table(ext, thesis)
     f, c = x[x.memory_mode.eq("flat")], x[x.memory_mode.eq("cache")]
+    rr = report.repeat_ranges(ext)
     return [
         Claim(
             "repeat_runs",
@@ -432,7 +450,18 @@ def xcheck(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"the SSH runs, so the launch method is not a visible source of error. Cache repeats on a second node differ by up to "
             f"{c.deviation_percent.abs().max():.1f}% ({_pct(c.within_tolerance.mean())} of {len(c)} within 2%), which is node-to-node "
             "variance. These cross-run differences are a systematic uncertainty on top of the sample-to-sample spread.",
-        )
+        ),
+        Claim(
+            "repeat_launches",
+            bool(rr[rr.quantity.str.contains("_peak")].repeat_range_percent.max() < 0.5 and rr.repeat_range_percent.max() < 2.5),
+            f"Three independent launches of the headline numbers on one node agree to {rr[rr.quantity.str.contains('_peak')].repeat_range_percent.max():.2f}% "
+            f"for every compute path, {rr[rr.quantity.eq('stream_triad/ddr') | rr.quantity.eq('stream_read/ddr')].repeat_range_percent.max():.2f}% for DDR, "
+            f"{rr[rr.quantity.eq('stream_triad/hbm')].repeat_range_percent.iloc[0]:.2f}% for HBM Triad and "
+            f"{rr[rr.quantity.eq('stream_read/hbm')].repeat_range_percent.iloc[0]:.1f}% for HBM read-only; in Cache mode "
+            f"{rr[(rr.memory_mode == 'cache') & rr.quantity.eq('stream_triad/effective_cache')].repeat_range_percent.iloc[0]:.1f}% (Triad) and "
+            f"{rr[(rr.memory_mode == 'cache') & rr.quantity.eq('stream_read/effective_cache')].repeat_range_percent.iloc[0]:.1f}% (read-only). "
+            "Run-to-run noise on one node is small; the 4–7% deviation of the second Cache node is therefore a node-to-node difference.",
+        ),
     ]
 
 
@@ -456,11 +485,20 @@ def placement(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
     """Remote against local bandwidth, for socket 0 (the reference socket)."""
 
     lr = report.local_remote_table(ext, thesis).set_index(["config", "kernel"])
-    bw = report.bandwidth_summary(ext, thesis)
-    cv = bw[bw.locality.eq("remote") & bw.config.eq("flat_hbm") & bw.kernel.eq("read")].cv_percent
     ddr_r, hbm_r = lr.loc[("flat_ddr", "read")], lr.loc[("flat_hbm", "read")]
-    other = report.locality_ratio(ext, thesis)
-    s1 = other[other.socket.eq(1) & other.config.eq("flat_hbm") & other.kernel.eq("read")].iloc[0]
+    rt = report.remote_repeat_table(ext)
+    at56 = rt[rt.threads.eq(56)]
+
+    def pick(kernel: str, tier: str, socket: int) -> pd.Series:
+        return at56[at56.kernel.eq(kernel) & at56.memory_target.eq(tier) & at56.socket.eq(socket)].iloc[0]
+
+    h0, h1, d0 = pick("read", "hbm", 0), pick("read", "hbm", 1), pick("read", "ddr", 0)
+    first = report.bandwidth_summary(ext, thesis)
+    first_cv = first[first.locality.eq("remote") & first.config.eq("flat_hbm") & first.kernel.eq("read")].cv_percent
+    n0 = pick("triad_nt", "hbm", 0)
+    prof = rt[rt.kernel.eq("read") & rt.memory_target.eq("hbm") & rt.socket.eq(0)].set_index("threads").gbs_remote
+    dprof = rt[rt.kernel.eq("read") & rt.memory_target.eq("ddr") & rt.socket.eq(0)].set_index("threads").gbs_remote
+    peak_t = int(prof.idxmax())
     return [
         Claim(
             "remote_ddr",
@@ -470,13 +508,22 @@ def placement(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
         ),
         Claim(
             "remote_hbm",
-            hbm_r.remote < ddr_r.remote and hbm_r.remote_over_local < 0.2,
-            f"Remote HBM keeps {_pct(hbm_r.remote_over_local)} (read, {hbm_r.remote:.0f} GB/s against {hbm_r.local:.0f} GB/s local) to "
-            f"{_pct(lr.loc[('flat_hbm', 'triad_nt')].remote_over_local)} (non-temporal Triad), below remote DDR "
-            f"({ddr_r.remote:.0f} GB/s); socket 1 gives {s1.remote:.0f} GB/s ({_pct(s1.remote_over_local)}). The remote-HBM read "
-            f"figure comes from one campaign with a coefficient of variation of {cv.min():.0f}–{cv.max():.0f}% and should be repeated "
-            "before it is quoted as a headline. Link bandwidth alone does not explain it; the mechanism (for example directory "
-            "updates) is not identified, because the UPI and CHA counters are not readable.",
+            h0.gbs_remote < d0.gbs_remote and h0.remote_over_local < 0.15 and h1.remote_over_local < 0.15,
+            f"Remote HBM keeps {_pct(float(h0.remote_over_local), 1)} of local read bandwidth for socket 0 ({h0.gbs_remote:.1f} GB/s against "
+            f"{h0.gbs_local:.0f} GB/s) and {_pct(float(h1.remote_over_local), 1)} for socket 1 ({h1.gbs_remote:.1f} GB/s) with 56 threads, and "
+            f"{_pct(float(n0.remote_over_local))} for non-temporal Triad ({n0.gbs_remote:.0f} GB/s), against {d0.gbs_remote:.0f} GB/s for remote DDR. "
+            f"This repeat (separate campaign, 5 s windows, CV {at56[at56.kernel.eq('read') & at56.memory_target.eq('hbm')].cv_remote.min():.1f}–"
+            f"{at56[at56.kernel.eq('read') & at56.memory_target.eq('hbm')].cv_remote.max():.1f}%) confirms the first campaign's "
+            f"{hbm_r.remote:.0f} GB/s ({_pct(hbm_r.remote_over_local)}, CV {first_cv.min():.0f}–{first_cv.max():.0f}%) and gives the figure to quote. Link bandwidth alone does not explain it; "
+            "the mechanism is not identified, because the UPI and CHA counters are not readable.",
+        ),
+        Claim(
+            "remote_hbm_thread_profile",
+            bool(prof.max() > 2 * prof.loc[56] and dprof.loc[56] > 0.95 * dprof.loc[28]),
+            f"Remote HBM does not hit a flat ceiling: its read bandwidth rises to {prof.max():.0f} GB/s at {peak_t} threads, is still {prof.loc[28]:.0f} GB/s "
+            f"at 28 and then falls to {prof.loc[56]:.1f} GB/s at 56, while remote DDR plateaus at {dprof.loc[28]:.0f} GB/s from 28 threads on. "
+            "More concurrent requesters make remote HBM slower, which is what contention on a shared resource (directory or snoop traffic, link credits) would "
+            "do; which resource is not measured.",
         ),
     ]
 
@@ -569,22 +616,27 @@ def ridges(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Clai
 
 
 def fp64_sweep(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Claim]:
-    peak = report.compute_ceiling(ext, "fp64", "flat", 56)
-    hbm = report.memory_ceiling(ext, thesis, "flat", "hbm", access="readwrite")
-    pts = report.fp64_sweep_points(thesis, "flat", "hbm")
-    ridge_ai = peak.gops / hbm.gbs
-    top = max(pts, key=lambda p: p.intensity)
-    near = min(pts, key=lambda p: abs(p.intensity - ridge_ai))
+    t = report.fp64_sweep12_table(ext, thesis, theory)
+    h12 = t[t.memory_target.eq("hbm") & t.chains.eq(12)].set_index("k")
+    h8 = t[t.memory_target.eq("hbm") & t.chains.eq(8)].set_index("k")
+    d12 = t[t.memory_target.eq("ddr") & t.chains.eq(12)].set_index("k")
     return [
         Claim(
-            "sweep_plateau_not_reached",
-            top.gops / peak.gops < 0.95 and near.gops / min(peak.gops, hbm.gbs * near.intensity) < 0.8,
-            f"The FP64 sweep does not reach the compute plateau: at its highest intensity ({top.intensity:.0f} FLOP/B) it reaches "
-            f"{top.gops / peak.gops:.0%} of the measured FP64 peak, and at the ridge (≈{ridge_ai:.0f} FLOP/B, point at "
-            f"{near.intensity:.0f}) {near.gops / min(peak.gops, hbm.gbs * near.intensity):.0%} of the roofline. Its kernel runs 8 "
-            "independent FMA chains (the product of the 4-cycle latency and 2 ports, with no slack), whereas the peak kernel runs 12; "
-            "the sweep therefore under-fills the FMA pipes near the knee, and a 12-chain sweep is planned.",
-        )
+            "sweep_reaches_plateau",
+            bool(h12.loc[1024].fraction_of_peak > 0.98 and d12.loc[1024].fraction_of_peak > 0.98 and h8.loc[1024].fraction_of_peak < 0.92),
+            f"With 12 independent FMA chains the FP64 sweep reaches {_pct(float(h12.loc[512].fraction_of_peak), 1)} of the measured FP64 peak at "
+            f"{h12.loc[512].intensity:.0f} FLOP/B and {_pct(float(h12.loc[1024].fraction_of_peak), 1)} at {h12.loc[1024].intensity:.0f} FLOP/B "
+            f"(DDR: {_pct(float(d12.loc[1024].fraction_of_peak), 1)}); the 8-chain kernel of the earlier campaign stops at "
+            f"{_pct(float(h8.loc[1024].fraction_of_peak), 1)} (control at K = 1024). The earlier shortfall was the kernel's chain count, not the hardware.",
+        ),
+        Claim(
+            "sweep_clock_near_ridge",
+            bool(h12.loc[64].ghz < 0.8 * h12.loc[1024].ghz and h12.loc[64].fraction_at_clock > 0.85),
+            f"Near the ridge the cores run slower: at {h12.loc[64].intensity:.0f} FLOP/B on HBM the effective clock is {h12.loc[64].ghz:.2f} GHz "
+            f"against {h12.loc[1024].ghz:.2f} GHz at high intensity, so the sweep sits at {_pct(float(h12.loc[64].fraction_of_peak))} of the peak but "
+            f"{_pct(float(h12.loc[64].fraction_at_clock))} of the peak at that clock. The dip around the ridge is mostly the clock drop under HBM streaming "
+            "(cause not measured), not a kernel limit.",
+        ),
     ]
 
 
@@ -592,21 +644,36 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
     gm = report.gemm_points(ext)
     fl = gm[gm.memory_mode.eq("flat")]
     tile = {d: report.compute_ceiling(ext, p, "flat", 56).gops for d, p in (("bf16", "amx_bf16"), ("int8", "amx_int8"))}
-    hbm_read = report.memory_ceiling(ext, thesis, "flat", "hbm", access="read").gbs
+    hbm_read = report.memory_ceiling(ext, thesis, "flat", "hbm", access="read")
+    ddr_read = report.memory_ceiling(ext, thesis, "flat", "ddr", access="read")
     big = fl[fl.memory_target.eq("hbm") & fl.m.eq(4096)].groupby("dtype").gops.max()
-    m1 = fl[fl.memory_target.eq("hbm") & fl.m.eq(1)]
-    best_m1 = m1.groupby("dtype").gbs.max()
-    bf16 = m1[m1.dtype.eq("bf16")].set_index("shape").gbs
     ver = gemm_verbose(root)
     prepacked = ver[ver.dtype.eq("int8")].weights.unique()
     plain = ver[ver.dtype.eq("bf16")].weights.unique()
-    samples = ext[ext.benchmark.eq("onednn_gemm_sweep") & ext.memory_mode.eq("flat")]
+    samples = ext[ext.benchmark.eq("onednn_gemm_sweep") & ext.memory_mode.eq("flat") & ext.notes.eq("gemm_sweep")]
     grp = samples.groupby(["memory_target", "dtype", "n", "k", "m"]).performance_gops
     spread = (grp.max() / grp.min()).rename("ratio").reset_index()
     bimodal = spread[spread.ratio > 1.5]
     names = ", ".join(f"{r.dtype} {int(r.n)}×{int(r.k)} M={int(r.m)} ({r.memory_target})" for r in bimodal.itertuples())
     i4 = ver[ver.dtype.eq("int8") & ver.n.eq(4096) & ver.k.eq(4096) & ver.m.isin([32, 64, 128])]
     same_impl = i4.implementation.nunique() == 1 and len(i4) > 0
+
+    pool = report.gemm_pool_table(ext)
+    big_shape = pool[pool["shape"].eq("14336x4096") & pool.m.eq(1)]
+    conv = big_shape.pivot_table(index=["memory_target", "dtype"], columns="pool_x", values="counted_gbs")
+    conv_gap = float(((conv[16] - conv[64]).abs() / conv[64]).max())
+    mod = big_shape.pivot_table(index=["memory_target", "dtype"], columns="pool_x", values="modeled_gbs")
+    ddr_bf, hbm_bf = mod.loc[("ddr", "bf16")], mod.loc[("hbm", "bf16")]
+    pk = report.gemm_prepacked_table(ext)
+    pk_big = pk[pk["shape"].eq("14336x4096")]
+    pk_small = pk[pk["shape"].eq("4096x4096") & pk.m.eq(1)].set_index("memory_target")
+    ov = report.gemm_overhead_table(ext)
+    hot = ov[ov.pool.eq("hot") & ov.m.eq(1)]
+    floor = hot.groupby("shape").us_per_call.agg(["min", "max"])
+    int8_m1 = pool[pool["shape"].eq("14336x4096") & pool.m.eq(1) & pool.pool_x.eq(64) & pool.memory_target.eq("hbm")].set_index("dtype")
+    pk_hbm_m1 = pk_big[pk_big.memory_target.eq("hbm") & pk_big.m.eq(1)].iloc[0]
+    pass_us = 14336 * 4096 * 2 / (hbm_read.gbs * 1e9) * 1e6  # one pass over BF16 weights at the read ceiling
+    int8_4x = float(pool[pool["shape"].eq("14336x4096") & pool.m.eq(1) & pool.pool_x.eq(4) & pool.memory_target.eq("hbm") & pool["dtype"].eq("int8")].modeled_gbs.iloc[0])
     return [
         Claim(
             "gemm_fraction_of_tile_peak",
@@ -616,25 +683,48 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
             "data layout, call overhead) is not measured here.",
         ),
         Claim(
-            "gemm_asymmetry",
-            len(prepacked) == 1 and len(plain) == 1 and prepacked[0] != plain[0],
-            f"BF16 and INT8 GEMM are **not like-for-like**: oneDNN's verbose log shows INT8 with prepacked weights "
-            f"(`{prepacked[0] if len(prepacked) else '?'}`) and BF16 with plain weights (`{plain[0] if len(plain) else '?'}`), so the "
-            "BF16 call must repack the weights inside every invocation (inferred from the layouts). Every call also includes Python dispatch and an OpenMP fork/join.",
+            "gemm_pool_convergence",
+            conv_gap < 0.03 and float(ddr_bf[64]) < ddr_read.gbs,
+            f"The weight pool of the first GEMM campaign (about 2× the on-chip capacity) was too small: even a 4× pool leaves the counted DRAM traffic "
+            f"below the modeled one at M=1, and the modeled bandwidth falls as the pool grows "
+            f"(DDR BF16 14336×4096: {ddr_bf[4]:.0f}, {ddr_bf[16]:.0f}, {ddr_bf[64]:.0f} GB/s at 4×, 16×, 64× the on-chip capacity; HBM {hbm_bf[4]:.0f}, "
+            f"{hbm_bf[16]:.0f}, {hbm_bf[64]:.0f}). Counted bandwidth agrees between 16× and 64× to {_pct(conv_gap, 1)} for both precisions and tiers, "
+            f"so a pool of at least 16× is converged. At 64× DDR GEMM sits at {ddr_bf[64]:.0f} GB/s, below the {ddr_read.gbs:.0f} GB/s read ceiling: the "
+            "DDR points that lay above their ceiling came from cache reuse in a small pool, not from a ceiling that was too low.",
         ),
         Claim(
-            "gemv_fixed_cost",
-            bf16["4096x4096"] < 0.6 * bf16["14336x4096"],
-            f"At M=1 on HBM, BF16 4096×4096 reaches {bf16['4096x4096']:.0f} GB/s of modeled traffic against {bf16['14336x4096']:.0f} GB/s "
-            f"for 14336×4096; the best of any shape is {best_m1['bf16']:.0f} (BF16) and {best_m1['int8']:.0f} GB/s (INT8), "
-            f"{_pct(best_m1['bf16'] / hbm_read)} and {_pct(best_m1['int8'] / hbm_read)} of the {hbm_read:.0f} GB/s read ceiling. "
-            "The shape dependence points to a fixed per-call cost, so decode-sized GEMM mixes framework, library and hardware "
-            "effects and is not a measurement of HBM bandwidth.",
+            "gemm_asymmetry",
+            len(prepacked) == 1 and len(plain) == 1 and prepacked[0] != plain[0] and float(pk_big.speedup.max()) > 1.05,
+            f"BF16 and INT8 GEMM are **not like-for-like** as called from PyTorch: oneDNN's verbose log shows INT8 with prepacked weights "
+            f"(`{prepacked[0] if len(prepacked) else '?'}`) and BF16 with plain weights (`{plain[0] if len(plain) else '?'}`), so the BF16 call "
+            f"repacks the weights on every invocation. Prepacking them once makes BF16 {_pct(float(pk_big[pk_big.m <= 16].speedup.min()) - 1)}–"
+            f"{_pct(float(pk_big[pk_big.m <= 16].speedup.max()) - 1)} faster at M ≤ 16 on 14336×4096 and {float(pk_small.loc['ddr'].speedup):.1f}× (DDR) to "
+            f"{float(pk_small.loc['hbm'].speedup):.1f}× (HBM) faster at M=1 on 4096×4096 ({pk_small.loc['hbm'].plain_gbs:.0f} → "
+            f"{pk_small.loc['hbm'].prepacked_gbs:.0f} GB/s on HBM).",
+        ),
+        Claim(
+            "gemv_prepacked_bandwidth",
+            bool(pk_hbm_m1.prepacked_gbs > pk_hbm_m1.plain_gbs),
+            f"At M=1 on HBM with a 4× pool, prepacked BF16 reaches {pk_hbm_m1.prepacked_gbs:.0f} GB/s of modeled traffic on 14336×4096 against "
+            f"{pk_hbm_m1.plain_gbs:.0f} for plain weights and {int8_4x:.0f} for INT8; with a pool of 64× INT8 reaches {int8_m1.loc['int8'].counted_gbs:.0f} GB/s counted "
+            f"({_pct(float(int8_m1.loc['int8'].counted_gbs) / hbm_read.gbs)} of the {hbm_read.gbs:.0f} GB/s read ceiling) and plain BF16 "
+            f"{int8_m1.loc['bf16'].counted_gbs:.0f} GB/s ({_pct(float(int8_m1.loc['bf16'].counted_gbs) / hbm_read.gbs)}). Once the weights are prepacked, "
+            "BF16 and INT8 move bytes at similar rates and INT8 wins by moving half of them.",
+        ),
+        Claim(
+            "gemm_call_floor",
+            bool(float(floor["max"].max()) < 40 and float(floor["min"].min()) > 10),
+            f"A GEMM call has a fixed cost of roughly {floor['min'].min():.0f}–{floor['max'].max():.0f} µs from Python (dispatch, oneDNN primitive lookup, "
+            f"56-thread fork/join): a 256×256 and a 1024×1024 matrix whose weights stay in cache take {floor.loc['256x256', 'min']:.0f}–"
+            f"{floor.loc['256x256', 'max']:.0f} and {floor.loc['1024x1024', 'min']:.0f}–{floor.loc['1024x1024', 'max']:.0f} µs at M=1. For a 14336×4096 BF16 "
+            f"matrix at {hbm_read.gbs:.0f} GB/s a pass takes about {pass_us:.0f} µs, so the floor is {_pct(float(floor['min'].min()) / pass_us)}–"
+            f"{_pct(float(floor['max'].max()) / pass_us)} of it there but dominates small matrices; decode-sized GEMM measures the library call as much "
+            "as memory.",
         ),
         Claim(
             "gemm_bimodal_points",
             len(bimodal) <= 4,
-            f"Within one process {len(bimodal)} of {len(spread)} Flat GEMM configurations have samples that differ by more than "
+            f"Within one process {len(bimodal)} of {len(spread)} Flat GEMM configurations of the first sweep have samples that differ by more than "
             f"1.5× ({names}). "
             + (
                 "oneDNN's verbose log names the same implementation for INT8 4096×4096 at M=32, 64 and 128 "
@@ -646,15 +736,73 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
     ]
 
 
+def counted(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
+    """Counted (DRAM line counts) against modeled traffic."""
+
+    sub = ext[ext.notes.isin(["counted", "counted_sweep", "counted_gemm"])]
+    t = report.counted_table(sub)
+    streams = t[t.benchmark.isin(["stream_read", "stream_triad", "stream_triad_nt", "roofline_sweep"])]
+    triad = t[t.benchmark.eq("stream_triad")]
+    sweep = t[t.benchmark.eq("roofline_sweep")]
+    g = t[t.benchmark.eq("onednn_gemm_sweep")].copy()
+    g["pool_gib"] = g.working_set_bytes / 2**30
+    flat_small = g[g.memory_mode.eq("flat") & g.m.le(16)]
+    cache_small = g[g.memory_mode.eq("cache") & g.m.le(16)]
+    m256 = g[g.m.eq(256)]
+    bf256 = m256[m256["dtype"].eq("bf16")]
+    i256 = m256[m256["dtype"].eq("int8")]
+    rw = {t: report.memory_ceiling(ext, thesis, "flat", t, access="readwrite").gbs for t in ("hbm", "ddr")}
+    sw = sub[sub.benchmark.eq("roofline_sweep") & sub.memory_mode.eq("flat") & sub.k.eq(1)].copy()
+    sw["counted_gbs"] = sw.counted_bytes / sw.elapsed_seconds / 1e9
+    swg = sw.groupby("memory_target").agg(counted=("counted_gbs", "median"), modeled=("bandwidth_gbs", "median"))
+    return [
+        Claim(
+            "counted_streams",
+            bool(streams.counted_over_modeled.between(0.97, 1.02).all() and triad.read_share.between(0.64, 0.69).all() and sweep.read_share.between(0.47, 0.52).all()),
+            f"The traffic model of the streams and of the intensity sweep describes what the cores moved: counted over modeled bytes is "
+            f"{streams.counted_over_modeled.min():.3f}–{streams.counted_over_modeled.max():.3f} on every tier (Flat DDR, Flat HBM and Cache at 8 and 96 GiB). "
+            f"Triad's counted read share is {triad.read_share.min():.3f}–{triad.read_share.max():.3f} (two of three arrays) and the sweep's "
+            f"{sweep.read_share.min():.3f}–{sweep.read_share.max():.3f} (one of two), so neither pays a read-for-ownership at 56 cores, as the single-thread "
+            "probe and the 313 GB/s bound already indicated.",
+        ),
+        Claim(
+            "counted_gemm_weights",
+            bool(flat_small.counted_over_modeled.between(0.85, 0.95).all() and cache_small.counted_over_modeled.between(0.97, 1.02).all()),
+            f"The weights of the first GEMM sweep were partly served on chip: with a pool of about 1 GB (Flat) the cores read "
+            f"{_pct(float(flat_small.counted_over_modeled.min()))}–{_pct(float(flat_small.counted_over_modeled.max()))} of the modeled bytes at M ≤ 16, "
+            f"against {_pct(float(cache_small.counted_over_modeled.min()))}–{_pct(float(cache_small.counted_over_modeled.max()))} with a 16 GiB pool in Cache mode. "
+            "Modeled bandwidth therefore overstated the Flat GEMM traffic by about 10% at small M.",
+        ),
+        Claim(
+            "sweep_exceeds_triad_ceiling",
+            bool(swg.loc["hbm"].counted > rw["hbm"] * 1.02 and swg.loc["ddr"].counted < rw["ddr"] * 1.02),
+            f"The one point where a measured stream stays above its ceiling is not a modeling error: the FP64 sweep at K=1 (one load and one store per element) "
+            f"moves {swg.loc['hbm'].counted:.0f} GB/s counted on HBM ({swg.loc['hbm'].modeled:.0f} modeled) against {rw['hbm']:.0f} GB/s for Triad, the best "
+            f"read/write kernel, so a one-load-one-store pattern sustains {_pct(float(swg.loc['hbm'].counted) / rw['hbm'] - 1, 1)} more than Triad on HBM. "
+            f"On DDR the sweep ({swg.loc['ddr'].counted:.0f} GB/s counted) stays below its {rw['ddr']:.0f} GB/s ceiling. The ceiling kernels do not cover that pattern; "
+            "a copy kernel would.",
+        ),
+        Claim(
+            "counted_gemm_prefill",
+            bool(bf256.counted_over_modeled.min() > 1.2 and i256.counted_over_modeled.max() < 0.9),
+            f"At M=256 the weights-only model misses traffic that BF16 moves and INT8 does not: BF16 counts "
+            f"{bf256.counted_over_modeled.min():.2f}–{bf256.counted_over_modeled.max():.2f}× the modeled bytes (counted read share "
+            f"{bf256.read_share.min():.2f}–{bf256.read_share.max():.2f}: activations, outputs and repacking), INT8 {i256.counted_over_modeled.min():.2f}–"
+            f"{i256.counted_over_modeled.max():.2f}×. On a roofline the BF16 prefill points move left, from {bf256.intensity_modeled.min():.0f} to "
+            f"{bf256.intensity_counted.min():.0f} operations per byte, when counted bytes are used.",
+        ),
+    ]
+
+
 def repeatability(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
     cv = report.sample_cv(ext)
     q = cv.cv_percent.quantile([0.5, 0.9, 0.99])
     over = cv[cv.cv_percent > 5]
     worst = cv.loc[cv.cv_percent.idxmax()]
     fw = report.first_window_effect(ext)
-    g = fw[fw.family.eq("gemm") & fw.memory_mode.eq("cache")].assign(pool=lambda f: (f.working_set_bytes / 2**30).round())
+    g = fw[fw.family.eq("gemm") & fw.memory_mode.eq("cache") & fw.notes.eq("gemm_sweep")].assign(pool=lambda f: (f.working_set_bytes / 2**30).round())
     spilled, resident = g[g.pool.gt(64)], g[g.pool.le(64)]
-    flat = fw[fw.memory_mode.eq("flat")]
+    flat = fw[fw.memory_mode.eq("flat") & fw.notes.eq("gemm_sweep")]
     return [
         Claim(
             "per_configuration_cv",
@@ -686,9 +834,9 @@ def headline_uncertainty(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory
         Claim(
             "headline_uncertainty",
             bool(t1.total.notna().all() and t1.basis.ne("").all()),
-            f"Every headline ceiling carries an uncertainty: the sum of the sample spread and the largest repeat-run deviation is "
-            f"{best.total:.1f}% for {best.quantity} and up to {worst.total:.1f}% for {worst.quantity}. Where a quantity was not "
-            "repeated, the deviation of its family is used and labelled as such.",
+            f"Every headline ceiling carries an uncertainty: the sample spread plus the larger of the three-launch range and the cross-check "
+            f"deviation is {best.total:.1f}% for {best.quantity} and up to {worst.total:.1f}% for {worst.quantity}. Where a quantity was "
+            "not repeated in the cross-check, the deviation of its family is used and labelled as such.",
         )
     ]
 
@@ -712,4 +860,5 @@ def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Pa
         "ridges": ridges(ext, thesis, theory),
         "fp64_sweep": fp64_sweep(ext, thesis, theory),
         "gemm": gemm(ext, thesis, theory, root),
+        "counted": counted(ext, thesis),
     }

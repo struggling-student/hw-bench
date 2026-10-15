@@ -50,14 +50,15 @@ def test_cache_mode_is_not_said_to_match_flat_hbm(evidence):
     assert "does **not** match Flat HBM" in text
 
 
-def test_spilled_latency_is_declared_unmeasured(evidence):
-    """Review A3: no miss latency exists, and the claim says so."""
+def test_cache_miss_latency_is_measured_beyond_the_cache_and_rises_smoothly(evidence):
+    """Review A3: the spilled case now has its own measurement and no step at the capacity."""
 
     ext, *_, all_claims = evidence
-    assert "not measured" in by_id(all_claims)["cache_latency_resident_only"].text
-    h = report.hierarchy(ext)
-    lat = h[h.notes.eq("hier_latency") & h.config.eq("cache")]
-    assert lat.per_thread_bytes.max() < 64 * 2**30
+    far = report.cache_latency_far(ext).set_index("working_set_gib").latency_ns
+    assert far.index.max() >= 128 and far.is_monotonic_increasing
+    # no jump at 64 GiB: each step is smaller than the whole rise
+    assert far.diff().dropna().max() < 0.5 * (far.iloc[-1] - far.iloc[0])
+    assert "no step at the 64 GiB" in by_id(all_claims)["cache_latency_far"].text.replace("There is no step at the 64 GiB capacity", "no step at the 64 GiB")
 
 
 def test_like_for_like_comparison_with_flat_ddr(evidence):
@@ -87,14 +88,14 @@ def test_store_width_claim_matches_the_disassembly():
     assert claims.triad_store_widths(ROOT) == {"regular_ymm": True, "non_temporal_zmm": True}
 
 
-def test_fp64_sweep_is_not_said_to_reach_its_plateau(evidence):
-    """Review A10: 84% of the peak at the highest intensity, 60% at the ridge."""
+def test_fp64_sweep_reaches_its_plateau_with_twelve_chains(evidence):
+    """Review A10: the 8-chain kernel stopped at 88%; 12 chains reach the peak."""
 
     ext, thesis, theory, all_claims = evidence
-    peak = report.compute_ceiling(ext, "fp64", "flat", 56).gops
-    top = max(report.fp64_sweep_points(thesis, "flat", "hbm"), key=lambda p: p.intensity)
-    assert top.gops / peak < 0.95
-    assert "does not reach the compute plateau" in by_id(all_claims)["sweep_plateau_not_reached"].text
+    t = report.fp64_sweep12_table(ext, thesis, theory)
+    top = t[t.memory_target.eq("hbm") & t.k.eq(1024)].set_index("chains").fraction_of_peak
+    assert top.loc[12] > 0.98 and top.loc[8] < 0.92
+    assert "not the hardware" in by_id(all_claims)["sweep_reaches_plateau"].text
 
 
 def test_bimodal_gemm_points_do_not_get_a_causal_story(evidence):

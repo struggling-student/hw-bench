@@ -55,7 +55,7 @@ def test_socket_zero_is_the_reference_for_local_remote(evidence):
 def test_cold_first_window_is_a_spilled_cache_effect_that_leaves_medians_alone(evidence):
     ext, *_ = evidence
     fw = report.first_window_effect(ext)
-    gemm = fw[fw.family.eq("gemm")]
+    gemm = fw[fw.family.eq("gemm") & fw.notes.eq("gemm_sweep")]
     spilled = gemm[gemm.memory_mode.eq("cache") & gemm.working_set_bytes.gt(64 * 2**30)]
     flat = gemm[gemm.memory_mode.eq("flat")]
     assert spilled.ratio.median() < 0.95 and spilled.ratio.min() < 0.6

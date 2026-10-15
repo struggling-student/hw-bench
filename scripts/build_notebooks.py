@@ -60,12 +60,12 @@ This notebook carries the findings in six figures and four tables; the supportin
 
 Two sockets × 56 cores, SMT off, 64 GiB HBM2e and 8-channel DDR5-4800 per socket. *Flat* mode exposes HBM and DDR as separate NUMA nodes; *Cache* mode makes HBM a memory-side cache in front of DDR. Flat results were taken on one dedicated node outside Slurm (the October runs went through an exclusive Slurm allocation on the same node and are labelled as such); Cache results come from Slurm allocations on other nodes.
 
-**Table 1 — headline ceilings of socket 0** (the reference socket for every number here). *Median* [*min*–*max*] are the five samples of one run; *spread* is half that range relative to the median. *Cross-run* is the largest deviation when the quantity, or where it was not repeated its family, was measured again in a separate run (Cache: on a second node); *basis* says which. *Total* is spread plus cross-run, a conservative sum.
+**Table 1 — headline ceilings of socket 0** (the reference socket for every number here). *Median* [*min*–*max*] are the five samples of one run; *spread* is half that range relative to the median. *Repeat* is the range of three independent launches of the quantity on one node. *Cross-run* is the largest deviation of the cross-check (SSH against the October Slurm runs, or a second Cache node) for the quantity or, where it was not repeated, its family; *basis* says which. *Total* is spread plus the larger of the two, a conservative sum.
 """),
     code("""
 t1 = report.headline_table(ext, thesis, theory)
-table(t1[['quantity', 'unit', 'median', 'low', 'high', 'spread', 'cross_run', 'basis', 'total', 'n', 'kind']]
-      .rename(columns={'low': 'min', 'high': 'max', 'spread': 'spread %', 'cross_run': 'cross-run %', 'total': 'total %', 'n': 'samples'}), 2)
+table(t1[['quantity', 'unit', 'median', 'low', 'high', 'spread', 'repeat', 'cross_run', 'basis', 'total', 'n', 'kind']]
+      .rename(columns={'low': 'min', 'high': 'max', 'spread': 'spread %', 'repeat': 'repeat %', 'cross_run': 'cross-run %', 'total': 'total %', 'n': 'samples'}), 2)
 say_claims(claims.headline_uncertainty(ext, thesis, theory))
 """),
     code("""
@@ -110,7 +110,7 @@ fig = plotting.cache_capacity_figure(bw0[bw0.config == 'cache'], bw0[(bw0.config
                                      {'16 GiB: 8B BF16 model': 16, '64 GiB: HBM capacity': 64})
 figure(fig, 'cache_capacity')
 say_claims(claims.cache_mode(ext, thesis), ['cache_declines_before_capacity', 'cache_resident_model', 'cache_below_flat_ddr'])
-say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_resident_only'])
+say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_far'])
 """),
     md("""
 ## 4. The headline roofline: one socket, Flat mode
@@ -155,7 +155,7 @@ for dtype, path in (('bf16', 'amx_bf16'), ('int8', 'amx_int8')):
     sweeps[path] = part
 fig = plotting.gemm_efficiency_figure(sweeps, decode_max=16, prefill_min=256)
 figure(fig, 'gemm_efficiency')
-say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_fraction_of_tile_peak', 'gemm_asymmetry', 'gemv_fixed_cost'])
+say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_fraction_of_tile_peak', 'gemm_pool_convergence', 'gemm_asymmetry', 'gemm_call_floor'])
 """),
     md("""
 ## 6. Placement: remote memory and one process on both sockets
@@ -291,6 +291,7 @@ say(f"**Result.** Flat, SSH versus the October Slurm-exclusive runs: {flat_x.wit
     f"(largest {cache_x.deviation_percent.abs().max():.1f}%).")
 """),
     code("""
+table(report.repeat_ranges(ext).rename(columns={'min': 'lowest launch', 'max': 'highest launch', 'mean': 'mean of launches'}), 3)
 say_claims(claims.xcheck(ext, thesis))
 """),
     md("""
@@ -364,8 +365,18 @@ figure(fig, 'hierarchy_latency')
     code("""
 table(latency.pivot(index='level', columns='config', values='latency_ns').reset_index())
 """),
+    md("""
+The cache-mode latency of a miss was measured by chasing a cycle of 16 to 128 GiB (a one-core pointer chase; building and walking the 128 GiB cycle takes minutes).
+"""),
     code("""
-say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_resident_only'])
+far = report.cache_latency_far(ext)
+near = lat[(lat.config == 'cache') & (lat.per_thread_bytes == 4 * 2**30)]
+cache_lat = pd.concat([pd.DataFrame({'working_set_gib': [4.0], 'latency_ns': [float(near.latency_ns.iloc[0])]}), far[['working_set_gib', 'latency_ns']]], ignore_index=True)
+mem_lat = latency.pivot(index='level', columns='config', values='latency_ns').loc['memory']
+fig = plotting.cache_latency_figure(cache_lat, {'DDR': float(mem_lat['flat_ddr']), 'HBM': float(mem_lat['flat_hbm'])})
+figure(fig, 'cache_latency_far')
+table(far, 1)
+say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_far'])
 """),
     md("""
 Cache levels are identical across configurations; only beyond the L3 do tiers differ. HBM's benefit is bandwidth under many outstanding requests, not latency.
@@ -443,6 +454,35 @@ table(concurrent_table(thesis).drop(columns=['cpu_bind']))
     code("""
 say_claims(claims.concurrent(thesis))
 """),
+    md("""
+## 7. Counted against modeled traffic
+
+Every record of the follow-up campaigns carries the cores' own DRAM line counts (offcore-response events, 64 bytes per line, reads and writes). The points below compare them with the kernels' modeled bytes: 1 means the traffic model describes what the cores moved. The events cannot tell DDR from HBM (the NUMA binding does) and see only the measured cores' traffic.
+"""),
+    code("""
+sub = ext[ext.notes.isin(['counted', 'counted_sweep', 'counted_gemm'])]
+ct = report.counted_table(sub)
+short = {'stream_read': 'read', 'stream_triad': 'Triad', 'stream_triad_nt': 'NT Triad'}
+tiers = {'flat_ddr': 'Flat DDR', 'flat_hbm': 'Flat HBM', 'cache': 'Cache'}
+ct['config'] = [plotting.config_key(m, t) for m, t in zip(ct.memory_mode, ct.memory_target)]
+def name(r):
+    gib = f' {r.working_set_bytes / 2**30:.0f} GiB' if r.config == 'cache' and r.benchmark != 'onednn_gemm_sweep' else (' 16 GiB pool' if r.config == 'cache' else '')
+    if r.benchmark == 'roofline_sweep':
+        what = f'FP64 sweep K={int(r.k)}'
+    elif r.benchmark == 'onednn_gemm_sweep':
+        what = f"{r['dtype'].upper()} GEMM 14336×4096 M={int(r.m)}"
+    else:
+        what = short[r.benchmark]
+    return f'{tiers[r.config]} · {what}{gib}'
+ct['label'] = ct.apply(name, axis=1)
+order = {'read': 0, 'Triad': 1, 'NT Triad': 2}
+ct['sort'] = [(0 if r.benchmark.startswith('stream') else 1 if r.benchmark == 'roofline_sweep' else 2, r.config, r.working_set_bytes, r.dtype if isinstance(r.dtype, str) else '', r.m if r.m == r.m else 0, r.k if r.k == r.k else 0) for r in ct.itertuples()]
+ct = ct.sort_values('sort').drop(columns='sort')
+fig = plotting.counted_ratio_figure(ct)
+figure(fig, 'counted_vs_modeled')
+table(ct[['label', 'modeled_bytes', 'counted_bytes', 'counted_over_modeled', 'read_share', 'intensity_modeled', 'intensity_counted']].assign(modeled_GB=lambda f: f.modeled_bytes / 1e9, counted_GB=lambda f: f.counted_bytes / 1e9)[['label', 'modeled_GB', 'counted_GB', 'counted_over_modeled', 'read_share', 'intensity_modeled', 'intensity_counted']], 3)
+say_claims(claims.counted(ext, thesis), ['counted_streams', 'counted_gemm_weights', 'counted_gemm_prefill'])
+"""),
 ]
 
 # --------------------------------------------------------------------------- 03
@@ -475,6 +515,15 @@ table(lr[['label', 'local', 'remote', 'remote_over_local', 'local_spread', 'remo
 """),
     code("""
 say_claims(claims.placement(ext, thesis))
+"""),
+    md("""
+The first campaign measured remote bandwidth only at 56 threads. A separate repeat (5 s windows, a local control beside every remote point) sweeps the thread count:
+"""),
+    code("""
+rt = report.remote_repeat_table(ext)
+fig = plotting.remote_threads_figure(rt)
+figure(fig, 'remote_hbm_threads')
+table(rt[rt.socket == 0][['kernel', 'memory_target', 'threads', 'gbs_local', 'gbs_remote', 'cv_remote', 'remote_over_local']], 2)
 """),
     md("""
 Bind memory and CPUs to the same socket for bandwidth-bound work.
@@ -597,6 +646,13 @@ say(f"**Result.** AMX BF16 reaches {i.loc['amx_bf16','ops_per_cycle_per_core']:.
     f"({i.loc['avx512_bf16','efficiency_at_clock']:.0%}), so it is not a faster path than FP32 FMA ({i.loc['fp32','gops']/1000:.1f} versus {i.loc['avx512_bf16','gops']/1000:.1f} TOP/s).")
 say_claims(claims.compute_paths(ext, theory), ['avx512_bf16_bound'])
 """),
+    md("""
+The bound was confirmed by varying the number of independent accumulator chains of the `vdpbf16ps` kernel:
+"""),
+    code("""
+table(report.chain_sweep(ext), 2)
+say_claims(claims.compute_paths(ext, theory), ['avx512_bf16_chains'])
+"""),
     code("""
 say_claims(claims.compute_paths(ext, theory), ['clocks'], lead='Apparent efficiencies above 100% at base clock are clock effects.')
 """),
@@ -671,7 +727,30 @@ say(f"**Result.** At M=4096 oneDNN reaches {big['bf16']/1000:.1f} TOP/s BF16 ({b
 say_claims(claims.gemm(ext, thesis, theory, ROOT))
 """),
     md("""
-The "fraction of tile peak" is the library-achievable compute ceiling for these calls (framework and library overhead included); the raw tile peak is an upper bound no library call reaches. Whether the small-M points are limited by memory, by per-call overhead or by weight repacking is not separable with the present runs.
+The "fraction of tile peak" is the library-achievable compute ceiling for these calls (framework and library overhead included); the raw tile peak is an upper bound no library call reaches. Section 5 separates those causes.
+
+## 5. Is the GEMM measuring memory? Pool size, call overhead and weight layout
+
+Three follow-up runs test the confounds of the first sweep: the weight pool (4×, 16× and 64× the 225 MiB the chip can hold), the cost of a call on tiny matrices, and BF16 with the weights prepacked once, as INT8 always is. Hollow markers are the modeled bytes, filled markers the bytes the cores' counters saw.
+"""),
+    code("""
+pool = report.gemm_pool_table(ext)
+fig = plotting.gemm_pool_figure(pool[(pool['shape'] == '14336x4096') & (pool.m == 1)])
+figure(fig, 'gemm_pool_convergence')
+table(pool[pool.m == 1][['memory_target', 'dtype', 'shape', 'pool_x', 'modeled_gbs', 'counted_gbs', 'cv_percent']], 1)
+"""),
+    code("""
+table(report.gemm_overhead_table(ext), 1)
+"""),
+    code("""
+pk = report.gemm_prepacked_table(ext)
+fig = plotting.gemm_prepacked_figure(pk)
+figure(fig, 'gemm_prepacked')
+table(pk, 2)
+say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_pool_convergence', 'gemm_asymmetry', 'gemv_prepacked_bandwidth', 'gemm_call_floor'])
+"""),
+    md("""
+At decode batch sizes a BF16 call from PyTorch is therefore limited by the library call as much as by memory; the pool and the weight layout, not the memory system, set most of the earlier gap between the 4096² and 14336×4096 shapes and between BF16 and INT8. The 4096² shape and the first sweep's modeled bandwidths should not be read as HBM or DDR bandwidth.
 """),
 ]
 
@@ -745,8 +824,10 @@ flat_hbm, flat_ddr = mem
 fp64 = [report.compute_ceiling(ext, 'fp64', 'flat', 56)]
 mem_rw = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', access='readwrite'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', access='readwrite')]
 pts = report.fp64_sweep_points(thesis, 'flat', 'hbm') + report.fp64_sweep_points(thesis, 'flat', 'ddr')
-audits = [roofline.audit_points(pts, mem_rw, fp64).assign(group='FP64 sweep · Flat · read/write ceiling')]
-fig = plotting.roofline_figure(fp64 + theory_set(['fp64'], '1S', 56), mem_rw, pts, title='FP64 intensity sweep · Flat · one socket', x_range=(0.05, 256))
+pts12 = report.fp64_sweep12_points(ext, thesis, theory, 'hbm') + report.fp64_sweep12_points(ext, thesis, theory, 'ddr')
+audits = [roofline.audit_points(pts, mem_rw, fp64).assign(group='FP64 sweep · Flat · read/write ceiling'),
+          roofline.audit_points(pts12, mem_rw, fp64).assign(group='FP64 sweep, 12 chains · Flat · read/write ceiling')]
+fig = plotting.roofline_figure(fp64 + theory_set(['fp64'], '1S', 56), mem_rw, pts + pts12, title='FP64 intensity sweep · 8 chains (October) and 12 chains · Flat · one socket', x_range=(0.05, 256))
 figure(fig, 'atlas_fp64_sweep')
 hb = [p for p in pts if p.memory_target == 'hbm']
 say_claims(claims.fp64_sweep(ext, thesis, theory))
@@ -786,6 +867,17 @@ gap = pd.DataFrame(rows)
 table(gap)
 """),
     md("""
+### Counted against modeled intensity
+
+The cores' DRAM counters give the intensity a point actually has. Each BF16 and INT8 point of the 14336×4096 projection appears twice, with modeled and with counted bytes, at the same rate.
+"""),
+    code("""
+cs = [report.compute_ceiling(ext, p, 'flat', 56) for p in ('amx_bf16', 'amx_int8')]
+fig = plotting.roofline_figure(cs, [mem_read[0]], report.counted_gemm_points(ext, theory, 'hbm'), title='GEMM 14336×4096 · Flat HBM · modeled and counted bytes', point_labels=True, x_range=(0.5, 4000))
+figure(fig, 'atlas_counted_gemm')
+say_claims(claims.counted(ext, thesis), ['counted_gemm_weights', 'counted_gemm_prefill'])
+"""),
+    md("""
 **Gap analysis.** Two layers separate the vendor number from library performance: (1) the vendor peak versus what a hand-written tile kernel sustains (the clock the cores actually ran at; compare `measured_over_theory` below); (2) the tile-kernel peak versus an optimized library GEMM (the achieved-over-measured column).
 
 ## 6. Ceiling audit: points above their own roofline
@@ -797,6 +889,7 @@ for pool, ceiling in [(16, resident), (96, spilled)]:
     for dtype, path in [('bf16', 'amx_bf16'), ('int8', 'amx_int8')]:
         sel = gm[(gm.memory_mode == 'cache') & (gm.dtype == dtype) & ((gm.pool_gib - pool).abs() < 0.5)]
         audits.append(roofline.audit_points(report.gemm_workload_points(sel, theory), [ceiling], compute_set('cache', '1S', 56)).assign(group=f'{dtype.upper()} GEMM · Cache · {pool} GiB pool · best-kernel ceiling'))
+audits.append(roofline.audit_points(report.gemm_pool_points(ext, 64), mem_read, [report.compute_ceiling(ext, p, 'flat', 56) for p in ('amx_bf16', 'amx_int8')]).assign(group='GEMM · Flat · 64× pool · read-only ceiling'))
 audit = pd.concat(audits, ignore_index=True)
 summary = audit.groupby('group').agg(points=('exceeds', 'size'), exceeding=('exceeds', 'sum'), max_ratio=('ratio', 'max')).reset_index()
 table(summary)
@@ -804,7 +897,16 @@ say(f"**Result.** {int(audit.exceeds.sum())} of {len(audit)} points lie above th
 table(audit[audit.exceeds].sort_values('ratio', ascending=False)[['group', 'series', 'intensity', 'bandwidth_gbs', 'ceiling_gbs', 'ceiling_kernel', 'ratio', 'tolerance_percent']])
 """),
     md("""
-**Reading the exceptions.** They are listed, not hidden. Two mechanisms can raise a point above a kernel-based ceiling, and the present data cannot separate them: (1) the access pattern of the point differs from every ceiling kernel (a one-load-one-store sweep, or a GEMM whose weight pool is small enough to be partly cache-resident, review item A5); (2) the modeled bytes overcount real memory traffic. The GEMM pool-size sweep and a counter-based traffic measurement are the planned tests; until then, points above the ceiling are evidence about the *ceiling's* definition, not a violation of the hardware.
+**Reading the exceptions.** They are listed, not hidden. Two mechanisms can raise a point above a kernel-based ceiling: the access pattern differs from every ceiling kernel, or the modeled bytes overcount real traffic. The counters and the pool sweep tell them apart:
+"""),
+    code("""
+g64 = audit[audit.group.str.contains('64× pool')]
+say(f"**Result.** With the converged 64× pool {int(g64.exceeds.sum())} of {len(g64)} GEMM points lie above their roofline.")
+say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_pool_convergence'])
+say_claims(claims.counted(ext, thesis), ['counted_gemm_weights', 'sweep_exceeds_triad_ceiling'])
+"""),
+    md("""
+The DDR GEMM exceptions of the first sweep were cache reuse in a pool that was too small (counted traffic below modeled; none remain with the 64× pool). The HBM sweep exceedance is a property of the ceiling: a one-load-one-store stream sustains more than Triad, and its modeled bytes are right.
 """),
 ]
 

@@ -1,5 +1,11 @@
 # Follow-up runs (roadmap step 6)
 
+**Status (2026-10-15): all parts ran on 2026-10-12 and their results are in the analysis.** The raw
+campaigns are committed (`data/raw`, listed under `extended_campaigns` in
+`configs/analysis.json`); notebooks 01–05 carry the results and
+[the status report](STATUS_2026-10-12.md) lists the outcomes. The text below is the original
+plan and is kept for the run recipe.
+
 Run definitions for the experiments that the [2026-10-12 review](REVIEW_2026-10-12.md)
 ranks highest. Nothing here has been executed: the definitions are tested only as plans
 (`tests/test_campaign_plan.py`) and the C++ change only for syntax and generated code.

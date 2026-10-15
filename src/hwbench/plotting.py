@@ -84,13 +84,18 @@ __all__ = [
     "ROOT",
     "SHAPE_COLORS",
     "cache_capacity_figure",
+    "cache_latency_figure",
     "compute_efficiency_figure",
+    "counted_ratio_figure",
     "config_key",
     "dual_efficiency_figure",
     "export_figure",
     "gemm_efficiency_figure",
+    "gemm_pool_figure",
+    "gemm_prepacked_figure",
     "memory_scaling_figure",
     "placement_figure",
+    "remote_threads_figure",
     "roofline_figure",
     "style",
 ]
@@ -519,4 +524,126 @@ def dual_efficiency_figure(de: pd.DataFrame):
     fig.update_yaxes(range=[0.96, 1.04], tickformat=".2f")
     fig.update_xaxes(tickangle=-40)
     fig.update_layout(margin=dict(l=85, r=40, t=85, b=170), legend=dict(orientation="h", x=0, y=-0.5))
+    return fig
+
+
+# --------------------------------------------------------- follow-up figures
+def counted_ratio_figure(t: pd.DataFrame):
+    """Counted over modeled DRAM traffic, one dot per workload.
+
+    ``t`` has ``label``, ``counted_over_modeled`` and ``config`` (a palette key).  The line
+    at 1 means the traffic model describes what the cores moved; the band is ±2%.
+    """
+
+    fig = go.Figure()
+    fig.add_vrect(x0=0.98, x1=1.02, fillcolor=GRID, opacity=0.6, line_width=0, layer="below")
+    fig.add_vline(x=1.0, line=dict(color=MUTED, width=1.5))
+    fig.add_scatter(
+        x=t.counted_over_modeled, y=t.label, mode="markers", showlegend=False,
+        marker=dict(size=11, color=[CONFIG_COLORS[c] for c in t.config], line=dict(color=INK_2, width=1)),
+        hovertemplate="%{y}: %{x:.3f}<extra></extra>",
+    )
+    style(fig, "Counted against modeled DRAM traffic · one dot per workload", "Counted ÷ modeled bytes", "", 160 + 24 * len(t))
+    fig.update_yaxes(autorange="reversed", showgrid=False)
+    fig.update_xaxes(range=[0.75, 1.5])
+    fig.update_layout(margin=dict(l=250, r=40, t=85, b=70))
+    return fig
+
+
+def remote_threads_figure(rt: pd.DataFrame):
+    """Local and remote bandwidth against thread count for socket 0 (the remote-HBM repeat).
+
+    Colour is the tier, filled markers are local memory and open markers remote memory.
+    """
+
+    fig = go.Figure()
+    series = [("hbm", "read", "HBM read", "circle"), ("hbm", "triad_nt", "HBM non-temporal Triad", "square"), ("ddr", "read", "DDR read", "diamond")]
+    for tier, kernel, name, symbol in series:
+        part = rt[rt.memory_target.eq(tier) & rt.kernel.eq(kernel) & rt.socket.eq(0)].sort_values("threads")
+        color = CONFIG_COLORS["flat_hbm" if tier == "hbm" else "flat_ddr"]
+        fig.add_scatter(
+            x=part.threads, y=part.gbs_local, mode="lines+markers", name=f"{name} · local",
+            line=dict(color=color, width=2), marker=dict(size=9, symbol=symbol, color=color, line=dict(color=SURFACE, width=1.5)),
+        )
+        fig.add_scatter(
+            x=part.threads, y=part.gbs_remote, mode="lines+markers", name=f"{name} · remote",
+            error_y=dict(type="data", array=part.gbs_remote * part.cv_remote / 100, color=INK_2, thickness=1),
+            line=dict(color=color, width=1.5), marker=dict(size=9, symbol=f"{symbol}-open", color=color, line=dict(color=color, width=2)),
+        )
+    style(fig, "Remote and local bandwidth against core count · socket 0, 8 GiB, 5 s windows", "Cores", "GB/s", 560)
+    fig.update_xaxes(type="log", tickmode="array", tickvals=[1, 4, 14, 28, 56], ticktext=["1", "4", "14", "28", "56"])
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.3))
+    return fig
+
+
+def gemm_pool_figure(pool: pd.DataFrame):
+    """GEMM bandwidth at M=1 against the size of the weight pool, modeled and counted.
+
+    ``pool`` has ``memory_target``, ``dtype``, ``pool_x``, ``modeled_gbs`` and ``counted_gbs``.
+    Hollow markers are modeled bytes, filled markers counted bytes; once the pool is large
+    enough to defeat the caches the two meet.
+    """
+
+    fig = go.Figure()
+    for tier, color in (("hbm", CONFIG_COLORS["flat_hbm"]), ("ddr", CONFIG_COLORS["flat_ddr"])):
+        for dtype, symbol in (("bf16", "circle"), ("int8", "diamond")):
+            part = pool[pool.memory_target.eq(tier) & pool["dtype"].eq(dtype)].sort_values("pool_x")
+            label = f"{'HBM' if tier == 'hbm' else 'DDR'} {dtype.upper()}"
+            fig.add_scatter(
+                x=part.pool_x, y=part.modeled_gbs, mode="lines+markers", name=f"{label} · modeled", legendgroup=label,
+                line=dict(color=color, width=1.5), marker=dict(size=10, symbol=f"{symbol}-open", color=color, line=dict(color=color, width=2)),
+            )
+            fig.add_scatter(
+                x=part.pool_x, y=part.counted_gbs, mode="lines+markers", name=f"{label} · counted", legendgroup=label,
+                line=dict(color=color, width=2.2), marker=dict(size=9, symbol=symbol, color=color, line=dict(color=SURFACE, width=1.5)),
+            )
+    style(fig, "GEMM bandwidth at M=1 against weight-pool size · 14336×4096", "Weight pool (× on-chip capacity of 225 MiB)", "GB/s", 560)
+    fig.update_xaxes(type="log", tickmode="array", tickvals=[4, 16, 64], ticktext=["4×", "16×", "64×"])
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.3))
+    return fig
+
+
+def gemm_prepacked_figure(pk: pd.DataFrame):
+    """Speed-up of BF16 with prepacked weights over plain weights, one dot per case."""
+
+    pk = pk.assign(label=lambda f: f.memory_target.str.upper() + " " + f["shape"] + " · M=" + f.m.astype(int).astype(str)).sort_values(["memory_target", "shape", "m"])
+    fig = go.Figure()
+    fig.add_vline(x=1.0, line=dict(color=MUTED, width=1.5))
+    fig.add_scatter(
+        x=pk.speedup, y=pk.label, mode="markers", showlegend=False,
+        marker=dict(size=11, color=[CONFIG_COLORS["flat_hbm" if t == "hbm" else "flat_ddr"] for t in pk.memory_target], line=dict(color=INK_2, width=1)),
+        hovertemplate="%{y}: %{x:.2f}×<extra></extra>",
+    )
+    style(fig, "BF16 with prepacked weights ÷ plain weights · 4× pool", "Throughput ratio", "", 160 + 24 * len(pk))
+    fig.update_yaxes(autorange="reversed", showgrid=False)
+    fig.update_layout(margin=dict(l=220, r=40, t=85, b=70))
+    return fig
+
+
+def cache_latency_figure(cache: pd.DataFrame, flat: dict[str, float]):
+    """Cache-mode idle latency against working set, with the Flat tiers as reference lines.
+
+    ``cache`` has ``working_set_gib`` and ``latency_ns``; ``flat`` maps ``DDR`` and ``HBM`` to
+    their idle latency.  The HBM cache capacity is marked.
+    """
+
+    fig = go.Figure()
+    for name, key in (("Flat DDR", "flat_ddr"), ("Flat HBM", "flat_hbm")):
+        value = flat["DDR" if "DDR" in name else "HBM"]
+        fig.add_hline(y=value, line=dict(color=CONFIG_COLORS[key], width=2))
+        fig.add_annotation(
+            x=1.0, xref="paper", y=value, yref="y", text=f"{name} {value:.0f} ns", showarrow=False, xanchor="right", yanchor="bottom",
+            font=dict(size=12, color=INK_2),
+        )
+    part = cache.sort_values("working_set_gib")
+    fig.add_scatter(
+        x=part.working_set_gib, y=part.latency_ns, mode="lines+markers", name="Cache mode",
+        line=dict(color=CONFIG_COLORS["cache"], width=2.2), marker=dict(size=10, color=CONFIG_COLORS["cache"], line=dict(color=SURFACE, width=1.5)),
+    )
+    fig.add_vline(x=64, line=dict(color=MUTED, width=1))
+    fig.add_annotation(x=np.log10(64), y=1.0, xref="x", yref="paper", text="HBM cache 64 GiB", showarrow=False, yanchor="bottom", font=dict(size=12, color=INK_2))
+    style(fig, "Cache-mode idle load latency against working set", "Working set (GiB)", "ns per dependent load", 480)
+    fig.update_xaxes(type="log", tickmode="array", tickvals=[4, 16, 32, 64, 96, 128], ticktext=["4", "16", "32", "64", "96", "128"])
+    fig.update_yaxes(rangemode="tozero")
+    fig.update_layout(showlegend=False)
     return fig

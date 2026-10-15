@@ -1,9 +1,9 @@
 {
   "status": "passed",
   "selected_samples": 1345,
-  "extended_samples": 3964,
-  "all_samples": 8706,
-  "excluded_samples": 704,
+  "extended_samples": 5589,
+  "all_samples": 10341,
+  "excluded_samples": 714,
   "errors": [],
   "warnings": [
     "5 dual-socket samples overlap by less than 99%",
@@ -11,6 +11,7 @@
     "Repeat run deviates +2.6% from October (flat/stream_triad/hbm/socket 1 on cresco8-hbm14)",
     "Repeat run deviates +4.0% from October (cache/stream_triad/effective_cache/socket 1 on cresco8-hbm02)",
     "Repeat run deviates +7.3% from October (cache/stream_triad/effective_cache/socket 0 on cresco8-hbm02)",
+    "Variation above 5%: ('cache-counted-20261012T204644Z', 'cache', 'single', 0.0, 0.0, 'effective_cache', 'stream_read', 'read', nan, nan, nan, 1.0, 56, 8589930496.0, 'counted')",
     "Variation above 5%: ('cache-gemm-20261012T063700Z', 'cache', 'single', 0.0, 0.0, 'effective_cache', 'onednn_gemm_sweep', 'gemm', 'bf16', 1.0, 14336.0, 4096.0, 56, 103112769536.0, 'gemm_sweep')",
     "Variation above 5%: ('cache-gemm-20261012T063700Z', 'cache', 'single', 0.0, 0.0, 'effective_cache', 'onednn_gemm_sweep', 'gemm', 'bf16', 1.0, 4096.0, 14336.0, 56, 103112769536.0, 'gemm_sweep')",
     "Variation above 5%: ('cache-gemm-20261012T063700Z', 'cache', 'single', 0.0, 0.0, 'effective_cache', 'onednn_gemm_sweep', 'gemm', 'bf16', 16.0, 14336.0, 4096.0, 56, 103112769536.0, 'gemm_sweep')",
@@ -35,6 +36,7 @@
     "Variation above 5%: ('cache-thesis-20261011T182120Z', 'cache', 'single', 1.0, 1.0, 'registers', 'amx_onednn_gemm', 'onednn_numactl_only_omp_affinity_unset', 'bf16', 6144.0, 6144.0, 6144.0, 8, 226492416.0, 'compute_scaling')",
     "Variation above 5%: ('flat-bandwidth2-20261011T230637Z', 'flat', 'single', 0.0, 1.0, 'hbm', 'stream_read', 'read', nan, nan, nan, 1.0, 56, 8589930496.0, 'bw2_read_remote')",
     "Variation above 5%: ('flat-bandwidth2-20261011T230637Z', 'flat', 'single', 1.0, 0.0, 'hbm', 'stream_read', 'read', nan, nan, nan, 1.0, 56, 8589930496.0, 'bw2_read_remote')",
+    "Variation above 5%: ('flat-counted-20261012T204737Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'onednn_gemm_sweep', 'gemm', 'int8', 256.0, 14336.0, 4096.0, 56, 998244352.0, 'counted_gemm')",
     "Variation above 5%: ('flat-gemm-20261012T063829Z', 'flat', 'single', 0.0, 0.0, 'ddr', 'onednn_gemm_sweep', 'gemm', 'bf16', 4096.0, 14336.0, 4096.0, 56, 469762048.0, 'gemm_sweep')",
     "Variation above 5%: ('flat-gemm-20261012T063829Z', 'flat', 'single', 0.0, 0.0, 'ddr', 'onednn_gemm_sweep', 'gemm', 'bf16', 8.0, 4096.0, 4096.0, 56, 469762048.0, 'gemm_sweep')",
     "Variation above 5%: ('flat-gemm-20261012T063829Z', 'flat', 'single', 0.0, 0.0, 'ddr', 'onednn_gemm_sweep', 'gemm', 'int8', 128.0, 4096.0, 14336.0, 56, 469762048.0, 'gemm_sweep')",
@@ -50,14 +52,26 @@
     "Variation above 5%: ('flat-gemm-20261012T063829Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'onednn_gemm_sweep', 'gemm', 'bf16', 8.0, 4096.0, 14336.0, 56, 469762048.0, 'gemm_sweep')",
     "Variation above 5%: ('flat-gemm-20261012T063829Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'onednn_gemm_sweep', 'gemm', 'int8', 512.0, 14336.0, 4096.0, 56, 469762048.0, 'gemm_sweep')",
     "Variation above 5%: ('flat-gemm-20261012T063829Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'onednn_gemm_sweep', 'gemm', 'int8', 64.0, 4096.0, 4096.0, 56, 469762048.0, 'gemm_sweep')",
+    "Variation above 5%: ('flat-gemmvalid-20261012T211909Z', 'flat', 'single', 0.0, 0.0, 'ddr', 'onednn_gemm_sweep', 'gemm', 'int8', 1.0, 1024.0, 1024.0, 56, 4194304.0, 'gemm_overhead')",
+    "Variation above 5%: ('flat-gemmvalid-20261012T211909Z', 'flat', 'single', 0.0, 0.0, 'ddr', 'onednn_gemm_sweep', 'gemm', 'int8', 16.0, 256.0, 256.0, 56, 262144.0, 'gemm_overhead')",
+    "Variation above 5%: ('flat-gemmvalid-20261012T211909Z', 'flat', 'single', 0.0, 0.0, 'ddr', 'onednn_gemm_sweep', 'gemm', 'int8', 256.0, 4096.0, 4096.0, 56, 956301312.0, 'gemm_pool')",
+    "Variation above 5%: ('flat-gemmvalid-20261012T211909Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'onednn_gemm_sweep', 'gemm', 'int8', 1.0, 1024.0, 1024.0, 56, 4194304.0, 'gemm_overhead')",
+    "Variation above 5%: ('flat-gemmvalid-20261012T211909Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'onednn_gemm_sweep', 'gemm', 'int8', 16.0, 1024.0, 1024.0, 56, 4194304.0, 'gemm_overhead')",
+    "Variation above 5%: ('flat-gemmvalid-20261012T211909Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'onednn_gemm_sweep', 'gemm', 'int8', 16.0, 256.0, 256.0, 56, 262144.0, 'gemm_overhead')",
+    "Variation above 5%: ('flat-gemmvalid-20261012T211909Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'onednn_gemm_sweep', 'gemm', 'int8', 256.0, 14336.0, 4096.0, 56, 3816816640.0, 'gemm_pool')",
+    "Variation above 5%: ('flat-gemmvalid-20261012T211909Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'onednn_gemm_sweep', 'gemm', 'int8', 256.0, 14336.0, 4096.0, 56, 998244352.0, 'gemm_pool')",
+    "Variation above 5%: ('flat-gemmvalid-20261012T211909Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'onednn_gemm_sweep', 'gemm', 'int8', 256.0, 4096.0, 4096.0, 56, 956301312.0, 'gemm_pool')",
     "Variation above 5%: ('flat-hierarchy-20261012T062515Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'stream_read', 'read', nan, nan, nan, 1.0, 56, 15032385536.0, 'hier_read_56')",
     "Variation above 5%: ('flat-hierarchy-20261012T062515Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'stream_read', 'read', nan, nan, nan, 1.0, 56, 1879048192.0, 'hier_read_56')",
+    "Variation above 5%: ('flat-remotehbm-20261012T215047Z', 'flat', 'single', 0.0, 1.0, 'hbm', 'stream_read', 'read', nan, nan, nan, 1.0, 56, 8589930496.0, 'remote_repeat')",
+    "Variation above 5%: ('flat-repeat-20261012T211328Z', 'flat', 'single', 0.0, 0.0, 'hbm', 'stream_read', 'read', nan, nan, nan, 1.0, 56, 8589930496.0, 'repeat')",
     "Variation above 5%: ('flat-span-20261012T073217Z', 'flat', 'span', nan, nan, 'hbm', 'stream_read', 'read', nan, nan, nan, 1.0, 112, 17179860992.0, 'span_firsttouch')",
     "Variation above 5%: ('flat-thesis-20261011T182042Z', 'flat', 'single', 0.0, 0.0, 'registers', 'amx_onednn_gemm', 'onednn_numactl_only_omp_affinity_unset', 'bf16', 6144.0, 6144.0, 6144.0, 8, 226492416.0, 'compute_scaling')",
     "Variation above 5%: ('flat-thesis-20261011T182042Z', 'flat', 'single', 1.0, 1.0, 'registers', 'amx_onednn_gemm', 'onednn_numactl_only_omp_affinity_unset', 'bf16', 6144.0, 6144.0, 6144.0, 14, 226492416.0, 'compute_scaling')",
     "Variation above 5%: ('flat-thesis-20261011T182042Z', 'flat', 'single', 1.0, 1.0, 'registers', 'amx_onednn_gemm', 'onednn_numactl_only_omp_affinity_unset', 'bf16', 6144.0, 6144.0, 6144.0, 8, 226492416.0, 'compute_scaling')",
-    "cache-bandwidth2-20261011T230639Z: 1 rejected samples (insufficient_shared_window)"
+    "cache-bandwidth2-20261011T230639Z: 1 rejected samples (insufficient_shared_window)",
+    "flat-gemmvalid-20261012T211909Z: 10 rejected samples (missing_amx_execution_evidence)"
   ],
-  "dataset_sha256": "a5d70bd14ab0e0bfeb54fb0f0118bd9fc1b9b822b4309599e69c13bd9f407056",
-  "selection_sha256": "64ba7d4bebe25fa59673fdd5a556c678f63bbfb7e4b894f57622c5f9a37941fb"
+  "dataset_sha256": "4b0249d44f00b9bfa83e07c220bad9f8bd27eebde82c2fd5caff0e09323591d4",
+  "selection_sha256": "ea1087d2ccbc88c9f600f7f91ed437edc585a79e722e528a6ee0aa9695fd0b15"
 }
