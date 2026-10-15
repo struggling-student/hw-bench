@@ -6,6 +6,7 @@ from hwbench.extended import (
     campaign_context_errors,
     check_extended,
     peak_violations,
+    select_earlier,
     select_extended,
 )
 from hwbench.theory import Theory
@@ -124,3 +125,16 @@ def test_interrupted_campaign_is_accepted_only_when_a_completed_one_resumes_it(t
     meta.write_text(json.dumps({**data, "resumes": "first"}))
     errors, _ = check_extended(pd.DataFrame([row(campaign_id="x")]), policy, raw)
     assert not any("not complete" in e for e in errors)
+
+
+def test_earlier_kernel_campaigns_are_selected_apart_and_never_pooled(tmp_path):
+    make_campaign(tmp_path, "flat", "old", "cresco8-hbm14", "ssh")
+    make_campaign(tmp_path, "flat", "new", "cresco8-hbm14", "ssh")
+    policy = {"extended_campaigns": {"flat": ["new"]}, "earlier_kernel_campaigns": {"flat": ["old"]}}
+    df = pd.DataFrame([row(campaign_id="old"), row(campaign_id="new")])
+    assert set(select_extended(df, policy).campaign_id) == {"new"}
+    assert set(select_earlier(df, policy).campaign_id) == {"old"}
+    # an earlier campaign is still checked for where and how it ran
+    make_campaign(tmp_path, "flat", "bad", "hbm01", "ssh")
+    errors, _ = check_extended(df, {**policy, "earlier_kernel_campaigns": {"flat": ["bad"]}}, [tmp_path / "flat"])
+    assert any("off the dedicated node" in e for e in errors)

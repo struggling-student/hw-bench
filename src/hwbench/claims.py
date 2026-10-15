@@ -409,7 +409,22 @@ def latency(ext: pd.DataFrame, theory: Theory, root: Path = ROOT) -> list[Claim]
     ]
 
 
-def hierarchy(ext: pd.DataFrame, theory: Theory) -> list[Claim]:
+def _earlier_levels(root: Path) -> dict[str, dict[str, float]]:
+    """Per-core levels (GB/s and B/cycle, Flat HBM) of the earlier read kernel, from its own campaign."""
+
+    from hwbench.extended import select_earlier
+
+    df, _, _, policy = report.load(root)
+    old = select_earlier(df, policy)
+    lv, _ = report.level_summary(report.hierarchy(old))
+    gbs = lv[lv.config.eq("flat_hbm")].set_index("level").gbs
+    one = old[old.notes.eq("hier_read_1") & old.working_set_bytes.eq(32 * 2**10) & old.memory_target.eq("hbm")]
+    ghz = float(one.ghz_effective.median())
+    return {name: dict(gbs=float(value), per_cycle=float(value) / ghz) for name, value in gbs.items()}
+
+
+def hierarchy(ext: pd.DataFrame, theory: Theory, root: Path = ROOT) -> list[Claim]:
+    before = _earlier_levels(root)
     h = report.hierarchy(ext)
     lv, _ = report.level_summary(h)
     v = lv[lv.config.eq("flat_hbm")].set_index("level").gbs
@@ -428,13 +443,19 @@ def hierarchy(ext: pd.DataFrame, theory: Theory) -> list[Claim]:
             f"TB/s in L2, against {v['memory, 56 cores (256 MiB/core)']:.0f} GB/s from HBM.",
         ),
         Claim(
-            "l1_understated",
-            per_cycle < 128,
-            f"The L1 figure is a lower bound: {v['L1 (32 KiB)']:.0f} GB/s at {ghz:.2f} GHz is {per_cycle:.0f} of the 128 B/cycle "
-            "two-load-port limit, because the read kernel that took these data read the clock and reduced its accumulators after every pass over its "
-            "working set (a pass over 16 KiB takes only tens of nanoseconds, so the smaller working set reads lower still). This is a measurement "
-            "overhead, not an L1 property. The kernel in the repository now batches about 4 MiB of passes per clock read; the L1 and L2 points "
-            "predate that change and stay lower bounds until the hierarchy part is run again.",
+            "l1_read_batching",
+            bool(
+                100 < per_cycle <= 128 * 1.02
+                and per_cycle > 1.15 * before["L1 (32 KiB)"]["per_cycle"]
+                and all(abs(v[k] / before[k]["gbs"] - 1) < 0.05 for k in ("L2 (1 MiB)", "memory, 1 core (4 GiB)"))
+            ),
+            f"The read kernel now reads the clock once per about 4 MiB of passes (review A15). One core over 32 KiB reads {v['L1 (32 KiB)']:.0f} GB/s, "
+            f"{per_cycle:.0f} B/cycle at {ghz:.2f} GHz, {_pct(per_cycle / 128)} of the 128 B/cycle two-load-port limit; the earlier kernel, which read the clock "
+            f"and reduced its accumulators after every pass, gave {before['L1 (32 KiB)']['gbs']:.0f} GB/s ({before['L1 (32 KiB)']['per_cycle']:.0f} B/cycle), so the "
+            "L1 bandwidth it reported was a measurement overhead and not an L1 property. L2 "
+            f"({v['L2 (1 MiB)']:.0f} against {before['L2 (1 MiB)']['gbs']:.0f} GB/s) and memory ({v['memory, 1 core (4 GiB)']:.1f} against "
+            f"{before['memory, 1 core (4 GiB)']['gbs']:.1f} GB/s) are unchanged within 5%, as expected where a pass takes microseconds or longer. "
+            "The clock under L1-resident reads is lower than under L2 or memory reads, so per-cycle figures, not GB/s, compare the levels.",
         ),
     ]
 
@@ -834,17 +855,21 @@ def counted(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
     bf256 = m256[m256["dtype"].eq("bf16")]
     i256 = m256[m256["dtype"].eq("int8")]
     rw = {t: report.memory_ceiling(ext, thesis, "flat", t, access="readwrite").gbs for t in ("hbm", "ddr")}
-    try:
-        cp = {t: report.memory_ceiling(ext, thesis, "flat", t, access="copy") for t in ("hbm", "ddr")}
-        copy_note = (
-            f"The copy kernel, which has the sweep's one-load-one-store pattern, sustains {cp['hbm'].gbs:.0f} GB/s on HBM and {cp['ddr'].gbs:.0f} GB/s "
-            f"on DDR ({cp['hbm'].kernel} and {cp['ddr'].kernel} win), and is the ceiling the sweep is audited against."
-        )
-    except LookupError:
-        copy_note = "The ceiling kernels do not cover that pattern; a copy kernel (campaign part `copy`) would, and has not been run yet."
     sw = sub[sub.benchmark.eq("roofline_sweep") & sub.memory_mode.eq("flat") & sub.k.eq(1)].copy()
     sw["counted_gbs"] = sw.counted_bytes / sw.elapsed_seconds / 1e9
     swg = sw.groupby("memory_target").agg(counted=("counted_gbs", "median"), modeled=("bandwidth_gbs", "median"))
+    try:
+        cp = {t: report.memory_ceiling(ext, thesis, "flat", t, access="copy") for t in ("hbm", "ddr")}
+        within = all(float(swg.loc[t].counted) <= cp[t].gbs * 1.02 for t in ("hbm", "ddr"))
+        copy_note = (
+            f"The copy kernel, which has the sweep's one-load-one-store pattern, sustains {cp['hbm'].gbs:.0f} GB/s on HBM ({cp['hbm'].kernel}) and "
+            f"{cp['ddr'].gbs:.0f} GB/s on DDR ({cp['ddr'].kernel}); the sweep's counted {swg.loc['hbm'].counted:.0f} and {swg.loc['ddr'].counted:.0f} GB/s are "
+            f"{_pct(float(swg.loc['hbm'].counted) / cp['hbm'].gbs)} and {_pct(float(swg.loc['ddr'].counted) / cp['ddr'].gbs)} of it, so measured against its own "
+            "pattern the sweep no longer exceeds its ceiling, and the sweep is audited against the copy ceiling."
+        )
+    except LookupError:
+        within = True
+        copy_note = "The ceiling kernels do not cover that pattern; a copy kernel (campaign part `copy`) would, and has not been run yet."
     return [
         Claim(
             "counted_streams",
@@ -865,7 +890,7 @@ def counted(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
         ),
         Claim(
             "sweep_exceeds_triad_ceiling",
-            bool(swg.loc["hbm"].counted > rw["hbm"] * 1.02 and swg.loc["ddr"].counted < rw["ddr"] * 1.02),
+            bool(swg.loc["hbm"].counted > rw["hbm"] * 1.02 and swg.loc["ddr"].counted < rw["ddr"] * 1.02 and within),
             f"The one point where a measured stream stays above its ceiling is not a modeling error: the FP64 sweep at K=1 (one load and one store per element) "
             f"moves {swg.loc['hbm'].counted:.0f} GB/s counted on HBM ({swg.loc['hbm'].modeled:.0f} modeled) against {rw['hbm']:.0f} GB/s for Triad, the best "
             f"read/write kernel, so a one-load-one-store pattern sustains {_pct(float(swg.loc['hbm'].counted) / rw['hbm'] - 1, 1)} more than Triad on HBM. "
@@ -937,7 +962,7 @@ def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Pa
         "counters": counters(root),
         "core_scaling": core_scaling(ext, thesis, root),
         "cache_mode": cache_mode(ext, thesis),
-        "hierarchy": hierarchy(ext, theory),
+        "hierarchy": hierarchy(ext, theory, root),
         "latency": latency(ext, theory, root),
         "xcheck": xcheck(ext, thesis),
         "repeatability": repeatability(ext, thesis),

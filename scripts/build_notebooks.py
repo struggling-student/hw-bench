@@ -925,7 +925,7 @@ say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_pool_convergence'])
 say_claims(claims.counted(ext, thesis), ['counted_gemm_weights', 'sweep_exceeds_triad_ceiling'])
 """),
     md("""
-The DDR GEMM exceptions of the first sweep were cache reuse in a pool that was too small (counted traffic below modeled; none remain with the 64× pool). The HBM sweep exceedance is a property of the ceiling: a one-load-one-store stream sustains more than Triad, and its modeled bytes are right.
+The DDR GEMM exceptions of the first sweep were cache reuse in a pool that was too small (counted traffic below modeled; none remain with the 64× pool). The HBM sweep exceedance against Triad was a property of the ceiling, not of the point: a one-load-one-store stream sustains more than Triad, and with the copy kernel as its ceiling the sweeps lie within it. What is listed above is therefore only the first sweep's small-pool GEMM points on DDR, kept for provenance.
 """),
 ]
 

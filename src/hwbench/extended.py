@@ -49,6 +49,19 @@ def extended_ids(policy: dict) -> dict[str, list[str]]:
     return {mode: list(ids) for mode, ids in policy.get("extended_campaigns", {}).items()}
 
 
+def earlier_ids(policy: dict) -> dict[str, list[str]]:
+    """Campaigns kept only to compare an older kernel with its replacement (never pooled)."""
+
+    return {mode: list(ids) for mode, ids in policy.get("earlier_kernel_campaigns", {}).items()}
+
+
+def select_earlier(df: pd.DataFrame, policy: dict) -> pd.DataFrame:
+    """Steady, accepted rows of the earlier-kernel campaigns."""
+
+    ids = {c for campaigns in earlier_ids(policy).values() for c in campaigns}
+    return df[df.phase.eq("steady") & df.accepted & df.campaign_id.isin(ids)].copy()
+
+
 def select_extended(df: pd.DataFrame, policy: dict, include_rejected: bool = False):
     """Steady, accepted rows of the listed extended campaigns."""
 
@@ -127,7 +140,7 @@ def check_extended(
     errors: list[str] = []
     warnings: list[str] = []
     theory = theory or Theory.load()
-    for mode, campaigns in extended_ids(policy).items():
+    for mode, campaigns in [*extended_ids(policy).items(), *earlier_ids(policy).items()]:
         resumed = _resumed(mode, campaigns, raw_roots)
         for campaign in campaigns:
             found = campaign_context_errors(mode, campaign, raw_roots)

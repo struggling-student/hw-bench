@@ -12,8 +12,9 @@ campaigns={(mode,c) for mode,c in policy['primary_campaigns'].items()}
 for mode,overrides in policy.get('benchmark_campaigns',{}).items():
     campaigns.update((mode,c) for c in overrides.values())
 campaigns.update((mode,c) for mode,c in policy.get('supersede',{}).items())
-for mode,ids in policy.get('extended_campaigns',{}).items():
-    campaigns.update((mode,c) for c in ids)
+for key in ('extended_campaigns','earlier_kernel_campaigns'):
+    for mode,ids in policy.get(key,{}).items():
+        campaigns.update((mode,c) for c in ids)
 for mode,campaign in sorted(campaigns):
     destination=root/'data/raw'/mode/campaign;destination.mkdir(parents=True,exist_ok=True)
     subprocess.run(['rsync','-a',os.environ['HW_BENCH_LOGIN_ALIAS']+':'+os.environ['HW_BENCH_RESULTS_ROOT']+'/'+campaign+'/',str(destination)+'/'],check=True)
