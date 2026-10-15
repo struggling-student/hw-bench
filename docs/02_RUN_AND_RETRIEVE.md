@@ -28,7 +28,7 @@ difference.
 
 ## Local analysis
 
-Install with `.venv/bin/python -m pip install -r requirements.txt`. Plotly static export needs Kaleido and Chrome/Chromium. `bash scripts/make_analysis.sh` normalizes local raw records, validates, writes thesis tables, builds and executes the seven notebooks in independent kernels, and checks the figure exports. Raw data, processed tables and figure exports are versioned; `scripts/fetch_results.sh` runs `scripts/scrub_raw.py` after every retrieval so no account name or password-expiry line is committed, and `make_analysis.sh` refuses to run on unscrubbed data.
+Install with `.venv/bin/python -m pip install -r requirements.txt`. Plotly static export needs Kaleido and Chrome/Chromium. `bash scripts/make_analysis.sh` normalizes local raw records, validates, writes thesis tables, builds and executes the six notebooks in independent kernels, and checks the figure exports. Raw data, processed tables and figure exports are versioned; `scripts/fetch_results.sh` runs `scripts/scrub_raw.py` after every retrieval so no account name or password-expiry line is committed, and `make_analysis.sh` refuses to run on unscrubbed data.
 
 ## Cluster measurements
 
@@ -50,6 +50,7 @@ Each invocation stages the source in a unique directory and runs one *part* as i
 | `gemm` | BF16 and INT8 oneDNN GEMM M-sweeps at Llama-3.1-8B shapes with weights streamed from memory |
 | `span` | one 112-thread process: interleaved versus first-touch placement; Cache resident two-socket pairs |
 | `xcheck` | repeat of reference points: SSH-versus-Slurm (Flat), node-to-node (Cache, `HW_BENCH_CACHE_NODE=<second node>`) |
+| `copy` | copy kernel (one load, one store per element) with Triad and the K = 1 sweep: the ceiling of the intensity sweep |
 | `smoke` | seconds of every kernel; proves build, counters and the INT8 probe, not a result |
 | `memory`, `compute`, `sweep`, `memory-sweep`, `concurrency` | the October-11 thesis parts, kept so those campaigns stay reproducible |
 

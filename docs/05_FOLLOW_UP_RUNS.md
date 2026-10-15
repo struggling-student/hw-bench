@@ -28,6 +28,7 @@ List what a part will measure without touching any node:
 | `chains` | Flat | 6 | 0.5 min | **A13, M6.** `vdpbf16ps` with 6, 12 and 24 accumulator chains at 1 and 56 cores. | Rate independent of the chain count once ≥ 12 |
 | `sweep12` | Flat | 26 | 2 min | **A10.** FP64 intensity sweep with 12 chains for K = 1…1024 (AI up to 128 FLOP/B), plus the old 8-chain kernel at K = 512 and 1024 as a control. | The plateau and the ridge region are reached, or the gap is explained |
 | `repeat` | both | 10 / 8 | 1 min | **M2, roadmap 6.** The headline numbers once (HBM and DDR read and Triad at 8 GiB, six compute paths, socket 0). Run it **three separate times** to get a between-run spread that does not rest on the cross-check alone. | Three campaigns per mode |
+| `copy` | both | 10 / 5 | 1 min | **A4, counted-traffic follow-up.** Copy (ordinary and non-temporal stores, one load and one store per element), Triad, non-temporal Triad and the FP64 sweep at K = 1, 8 GiB, socket 0. Copy is the matched ceiling of the one-load-one-store sweep that Triad does not cover. | The sweep's counted bandwidth at K = 1 stays within its copy ceiling, or the excess is explained. After a run, list the campaign under `extended_campaigns`; `report.sweep_ceiling` then switches from Triad to copy by itself. |
 
 Timed windows exclude initialisation, which dominates most records (pool building in
 `gemmvalid`, first-touch of up to 56 GiB in `cachefill`, building and walking a random
