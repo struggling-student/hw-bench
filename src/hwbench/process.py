@@ -99,9 +99,16 @@ REQUIRED_VERIFICATION = {
     "vnni_peak": ("avx512_vnni", "missing_vnni_disassembly_evidence"),
     "avx512_bf16_peak": ("avx512_bf16", "missing_avx512_bf16_disassembly_evidence"),
     "stream_triad_nt": ("nt_store", "missing_nt_store_disassembly_evidence"),
+    "stream_copy_nt": ("nt_store", "missing_nt_store_disassembly_evidence"),
 }
 # Benchmarks reported as bandwidth rather than operation rate.
-BANDWIDTH_BENCHMARKS = {"stream_triad", "stream_triad_nt", "stream_read"}
+BANDWIDTH_BENCHMARKS = {
+    "stream_triad",
+    "stream_triad_nt",
+    "stream_read",
+    "stream_copy",
+    "stream_copy_nt",
+}
 
 
 def _reasons(record, compiler):

@@ -22,6 +22,8 @@ chains       (flat) AVX-512 BF16 accumulator-chain sweep (6, 12, 24)
 sweep12      (flat) FP64 intensity sweep with 12 chains up to K=1024, with 8-chain control
 repeat       the headline numbers once, for independent launches (run it three times)
 counted      counted against modeled memory traffic: streams, the intensity sweep and GEMM
+copy         copy kernel (one load, one store per element): the ceiling of the
+             intensity sweep, with Triad and the sweep at K=1 in the same launch
 smoke        a few seconds of every kernel; proves build and counters, not a result
 
 memory, compute, sweep, memory-sweep, concurrency, all
@@ -65,6 +67,7 @@ NEW_PARTS = [
     "sweep12",
     "repeat",
     "counted",
+    "copy",
 ]
 
 THREAD_STEPS = [1, 2, 4, 8, 14, 28, 56]
@@ -927,6 +930,17 @@ def main():
                     execute(
                         spec(0, "gemm", target=target, shape=4096, label="counted_gemm", m=m, gemm_n=14336, dtype=dtype, pool=pool, warm=GEMM_WARM_PASSES)
                     )
+
+    # ------------------------------------------------------------------- copy
+    # The intensity sweep at K=1 loads one array and stores another, a pattern none of
+    # Triad (two loads, one store), read-only and non-temporal Triad reproduces.  Copy
+    # with ordinary and with streaming stores is the matched ceiling; Triad and the
+    # sweep itself run in the same launch so the three share a node and a minute.
+    if part == "copy":
+        for target in targets:
+            for kind in ["copy", "copy_nt", "triad", "triad_nt"]:
+                execute(spec(0, kind, target=target, gib=8, label="copy_ceiling"))
+            execute(spec(0, "sweep", target=target, gib=8, k=1, label="copy_sweep_k1", chains=12))
 
     # ------------------------------------------------- October-11 thesis parts
     if part == "concurrency":

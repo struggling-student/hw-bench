@@ -25,6 +25,8 @@ BANDWIDTH_KERNELS = {
     "stream_triad": "triad",
     "stream_triad_nt": "triad_nt",
     "stream_read": "read",
+    "stream_copy": "copy",
+    "stream_copy_nt": "copy_nt",
 }
 
 

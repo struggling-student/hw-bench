@@ -35,6 +35,8 @@ def test_dry_run_writes_nothing():
         ("cache", "repeat", 8),
         ("flat", "counted", 24),
         ("cache", "counted", 18),
+        ("flat", "copy", 10),
+        ("cache", "copy", 5),
     ],
 )
 def test_part_sizes_and_unique_record_names(mode, part, count):
@@ -91,3 +93,9 @@ def test_chain_counts_and_sweep_range():
     assert {re.search(r"c(\d+)$", n)[1] for n in names} == {"6", "12", "24"}
     _, sweep = plan("flat", "sweep12")
     assert any("k1024" in n and n.endswith("c12") for n in sweep) and any("k1024" in n and n.endswith("c8") for n in sweep)
+
+
+def test_copy_part_measures_copy_with_triad_and_the_sweep_in_one_launch():
+    _, names = plan("flat", "copy")
+    kinds = {re.search(r"-s0-(\w+)-(?:ddr|hbm)-", n)[1] for n in names}
+    assert kinds == {"copy", "copy_nt", "triad", "triad_nt", "sweep"}

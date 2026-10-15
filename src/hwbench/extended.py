@@ -169,7 +169,14 @@ def check_extended(
 def _metric(row) -> str | None:
     if row.benchmark == "pointer_chase":
         return "latency_ns"
-    if row.benchmark in {"stream_triad", "stream_triad_nt", "stream_read", "onednn_gemm_sweep"}:
+    if row.benchmark in {
+        "stream_triad",
+        "stream_triad_nt",
+        "stream_read",
+        "stream_copy",
+        "stream_copy_nt",
+        "onednn_gemm_sweep",
+    }:
         return "bandwidth_gbs" if row.benchmark != "onednn_gemm_sweep" else "performance_gops"
     return "performance_gops"
 

@@ -200,19 +200,24 @@ void *alloc_bytes(std::size_t bytes, bool huge) {
   return p;
 }
 
-inline double read_pass(const double *p, std::size_t n) {
+// `reps` passes over the same array with the accumulators kept live, so the clock
+// read and the horizontal reduction are paid once per call and not once per pass.
+// For an array that fits L1 a pass takes tens of nanoseconds, which is the cost of
+// a clock read: reading the clock after every pass understated L1 bandwidth.
+inline double read_passes(const double *p, std::size_t n, std::uint64_t reps) {
   __m512d a0 = _mm512_setzero_pd(), a1 = a0, a2 = a0, a3 = a0, a4 = a0,
           a5 = a0, a6 = a0, a7 = a0;
-  for (std::size_t i = 0; i < n; i += 64) {
-    a0 = _mm512_add_pd(a0, _mm512_load_pd(p + i));
-    a1 = _mm512_add_pd(a1, _mm512_load_pd(p + i + 8));
-    a2 = _mm512_add_pd(a2, _mm512_load_pd(p + i + 16));
-    a3 = _mm512_add_pd(a3, _mm512_load_pd(p + i + 24));
-    a4 = _mm512_add_pd(a4, _mm512_load_pd(p + i + 32));
-    a5 = _mm512_add_pd(a5, _mm512_load_pd(p + i + 40));
-    a6 = _mm512_add_pd(a6, _mm512_load_pd(p + i + 48));
-    a7 = _mm512_add_pd(a7, _mm512_load_pd(p + i + 56));
-  }
+  for (std::uint64_t r = 0; r < reps; ++r)
+    for (std::size_t i = 0; i < n; i += 64) {
+      a0 = _mm512_add_pd(a0, _mm512_load_pd(p + i));
+      a1 = _mm512_add_pd(a1, _mm512_load_pd(p + i + 8));
+      a2 = _mm512_add_pd(a2, _mm512_load_pd(p + i + 16));
+      a3 = _mm512_add_pd(a3, _mm512_load_pd(p + i + 24));
+      a4 = _mm512_add_pd(a4, _mm512_load_pd(p + i + 32));
+      a5 = _mm512_add_pd(a5, _mm512_load_pd(p + i + 40));
+      a6 = _mm512_add_pd(a6, _mm512_load_pd(p + i + 48));
+      a7 = _mm512_add_pd(a7, _mm512_load_pd(p + i + 56));
+    }
   return _mm512_reduce_add_pd(
       _mm512_add_pd(_mm512_add_pd(_mm512_add_pd(a0, a1), _mm512_add_pd(a2, a3)),
                     _mm512_add_pd(_mm512_add_pd(a4, a5), _mm512_add_pd(a6, a7))));
@@ -306,13 +311,17 @@ int main(int argc, char **argv) {
     const bool triad = kind == "triad", triad_nt = kind == "triad_nt",
                sweep = kind == "sweep", latency = kind == "latency",
                readk = kind == "read";
+    // Copy: one load and one store per element, the traffic shape of the
+    // intensity sweep at K = 1 (the ceiling that sweep is compared against).
+    const bool copy = kind == "copy", copy_nt = kind == "copy_nt";
     const bool fp32 = kind == "fp32", fp64 = kind == "fp64",
                amx = kind == "bf16", amx_i8 = kind == "int8",
                vnni = kind == "vnni", vbf16 = kind == "avx512bf16";
-    if (!(triad || triad_nt || sweep || latency || readk || fp32 || fp64 ||
-          amx || amx_i8 || vnni || vbf16))
+    if (!(triad || triad_nt || copy || copy_nt || sweep || latency || readk ||
+          fp32 || fp64 || amx || amx_i8 || vnni || vbf16))
       return 2;
     const bool stream = triad || triad_nt;
+    const bool copyk = copy || copy_nt;
     // Independent accumulator chains: 12 for the compute peaks and 8 for the sweep
     // unless --chains asks otherwise (only the BF16 dot product and the sweep).
     const int chains_eff = chains ? chains : (sweep ? 8 : 12);
@@ -334,7 +343,7 @@ int main(int argc, char **argv) {
     std::vector<double *> own; // per-thread arrays of the read kernel
     std::vector<double> own_reference;
     std::size_t per_thread_bytes = 0;
-    if (stream || sweep) {
+    if (stream || sweep || copyk) {
       // The sweep walks 8 doubles per chain, so n must be a multiple of that too.
       const std::size_t unit = sweep ? std::lcm<std::size_t>(64, 8 * chains_eff) : 64;
       n = (bytes / ((stream ? 3 : 2) * sizeof(double)) / unit) * unit;
@@ -446,6 +455,23 @@ int main(int argc, char **argv) {
         }
         return 2ULL * n;
       }
+      if (copy) {
+#pragma omp parallel for schedule(static)
+        for (std::size_t i = 0; i < n; ++i)
+          a[i] = b[i];
+        return 0;
+      }
+      if (copy_nt) {
+        // Streaming stores, as in triad_nt: no read of the destination line.
+#pragma omp parallel
+        {
+#pragma omp for schedule(static) nowait
+          for (std::size_t i = 0; i < n; i += 8)
+            _mm512_stream_pd(a + i, _mm512_load_pd(b + i));
+          _mm_sfence();
+        }
+        return 0;
+      }
       if (readk) {
         // Every thread loops over its own array until the shared deadline, so
         // there is no fork/join or barrier inside the timed region.
@@ -458,9 +484,13 @@ int main(int argc, char **argv) {
           const std::size_t m = per_thread_bytes / sizeof(double);
           std::uint64_t passes = 0;
           double acc = 0;
+          // About 4 MiB between clock reads: one pass for arrays of that size or
+          // more (the DRAM and L3 points are unchanged), many for L1 and L2.
+          const std::uint64_t reps =
+              std::max<std::uint64_t>(1, (4ULL << 20) / per_thread_bytes);
           do {
-            acc += read_pass(p, m);
-            ++passes;
+            acc += read_passes(p, m, reps);
+            passes += reps;
           } while (clock_ns() < deadline);
           total += passes * per_thread_bytes;
           sum += acc;
@@ -639,6 +669,8 @@ int main(int argc, char **argv) {
     }
     std::string benchmark = triad      ? "stream_triad"
                             : triad_nt ? "stream_triad_nt"
+                            : copy     ? "stream_copy"
+                            : copy_nt  ? "stream_copy_nt"
                             : readk    ? "stream_read"
                             : sweep    ? "roofline_sweep"
                             : latency  ? "pointer_chase"
@@ -647,7 +679,7 @@ int main(int argc, char **argv) {
                             : vnni     ? "vnni_peak"
                             : vbf16    ? "avx512_bf16_peak"
                                        : "avx512_peak";
-    std::string dtype = stream || latency || readk ? ""
+    std::string dtype = stream || copyk || latency || readk ? ""
                         : amx || vbf16             ? "bf16"
                         : amx_i8 || vnni           ? "int8"
                         : fp32                     ? "fp32"
@@ -657,12 +689,12 @@ int main(int argc, char **argv) {
         : amx_i8   ? "native_amx_int8_4_tiles"
         : vnni     ? "avx512_vnni_12_chains"
         : vbf16    ? "avx512_bf16_" + std::to_string(chains_eff) + "_chains"
-        : triad_nt ? "native_avx512_nt_stores"
+        : triad_nt || copy_nt ? "native_avx512_nt_stores"
         : readk    ? "native_avx512_read_8_accumulators"
         : sweep    ? "avx512_" + std::to_string(chains_eff) + "_independent_chains"
         : latency  ? "random_dependent_cachelines"
                    : "native_avx512";
-    const bool memory_kind = stream || sweep || latency || readk;
+    const bool memory_kind = stream || copyk || sweep || latency || readk;
     std::cout << std::setprecision(15) << "{\"benchmark\":\"" << benchmark
               << "\",\"kernel\":\"" << kind << "\",\"dtype\":\"" << dtype
               << "\",\"implementation\":\"" << implementation
@@ -694,7 +726,7 @@ int main(int argc, char **argv) {
                 << ",\"planned_start_ns\":" << planned
                 << ",\"operations\":" << ((latency || readk) ? 0 : operations)
                 << ",\"modeled_bytes\":"
-                << (readk ? moved : (stream || sweep) ? bytes * loops : 0)
+                << (readk ? moved : (stream || copyk || sweep) ? bytes * loops : 0)
                 << ",\"loads\":" << (latency ? operations : 0);
       if (before.ok && after.ok)
         std::cout << ",\"cycles\":" << (after.cycles - before.cycles)
@@ -716,12 +748,12 @@ int main(int argc, char **argv) {
       }
       std::cout << '}';
     }
-    if (stream || sweep) {
+    if (stream || sweep || copyk) {
       for (std::size_t i = 0; i < n; i += std::max<std::size_t>(1, n / 1024)) {
         double expected = b[i];
         if (stream)
           expected += 3 * c[i];
-        else
+        else if (sweep)
           for (int j = 0; j < k; ++j)
             expected = std::fma(expected, 1.000000000000001, 1e-12);
         valid &= std::isfinite(a[i]) && std::abs(a[i] - expected) < 1e-10;
