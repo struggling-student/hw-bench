@@ -18,4 +18,4 @@ interpret a CRESCO8 campaign.
 
 `data/raw/` (scrubbed of account-identifying strings by `scripts/scrub_raw.py`),
 `data/processed/`, and the exported `figures/` are versioned, so a clone can rebuild the
-analysis with `scripts/make_analysis.sh`. The seven executed [notebooks](../notebooks/README.md) are versioned; rebuilding them requires the selected local raw campaigns.
+analysis with `scripts/make_analysis.sh`. The six executed [notebooks](../notebooks/README.md) are versioned; rebuilding them requires the selected local raw campaigns.

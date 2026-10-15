@@ -11,6 +11,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from hwbench.theory import Theory
+
 ROOT = Path(__file__).resolve().parents[2]
 COLORS = {
     "ddr": "#2A78D6",
@@ -70,13 +72,20 @@ CONFIGURATION = [
     "working_set_bytes",
     "notes",
 ]
-MODEL_SPECS = {
-    "base_ghz": 1.9,
-    "max_turbo_ghz": 3.5,
-    "fp64": 32,
-    "fp32": 64,
-    "bf16": 1024,
-}
+def _model_specs():
+    """Per-dtype architectural bound, read from the one theory source (``configs/theory.toml``)."""
+
+    theory = Theory.load()
+    return {
+        "base_ghz": theory.base_ghz,
+        "max_turbo_ghz": theory.max_turbo_ghz,
+        "fp64": theory.isa("fp64").ops_per_cycle,
+        "fp32": theory.isa("fp32").ops_per_cycle,
+        "bf16": theory.isa("amx_bf16").ops_per_cycle,
+    }
+
+
+MODEL_SPECS = _model_specs()
 
 
 def load_measurements(path):

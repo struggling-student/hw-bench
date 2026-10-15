@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Rebuild everything derived from data/raw: normalized samples, validation, thesis
-# tables, the seven notebooks (built, executed, normalized) and their figure exports.
+# tables, the six notebooks (built, executed, normalized) and their figure exports.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"

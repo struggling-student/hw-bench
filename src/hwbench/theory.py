@@ -76,3 +76,19 @@ class Theory:
 
     def memory_gbs(self, tier: str, sockets: int = 1) -> float:
         return float(self.data["memory"][tier]["gbs_per_socket"]) * sockets
+
+    def model_parameters(self, name: str = "llama31_8b") -> int:
+        """Weight count of a decoder-only transformer from its architecture (norms included)."""
+
+        m = self.data["model"][name]
+        hidden, ffn, layers = int(m["hidden_size"]), int(m["intermediate_size"]), int(m["layers"])
+        kv_width = int(m["kv_heads"]) * hidden // int(m["attention_heads"])
+        attention = 2 * hidden * hidden + 2 * hidden * kv_width  # q, o and k, v projections
+        per_layer = attention + 3 * hidden * ffn + 2 * hidden  # gate/up/down and two norms
+        embeddings = int(m["vocab_size"]) * hidden * (1 if m["tied_embeddings"] else 2)
+        return layers * per_layer + embeddings + hidden
+
+    def model_bytes(self, name: str = "llama31_8b") -> float:
+        """Bytes of weights a decode step streams once per token (the whole model)."""
+
+        return self.model_parameters(name) * float(self.data["model"][name]["bytes_per_weight"])

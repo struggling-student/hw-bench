@@ -85,3 +85,19 @@ l1d_kib = 48
 l2_mib = 2
 l3_mib_per_socket = 112.5
 source = "lscpu on hbm14 (L1d 5.3 MiB / 112 cores, L2 224 MiB / 112, L3 225 MiB / 2 sockets); Intel ARK for L3"
+
+# The model the roofline is read against. Architecture only; the weight count is derived
+# from it in `Theory.model_parameters`, not typed in.
+[model.llama31_8b]
+label = "Llama-3.1-8B"
+layers = 32
+hidden_size = 4096
+intermediate_size = 14336
+attention_heads = 32
+kv_heads = 8
+vocab_size = 128256
+tied_embeddings = false
+bytes_per_weight = 2     # BF16
+status = "vendor"
+basis = "model configuration (config.json) of meta-llama/Llama-3.1-8B"
+source = "https://huggingface.co/meta-llama/Llama-3.1-8B"
