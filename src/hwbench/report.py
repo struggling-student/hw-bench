@@ -106,8 +106,11 @@ def isa_scaling(ext: pd.DataFrame) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------------- memory
-def bandwidth_summary(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
+def bandwidth_summary(ext: pd.DataFrame, thesis: pd.DataFrame, copy: bool = False) -> pd.DataFrame:
     """Triad (October), read and non-temporal Triad at full socket, by placement.
+
+    ``copy`` adds the copy kernels (part ``copy``); they only serve the sweep's ceiling, so
+    the tables and figures of the three headline kernels never see them.
 
     Cache-mode Triad is kept, including the capacity sweep: it is the best kernel past the
     HBM cache, so dropping it would understate the spilled ceiling.
@@ -131,7 +134,14 @@ def bandwidth_summary(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
         & ext.threads.isin([56, 112])
         & ext.notes.str.match(r"bw2_(read|triad|triad_nt)(_remote|_capacity|_dual)?$")
     ].assign(kernel=lambda f: f.benchmark.map(BANDWIDTH_KERNELS))
-    frame = with_config(pd.concat([triad, new], ignore_index=True))
+    parts = [triad, new]
+    if copy:
+        parts.append(
+            ext[ext.benchmark.isin(["stream_copy", "stream_copy_nt"]) & ext.notes.eq("copy_ceiling")].assign(
+                kernel=lambda f: f.benchmark.map(BANDWIDTH_KERNELS)
+            )
+        )
+    frame = with_config(pd.concat(parts, ignore_index=True))
     # Allocation rounding makes "8 GiB" 7.999996 GiB; compare working sets to 0.01 GiB.
     frame["working_set_gib"] = frame.working_set_gib.round(2)
     keys = ["memory_mode", "config", "kernel", "locality", "socket_scope", "socket", "working_set_gib"]
@@ -392,12 +402,23 @@ def theoretical_ceiling(theory: Theory, path: str, cores: int = 56, scope: str =
 
 #: Kernel sets for workload-matched ceilings: ``best`` is the ERT convention, ``read``
 #: matches read-only streams (weights in decode), ``readwrite`` matches kernels that also
-#: write (the intensity sweep stores one array per array it loads).
+#: write (Triad, two loads per store), and ``copy`` matches one load per store, the pattern
+#: of the intensity sweep at low intensity.
 ACCESS_KERNELS = {
     "best": {"read", "triad", "triad_nt"},
     "read": {"read"},
     "readwrite": {"triad", "triad_nt"},
+    "copy": {"copy", "copy_nt"},
 }
+
+
+def sweep_ceiling(ext: pd.DataFrame, thesis: pd.DataFrame, tier: str):
+    """Ceiling for the intensity sweep: its own pattern (copy) when measured, else Triad's."""
+
+    try:
+        return memory_ceiling(ext, thesis, "flat", tier, access="copy")
+    except LookupError:
+        return memory_ceiling(ext, thesis, "flat", tier, access="readwrite")
 
 
 def memory_ceiling(
@@ -420,7 +441,7 @@ def memory_ceiling(
 
     from hwbench.roofline import MemoryCeiling
 
-    table = bandwidth_summary(ext, thesis)
+    table = bandwidth_summary(ext, thesis, copy=access == "copy")
     table = table[table.memory_mode.eq(mode) & table.locality.eq("local")]
     table = table[table.socket_scope.eq("dual" if scope == "2S" else "single")]
     table = table[table.kernel.isin(ACCESS_KERNELS[access])]
@@ -489,7 +510,9 @@ def dual_efficiency(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
         rows.append(
             dict(
                 memory_mode=mode,
-                config=config,
+                # Compute kernels live in cache, so they have no memory tier: the
+                # tier fallback used for matching must not be shown as a placement.
+                config=config if metric == "bandwidth_gbs" else None,
                 benchmark=benchmark,
                 dtype=dtype,
                 working_set_gib=ws,
@@ -778,7 +801,7 @@ def unmeasured_table() -> pd.DataFrame:
 # --------------------------------------------------------------- uncertainty
 FAMILIES = {
     "compute": ["amx_peak", "avx512_bf16_peak", "avx512_peak", "int8_amx_peak", "vnni_peak"],
-    "bandwidth": ["stream_read", "stream_triad", "stream_triad_nt"],
+    "bandwidth": ["stream_read", "stream_triad", "stream_triad_nt", "stream_copy", "stream_copy_nt"],
     "gemm": ["onednn_gemm_sweep"],
     "latency": ["pointer_chase"],
     "sweep": ["roofline_sweep"],
@@ -1088,10 +1111,11 @@ def counted_gemm_points(ext: pd.DataFrame, theory: Theory, tier: str = "hbm", sh
     return out
 
 
-def repeat_ranges(ext: pd.DataFrame) -> pd.DataFrame:
-    """Between-launch spread of the headline numbers: independent launches of one part.
+def repeat_launches(ext: pd.DataFrame) -> pd.DataFrame:
+    """The median of each independent launch of the repeated headline quantities.
 
-    One row per quantity: the median of each launch, then (max - min) / mean as a percentage.
+    ``relative`` is the launch's median over the mean of the launches of its quantity, so
+    quantities of different units share one axis.
     """
 
     d = ext[ext.notes.eq("repeat")].copy()
@@ -1100,6 +1124,17 @@ def repeat_ranges(ext: pd.DataFrame) -> pd.DataFrame:
         f"{b}/{dt}" if isinstance(dt, str) else f"{b}/{t}" for b, dt, t in zip(d.benchmark, d["dtype"], d.memory_target)
     ]
     per = d.groupby(["memory_mode", "quantity", "campaign_id"]).metric.median().reset_index()
+    per["relative"] = per.metric / per.groupby(["memory_mode", "quantity"]).metric.transform("mean")
+    return per
+
+
+def repeat_ranges(ext: pd.DataFrame) -> pd.DataFrame:
+    """Between-launch spread of the headline numbers: independent launches of one part.
+
+    One row per quantity: the median of each launch, then (max - min) / mean as a percentage.
+    """
+
+    per = repeat_launches(ext)
     out = per.groupby(["memory_mode", "quantity"]).metric.agg(["min", "max", "mean", "count"]).reset_index()
     out["repeat_range_percent"] = 100 * (out["max"] - out["min"]) / out["mean"]
     return out.rename(columns={"count": "launches"})

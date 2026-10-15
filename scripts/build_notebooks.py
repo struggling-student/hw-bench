@@ -141,6 +141,12 @@ say_claims(claims.ridges(ext, thesis, theory), ['ridge_points'])
 table(report.ridge_table(ext, thesis), 1)
 """),
     md("""
+**What the roofline says about decoding.** The weights of a decoder-only model are read once per generated token, so the read ceiling gives a bound on single-sequence decode that does not depend on the compute path.
+"""),
+    code("""
+say_claims(claims.decode_bound(ext, thesis, theory))
+"""),
+    md("""
 ## 5. GEMM efficiency against batch size
 
 Two panels share the M axis: the share of the measured tile peak reached, and the share of the read-bandwidth ceiling that the modeled bytes imply.
@@ -227,6 +233,12 @@ table(pd.DataFrame([dict(node=int(k), tier=nodes[int(k)]['memory_tier'], socket=
 say_claims(claims.core_scaling(ext, thesis, ROOT) + claims.latency(ext, theory, ROOT), ['hmat_gap', 'hmat_latency'])
 """),
     md("""
+**Platform caveats.** Four settings of the execution nodes shape what the numbers mean. They were read from every campaign's platform record and are identical in all of them.
+"""),
+    code("""
+say_claims(claims.platform_caveats(ext, ROOT))
+"""),
+    md("""
 ## 2. Execution rules and provenance
 
 * **Flat** campaigns run on the single dedicated Flat node, outside Slurm, in a tmux session started over SSH. Before measuring, the runner checks the node is idle (no Slurm job placed on it, 1-minute load below 1), and every record is bracketed by load and job snapshots. A foreign job observed at any point marks the record `interference_suspected` and processing rejects it.
@@ -242,7 +254,7 @@ table(prov)
     md("""
 ## 3. Validity rules and repeatability
 
-A sample is used only if the benchmark's own checksum validated, the process ran on the expected host with the expected topology, its clock window lies inside the process window, the disassembly of the compiled benchmark contains the intended instruction (a whole-binary check, not a check of the measured loop), GEMMs show an AMX execution in oneDNN's verbose log, and no foreign Slurm job was seen. Each configuration needs five steady samples; variation above 5% is flagged, not hidden.
+A sample is used only if the benchmark's own checksum validated, the process ran on the expected host with the expected topology, its clock window lies inside the process window, the disassembly of the compiled benchmark has the intended instruction in an innermost loop with as many copies as the kernel has chains or tiles (`hwbench.disasm`: loops are recovered from backward branches in the retained `objdump`; it shows the loop exists and what it holds, not that the timed call reaches it), GEMMs show an AMX execution in oneDNN's verbose log, and no foreign Slurm job was seen. Each configuration needs five steady samples; variation above 5% is flagged, not hidden.
 """),
     code("""
 v = ctx.validation
@@ -293,6 +305,13 @@ say(f"**Result.** Flat, SSH versus the October Slurm-exclusive runs: {flat_x.wit
     code("""
 table(report.repeat_ranges(ext).rename(columns={'min': 'lowest launch', 'max': 'highest launch', 'mean': 'mean of launches'}), 3)
 say_claims(claims.xcheck(ext, thesis))
+"""),
+    md("""
+The same launches as a figure: each dot is the median of one launch relative to the mean of the three, the line joins the lowest and the highest, and the band is the 2% acceptance threshold used for the cross-check above. A row is one quantity in one memory mode; the three launches of each ran on one node.
+"""),
+    code("""
+fig = plotting.repeat_runs_figure(report.repeat_launches(ext))
+figure(fig, 'repeat_runs')
 """),
     md("""
 ## 5. Traffic and operation conventions
@@ -822,11 +841,11 @@ say_claims(claims.ridges(ext, thesis, theory), ['ridge_points', 'two_sockets_rid
     code("""
 flat_hbm, flat_ddr = mem
 fp64 = [report.compute_ceiling(ext, 'fp64', 'flat', 56)]
-mem_rw = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', access='readwrite'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', access='readwrite')]
+mem_rw = [report.sweep_ceiling(ext, thesis, 'hbm'), report.sweep_ceiling(ext, thesis, 'ddr')]
 pts = report.fp64_sweep_points(thesis, 'flat', 'hbm') + report.fp64_sweep_points(thesis, 'flat', 'ddr')
 pts12 = report.fp64_sweep12_points(ext, thesis, theory, 'hbm') + report.fp64_sweep12_points(ext, thesis, theory, 'ddr')
-audits = [roofline.audit_points(pts, mem_rw, fp64).assign(group='FP64 sweep · Flat · read/write ceiling'),
-          roofline.audit_points(pts12, mem_rw, fp64).assign(group='FP64 sweep, 12 chains · Flat · read/write ceiling')]
+audits = [roofline.audit_points(pts, mem_rw, fp64).assign(group='FP64 sweep · Flat · sweep ceiling'),
+          roofline.audit_points(pts12, mem_rw, fp64).assign(group='FP64 sweep, 12 chains · Flat · sweep ceiling')]
 fig = plotting.roofline_figure(fp64 + theory_set(['fp64'], '1S', 56), mem_rw, pts + pts12, title='FP64 intensity sweep · 8 chains (October) and 12 chains · Flat · one socket', x_range=(0.05, 256))
 figure(fig, 'atlas_fp64_sweep')
 hb = [p for p in pts if p.memory_target == 'hbm']

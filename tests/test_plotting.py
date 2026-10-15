@@ -38,3 +38,19 @@ def test_roofline_labels_ceilings_on_the_line_and_keeps_symbols_per_series():
     assert len(set(symbols.values())) == 1  # same series, same symbol on both tiers
     unnamed = [t for t in fig.data if t.mode == "lines" and t.name is None]
     assert unnamed and all(t.showlegend is False for t in unnamed)
+
+
+def test_repeat_runs_figure_has_one_row_per_mode_and_quantity_and_a_visible_band():
+    import pandas as pd
+
+    launches = pd.DataFrame(
+        [
+            dict(memory_mode=mode, quantity="stream_read/hbm", campaign_id=c, relative=r)
+            for mode in ("flat", "cache")
+            for c, r in zip("abc", (0.99, 1.0, 1.01))
+        ]
+    )
+    fig = plotting.repeat_runs_figure(launches)
+    rows = {y for t in fig.data if t.mode == "markers" for y in t.y}
+    assert rows == {"Flat · stream_read/hbm", "Cache · stream_read/hbm"}
+    assert fig.layout.xaxis.range[0] < 0.98 and fig.layout.xaxis.range[1] > 1.02  # the ±2% band is inside the axis

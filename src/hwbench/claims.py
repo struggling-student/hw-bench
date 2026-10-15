@@ -431,8 +431,10 @@ def hierarchy(ext: pd.DataFrame, theory: Theory) -> list[Claim]:
             "l1_understated",
             per_cycle < 128,
             f"The L1 figure is a lower bound: {v['L1 (32 KiB)']:.0f} GB/s at {ghz:.2f} GHz is {per_cycle:.0f} of the 128 B/cycle "
-            "two-load-port limit, because the read kernel reads the clock after every pass over its working set (a pass over 16 KiB "
-            "takes only tens of nanoseconds, so the smaller working set reads lower still). This is a measurement overhead, not an L1 property.",
+            "two-load-port limit, because the read kernel that took these data read the clock and reduced its accumulators after every pass over its "
+            "working set (a pass over 16 KiB takes only tens of nanoseconds, so the smaller working set reads lower still). This is a measurement "
+            "overhead, not an L1 property. The kernel in the repository now batches about 4 MiB of passes per clock read; the L1 and L2 points "
+            "predate that change and stay lower bounds until the hierarchy part is run again.",
         ),
     ]
 
@@ -615,6 +617,86 @@ def ridges(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Clai
     ]
 
 
+def decode_bound(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Claim]:
+    """The modeled decode bound: weights streamed once per token, read at the measured ceiling."""
+
+    from hwbench.roofline import ridge
+
+    spec = theory.data["model"]["llama31_8b"]
+    gigabytes = theory.model_bytes() / 1e9
+    hbm = report.memory_ceiling(ext, thesis, "flat", "hbm", access="read")
+    ddr = report.memory_ceiling(ext, thesis, "flat", "ddr", access="read")
+    tokens = {"hbm": hbm.gbs / gigabytes, "ddr": ddr.gbs / gigabytes}
+    embedding = int(spec["vocab_size"]) * int(spec["hidden_size"]) / theory.model_parameters()
+    gm = report.gemm_points(ext)
+    one = gm[gm.memory_mode.eq("flat") & gm.dtype.eq("bf16") & gm["shape"].eq("14336x4096") & gm.m.eq(1)]
+    intensity = float(one.intensity.median())
+    amx = report.compute_ceiling(ext, "amx_bf16", "flat", 56)
+    gap = {"hbm": ridge(amx.gops, hbm.gbs) / intensity, "ddr": ridge(amx.gops, ddr.gbs) / intensity}
+    return [
+        Claim(
+            "decode_bound",
+            bool(
+                abs(gigabytes - 16.06) < 0.05
+                and 1.9 < tokens["hbm"] / tokens["ddr"] < 2.2
+                and 30 < tokens["hbm"] < 38
+                and 14 < tokens["ddr"] < 18
+            ),
+            f"Modeled decode bound: {spec['label']} has {theory.model_parameters() / 1e9:.2f} billion weights, {gigabytes:.1f} GB in BF16, "
+            f"streamed once per generated token. At the measured read ceiling that is {hbm.gbs:.0f} GB/s ÷ {gigabytes:.1f} GB ≈ "
+            f"{tokens['hbm']:.0f} tokens/s per socket on HBM against {ddr.gbs:.0f} GB/s ÷ {gigabytes:.1f} GB ≈ {tokens['ddr']:.0f} tokens/s on DDR "
+            f"({tokens['hbm'] / tokens['ddr']:.2f}×). This is an upper bound for one sequence: it counts the embedding table, "
+            f"which a step reads one row of ({_pct(embedding)} of the weights, so the bound is that much conservative), and ignores the KV cache, activations and the library's per-call cost.",
+        ),
+        Claim(
+            "decode_far_below_ridge",
+            bool(150 < gap["hbm"] < 260 and gap["ddr"] > gap["hbm"]),
+            f"A decode step (M = 1) has a modeled intensity of {intensity:.2f} operations per byte, about {gap['hbm']:.0f}× below the AMX BF16 ridge on HBM "
+            f"({ridge(amx.gops, hbm.gbs):.0f} op/B) and {gap['ddr']:.0f}× below it on DDR ({ridge(amx.gops, ddr.gbs):.0f} op/B). "
+            "Decode is memory-bound by two orders of magnitude, so the AMX peak does not limit it; batching raises intensity in proportion to M.",
+        ),
+    ]
+
+
+def platform_caveats(ext: pd.DataFrame, root: Path = ROOT) -> list[Claim]:
+    """Settings of the execution nodes that bound how the clocks and pages behaved (review L2)."""
+
+    seen = {"cmdline": set(), "driver": set(), "governor": set(), "reclaim": set(), "thp": set()}
+    for path in sorted((root / "data/raw").glob("*/*/system/platform.json")):
+        plat = json.loads(path.read_text())
+        policy, proc = plat["kernel_policy"], plat["processor"]
+        cmd = policy["kernel_cmdline"].split()
+        seen["cmdline"].add(("intel_pstate=disable" in cmd, "mitigations=off" in cmd))
+        seen["driver"].add(proc["scaling_driver"])
+        seen["governor"].add(proc["scaling_governor"])
+        seen["reclaim"].add(policy["zone_reclaim_mode"])
+        seen["thp"].add(policy["transparent_hugepage"])
+    ghz_max = float(ext.ghz_effective.max())
+    turbo = Theory.load().max_turbo_ghz
+    uniform = all(len(v) == 1 for v in seen.values())
+    return [
+        Claim(
+            "platform_caveats",
+            bool(
+                uniform
+                and seen["cmdline"] == {(True, True)}
+                and seen["driver"] == {"acpi-cpufreq"}
+                and seen["governor"] == {"schedutil"}
+                and seen["reclaim"] == {1}
+                and seen["thp"] == {"always"}
+                and ghz_max < 0.8 * turbo
+            ),
+            "Settings of every execution node, identical in all campaigns: the kernel boots with `intel_pstate=disable` and `mitigations=off`, so "
+            f"frequency is set by `{next(iter(seen['driver']))}` under the `{next(iter(seen['governor']))}` governor, not by the hardware "
+            f"P-state driver; the highest effective clock any kernel reached is {ghz_max:.2f} GHz against the {turbo:.1f} GHz maximum turbo of the "
+            f"data sheet ({_pct(ghz_max / turbo)}), so efficiency is reported at the measured clock and no turbo claim is made; "
+            f"`zone_reclaim_mode` is {next(iter(seen['reclaim']))}, which makes the kernel reclaim local pages before allocating on another node (placement is bound explicitly in any case); and "
+            f"transparent huge pages are `{next(iter(seen['thp']))}`, so large buffers are mapped with huge pages without being asked, which reduces "
+            "translation cost relative to a node with the default `madvise`. Latency and bandwidth are measured under these settings.",
+        )
+    ]
+
+
 def fp64_sweep(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Claim]:
     t = report.fp64_sweep12_table(ext, thesis, theory)
     h12 = t[t.memory_target.eq("hbm") & t.chains.eq(12)].set_index("k")
@@ -752,6 +834,14 @@ def counted(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
     bf256 = m256[m256["dtype"].eq("bf16")]
     i256 = m256[m256["dtype"].eq("int8")]
     rw = {t: report.memory_ceiling(ext, thesis, "flat", t, access="readwrite").gbs for t in ("hbm", "ddr")}
+    try:
+        cp = {t: report.memory_ceiling(ext, thesis, "flat", t, access="copy") for t in ("hbm", "ddr")}
+        copy_note = (
+            f"The copy kernel, which has the sweep's one-load-one-store pattern, sustains {cp['hbm'].gbs:.0f} GB/s on HBM and {cp['ddr'].gbs:.0f} GB/s "
+            f"on DDR ({cp['hbm'].kernel} and {cp['ddr'].kernel} win), and is the ceiling the sweep is audited against."
+        )
+    except LookupError:
+        copy_note = "The ceiling kernels do not cover that pattern; a copy kernel (campaign part `copy`) would, and has not been run yet."
     sw = sub[sub.benchmark.eq("roofline_sweep") & sub.memory_mode.eq("flat") & sub.k.eq(1)].copy()
     sw["counted_gbs"] = sw.counted_bytes / sw.elapsed_seconds / 1e9
     swg = sw.groupby("memory_target").agg(counted=("counted_gbs", "median"), modeled=("bandwidth_gbs", "median"))
@@ -779,8 +869,7 @@ def counted(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"The one point where a measured stream stays above its ceiling is not a modeling error: the FP64 sweep at K=1 (one load and one store per element) "
             f"moves {swg.loc['hbm'].counted:.0f} GB/s counted on HBM ({swg.loc['hbm'].modeled:.0f} modeled) against {rw['hbm']:.0f} GB/s for Triad, the best "
             f"read/write kernel, so a one-load-one-store pattern sustains {_pct(float(swg.loc['hbm'].counted) / rw['hbm'] - 1, 1)} more than Triad on HBM. "
-            f"On DDR the sweep ({swg.loc['ddr'].counted:.0f} GB/s counted) stays below its {rw['ddr']:.0f} GB/s ceiling. The ceiling kernels do not cover that pattern; "
-            "a copy kernel would.",
+            f"On DDR the sweep ({swg.loc['ddr'].counted:.0f} GB/s counted) stays below its {rw['ddr']:.0f} GB/s ceiling. {copy_note}",
         ),
         Claim(
             "counted_gemm_prefill",
@@ -859,6 +948,8 @@ def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Pa
         "span": span(ext, thesis),
         "ridges": ridges(ext, thesis, theory),
         "fp64_sweep": fp64_sweep(ext, thesis, theory),
+        "decode": decode_bound(ext, thesis, theory),
+        "platform": platform_caveats(ext, root),
         "gemm": gemm(ext, thesis, theory, root),
         "counted": counted(ext, thesis),
     }

@@ -96,6 +96,7 @@ __all__ = [
     "memory_scaling_figure",
     "placement_figure",
     "remote_threads_figure",
+    "repeat_runs_figure",
     "roofline_figure",
     "style",
 ]
@@ -524,6 +525,40 @@ def dual_efficiency_figure(de: pd.DataFrame):
     fig.update_yaxes(range=[0.96, 1.04], tickformat=".2f")
     fig.update_xaxes(tickangle=-40)
     fig.update_layout(margin=dict(l=85, r=40, t=85, b=170), legend=dict(orientation="h", x=0, y=-0.5))
+    return fig
+
+
+def repeat_runs_figure(launches: pd.DataFrame):
+    """Independent launches of each headline quantity, relative to the mean of its launches.
+
+    ``launches`` has ``quantity``, ``memory_mode`` and ``relative``.  One row per mode and quantity,
+    one dot per launch; the thin line joins the lowest and highest launch.  The band is the
+    ±2% acceptance threshold, so a row inside it repeats within the tolerance.
+    """
+
+    fig = go.Figure()
+    fig.add_vrect(x0=0.98, x1=1.02, fillcolor=GRID, opacity=0.6, line_width=0, layer="below")
+    fig.add_vline(x=1.0, line=dict(color=MUTED, width=1.5))
+    launches = launches.assign(row=launches.memory_mode.str.capitalize() + " · " + launches.quantity)
+    order = list(dict.fromkeys(launches.sort_values(["memory_mode", "quantity"]).row))
+    for mode, symbol, label in (("flat", "circle", "Flat · three launches, one node"), ("cache", "diamond", "Cache · three launches, one node")):
+        part = launches[launches.memory_mode.eq(mode)]
+        if part.empty:
+            continue
+        for row, rows in part.groupby("row"):
+            fig.add_scatter(
+                x=[rows.relative.min(), rows.relative.max()], y=[row] * 2, mode="lines", showlegend=False,
+                line=dict(color=INK_2, width=1.5), hoverinfo="skip",
+            )
+        fig.add_scatter(
+            x=part.relative, y=part.row, mode="markers", name=label,
+            marker=dict(symbol=symbol, size=10, color=MUTED, line=dict(color=INK_2, width=1)),
+            hovertemplate="%{y}: %{x:.4f} × mean<extra></extra>",
+        )
+    style(fig, "Repeatability · each launch ÷ mean of three independent launches", "Launch median ÷ mean of launches", "", 200 + 26 * len(order))
+    fig.update_yaxes(categoryorder="array", categoryarray=order[::-1], showgrid=False)
+    fig.update_xaxes(tickformat=".3f", range=[0.97, 1.03])
+    fig.update_layout(margin=dict(l=240, r=40, t=85, b=110), legend=dict(orientation="h", x=0, y=-0.25))
     return fig
 
 

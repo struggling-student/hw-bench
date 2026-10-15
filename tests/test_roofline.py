@@ -176,3 +176,34 @@ def test_counted_table_reports_counted_over_modeled_and_read_share():
     assert math.isclose(t.counted_over_modeled.iloc[0], 37 * 64 / 2400)
     assert math.isclose(t.read_share.iloc[0], 25 / 37, rel_tol=0.01)
     assert math.isclose(t.ipc.iloc[0], 2.0)
+
+
+def _stream_rows(rows):
+    base = dict(
+        socket_scope="single", threads=56, memory_mode="flat", locality="local", socket=0,
+        working_set_gib=8.0, ghz_effective=2.0, accepted=True, campaign_id="c", dtype=None,
+    )
+    return pd.DataFrame([dict(base, **row) for row in rows])
+
+
+def test_sweep_ceiling_uses_copy_when_it_was_measured_and_triad_otherwise():
+    """The sweep loads one array and stores one: copy is its ceiling, Triad the stand-in."""
+
+    from hwbench import report
+
+    triad = [
+        dict(benchmark="stream_triad_nt", memory_target="hbm", bandwidth_gbs=554.0, notes="bw2_triad_nt"),
+        dict(benchmark="stream_read", memory_target="hbm", bandwidth_gbs=543.0, notes="bw2_read"),
+    ]
+    copy = [
+        dict(benchmark="stream_copy", memory_target="hbm", bandwidth_gbs=580.0, notes="copy_ceiling"),
+        dict(benchmark="stream_copy_nt", memory_target="hbm", bandwidth_gbs=571.0, notes="copy_ceiling"),
+    ]
+    thesis = pd.DataFrame(columns=["benchmark", "locality", "socket_scope", "threads", "notes", "memory_mode", "memory_target"])
+    without = report.sweep_ceiling(_stream_rows(triad), thesis, "hbm")
+    assert (without.kernel, without.gbs) == ("triad_nt", 554.0)
+    with_copy = report.sweep_ceiling(_stream_rows(triad + copy), thesis, "hbm")
+    assert (with_copy.kernel, with_copy.gbs) == ("copy", 580.0)
+    # The headline kernels never see the copy rows.
+    best = report.memory_ceiling(_stream_rows(triad + copy), thesis, "flat", "hbm", access="best")
+    assert best.kernel == "triad_nt"
