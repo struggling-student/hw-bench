@@ -327,7 +327,8 @@ def core_scaling(ext: pd.DataFrame, thesis: pd.DataFrame, root: Path = ROOT) -> 
 
 def cache_mode(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
     bw = _socket0_local(report.bandwidth_summary(ext, thesis))
-    sizes = [8.0, 16.0, 32.0, 48.0, 64.0, 96.0, 128.0]
+    # Every measured working set, the fill-in sizes (24, 40, 56 GiB) included.
+    sizes = [8.0, 16.0, 24.0, 32.0, 40.0, 48.0, 56.0, 64.0, 96.0, 128.0]
     triad = {s: _at(bw, "cache", "triad", s) for s in sizes}
     read = {s: _at(bw, "cache", "read", s) for s in sizes}
     hbm = {k: _at(bw, "flat_hbm", k, 8) for k in ("read", "triad")}
@@ -338,6 +339,7 @@ def cache_mode(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
     big_spill = spill[spill["shape"].eq("14336x4096")].set_index("dtype").gbs
     per = report.campaign_medians(ext, thesis)
     read96 = per[per.memory_mode.eq("cache") & per.quantity.eq("stream_read/effective_cache") & per.working_set_gib.eq(96)]["median"]
+    assert all(not math.isnan(series[g]) for series in (triad, read, nt) for g in sizes), "a Cache working set is missing"
     decreasing = all(triad[a] > triad[b] for a, b in zip(sizes, sizes[1:]))
     fractions = ", ".join(f"{_pct(triad[s] / hbm['triad'])} at {s:.0f}" for s in (16.0, 32.0, 48.0, 64.0))
     first_below = {}
@@ -352,8 +354,8 @@ def cache_mode(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
         Claim(
             "cache_declines_before_capacity",
             decreasing and triad[32.0] < 0.8 * hbm["triad"] and triad[64.0] < 0.5 * hbm["triad"],
-            f"Cache-mode Triad declines with working set from 8 GiB onward ({triad[8.0]:.0f}, {triad[16.0]:.0f}, {triad[32.0]:.0f}, "
-            f"{triad[48.0]:.0f}, {triad[64.0]:.0f} GB/s at 8, 16, 32, 48, 64 GiB). Against Flat HBM Triad ({hbm['triad']:.0f} GB/s) "
+            f"Cache-mode Triad declines at every step from 8 GiB onward ({', '.join(f'{triad[g]:.0f}' for g in sizes if g <= 64)} GB/s at "
+            f"{', '.join(f'{g:.0f}' for g in sizes if g <= 64)} GiB). Against Flat HBM Triad ({hbm['triad']:.0f} GB/s) "
             f"it retains {fractions} GiB. Cache mode therefore does **not** match Flat HBM while the working set fits "
             "in the 64 GiB memory-side cache. A direct-mapped cache with conflict misses would behave like this; that is an "
             "inference, because no cache hit-rate counter is readable.",
@@ -388,7 +390,7 @@ def cache_mode(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             triad[96.0] > nt[96.0] and triad[96.0] > read[96.0],
             f"The best kernel at 96 GiB is Triad ({triad[96.0]:.0f} GB/s), {triad[96.0] / nt[96.0] - 1:+.0%} against non-temporal "
             f"Triad ({nt[96.0]:.0f}) and {triad[96.0] / read[96.0] - 1:+.0%} against read-only ({read[96.0]:.0f}); the spilled "
-            "ceiling uses it (best of the three kernels, as for every other ceiling).",
+            "ceiling of a GEMM uses it, as the fastest kernel measured there (read-only does not bound a spilled GEMM, claim `cache_spilled_gemm`).",
         ),
     ]
 

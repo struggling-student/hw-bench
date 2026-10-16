@@ -113,3 +113,11 @@ def test_far_latency_is_qualified_for_translation(evidence):
     assert c["latency_translation"].holds
     far = c["cache_latency_far"].text
     assert "upper bound" in far and "costs" not in far and "latency_translation" in far
+
+
+# ------------------------------------------------------------------ C8
+def test_cache_claims_use_the_fill_in_working_sets(evidence):
+    ext, thesis, _ = evidence
+    c = by_id(claims.cache_mode(ext, thesis))
+    assert "read 56 GiB" in c["cache_below_flat_ddr"].text and "triad_nt 56 GiB" in c["cache_below_flat_ddr"].text
+    assert "24, 32, 40, 48, 56, 64 GiB" in c["cache_declines_before_capacity"].text
