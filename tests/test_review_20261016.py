@@ -129,3 +129,29 @@ def test_call_floor_claim_says_how_much_of_the_gap_it_explains(evidence):
     c = by_id(claims.gemm(ext, thesis, theory, ROOT))["gemm_call_floor"]
     assert c.holds and "percentage points" in c.text
     assert "as much as memory" not in c.text
+
+
+# ------------------------------------------------------------------ C6
+STALE = [
+    ("docs/04_ANALYSIS_AND_RESULTS.md", "to be repeated"),
+    ("docs/VALIDATION.md", "comparable to\n  the clock read that ends each pass"),
+    ("docs/VALIDATION.md", "are flagged, not removed"),
+    ("docs/06_COUNTERS.md", "Nothing in the committed measurement data has counters"),
+    ("docs/STATUS_2026-10-12.md", "⏳ |"),
+    ("docs/STATUS_2026-10-12.md", "every commit is local"),
+    ("docs/README.md", "not yet executed"),
+    ("docs/03_METHODS_AND_DATA.md", "node-to-node difference"),
+]
+
+
+@pytest.mark.parametrize("path,phrase", STALE)
+def test_stale_statements_are_gone(path, phrase):
+    assert phrase not in (ROOT / path).read_text()
+
+
+def test_placement_uses_the_remote_repeat_and_table4_is_current(evidence):
+    ext, thesis, _ = evidence
+    lr = report.local_remote_table(ext, thesis).set_index("label")
+    assert lr.loc["HBM read", "remote"] < 50 and lr.loc["HBM read", "source"] == "remote repeat"
+    t4 = report.unmeasured_table()
+    assert not t4["consequence here"].str.contains("one campaign").any()

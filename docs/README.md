@@ -11,7 +11,7 @@ interpret a CRESCO8 campaign.
 | [03 — Methods and data](03_METHODS_AND_DATA.md) | Kernel definitions, working sets, affinity, normalization, statistics, and Roofline equations. |
 | [04 — Analysis and results](04_ANALYSIS_AND_RESULTS.md) | Measured ceilings, plot-by-plot reading guide, knees, theory, and limitations. |
 | [Validation appendix](VALIDATION.md) | Preserved failed/superseded runs and the explicit acceptance rules. |
-| [05 — Follow-up runs](05_FOLLOW_UP_RUNS.md) | The prepared (not yet executed) cluster runs of review roadmap step 6: what each answers, order, commands, and how results join the analysis. |
+| [05 — Follow-up runs](05_FOLLOW_UP_RUNS.md) | The cluster runs of review roadmap step 6 (all ran) and the prepared, not yet run, `gemmconv` part of the 2026-10-16 review: what each answers, commands, and how results join the analysis. |
 | [06 — Hardware counters](06_COUNTERS.md) | Which counters work without privileges (instructions, reference cycles, DRAM read and write lines), how they were validated, and what needs an administrator. |
 | [Status of the review follow-up](STATUS_2026-10-12.md) | What is done, running and still to do for every finding, roadmap step and gap of the review. |
 | [Scientific review, 2026-10-12](REVIEW_2026-10-12.md) | Independent audit of the roofline analysis: prioritized findings and the follow-up roadmap. |

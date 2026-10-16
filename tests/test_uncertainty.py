@@ -46,9 +46,12 @@ def test_every_headline_entry_has_an_uncertainty_and_its_basis(evidence):
 def test_socket_zero_is_the_reference_for_local_remote(evidence):
     ext, thesis, _ = evidence
     lr = report.local_remote_table(ext, thesis).set_index("label")
-    bw = report.bandwidth_summary(ext, thesis)
-    hbm0 = bw[bw.config.eq("flat_hbm") & bw.kernel.eq("read") & bw.locality.eq("local") & bw.socket.eq(0) & bw.socket_scope.eq("single")]
-    assert math.isclose(lr.loc["HBM read", "local"], float(hbm0.gbs.iloc[0]))
+    rt = report.remote_repeat_table(ext)
+    hbm0 = rt[rt.kernel.eq("read") & rt.memory_target.eq("hbm") & rt.socket.eq(0) & rt.threads.eq(56)]
+    # The remote repeat (5 s windows, paired local control) is the figure to quote.
+    assert math.isclose(lr.loc["HBM read", "local"], float(hbm0.gbs_local.iloc[0]))
+    assert math.isclose(lr.loc["HBM read", "remote"], float(hbm0.gbs_remote.iloc[0]))
+    assert lr.loc["HBM read", "source"] == "remote repeat" and lr.loc["DDR NT Triad", "source"] == "first campaign"
     assert lr.loc["HBM read", "local_spread"] > 0  # socket 1 differs, and the difference is shown
 
 

@@ -544,7 +544,7 @@ Remote and local refer to the memory socket relative to the CPU socket. Two-sock
     md("""
 ## 1. Local against remote memory
 
-**Conditions.** Flat mode, 56 cores of one socket, 8 GiB, memory bound to the local or the other socket's tier. Read-only and non-temporal Triad show how the penalty depends on traffic direction.
+**Conditions.** Flat mode, 56 cores of one socket, 8 GiB, memory bound to the local or the other socket's tier. Read-only and non-temporal Triad show how the penalty depends on traffic direction. Where the remote repeat (5 s windows, a local control beside every remote point) measured a pair, it replaces the first campaign; the *source* column says which.
 """),
     code("""
 loc = report.locality_ratio(ext, thesis)
@@ -557,7 +557,7 @@ for placement, hatch in (('local', ''), ('remote', '/')):
 plotting.style(fig, 'Local (solid) and remote (hatched) bandwidth · socket 0, bars show the difference to socket 1', 'Tier and kernel', 'GB/s', 480)
 fig.update_layout(barmode='group', bargap=0.3, margin=dict(l=85, r=40, t=85, b=80))
 figure(fig, 'local_remote_bandwidth')
-table(lr[['label', 'local', 'remote', 'remote_over_local', 'local_spread', 'remote_spread']].rename(columns={'local_spread': 'local, |socket 1 − 0|', 'remote_spread': 'remote, |socket 1 − 0|'}), 2)
+table(lr[['label', 'local', 'remote', 'remote_over_local', 'local_spread', 'remote_spread', 'source']].rename(columns={'local_spread': 'local, |socket 1 − 0|', 'remote_spread': 'remote, |socket 1 − 0|'}), 2)
 """),
     code("""
 say_claims(claims.placement(ext, thesis))

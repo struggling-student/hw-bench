@@ -110,12 +110,15 @@ only because a completed campaign declares it resumed.
 * **`torch._int_mm`** gives correct INT8 results but never reaches oneDNN, so it is rejected
   by the AMX-evidence rule; `onednn.qlinear_pointwise` (u8×s8, `brg_matmul:avx10_1_512_amx`) is
   the verified INT8 path.
-* **16 KiB read bandwidth** is below 32 KiB because one pass takes tens of nanoseconds, comparable to
-  the clock read that ends each pass.
+* **16 KiB read bandwidth** was below 32 KiB in the hierarchy campaigns before 2026-10-15, because the
+  kernel read the clock after every pass; since the read kernel batches its clock reads (review A15)
+  the two agree (238 and 239 GB/s on one core).
 * **Cache-mode Triad** differs by 4–7% between the two Cache nodes tested (hbm02 above hbm01) while
-  compute differs by under 1%. It is reported as node-to-node variance; the Cache ceilings use the
-  node that also produced the October data.
-* **Remote HBM reads** have high run-to-run variation (CV 11–15%) and are flagged, not removed.
+  compute differs by under 1%. Campaigns on hbm01 alone differ by as much (up to 15% for
+  non-temporal Triad at 8 GiB, claim `campaign_spread`), so this is not attributed to the node; the
+  Cache ceilings use the node that also produced the October data and carry the between-campaign range.
+* **Remote HBM reads** had a CV of 11–15% in the first campaign; the repeat with 5 s windows
+  (`remotehbm`) has 3.5–5.6% and is the figure quoted.
 * One dual-socket non-temporal Triad window in Cache mode failed the 95% overlap rule and was rejected;
   that configuration keeps four samples, reported as a warning.
 * **Smoke campaigns** (`*-smoke-*`) prove the build and counters and are never selected.
@@ -138,4 +141,5 @@ Slurm allocation on the same node: compute and DDR Triad agree within 0.4% at ev
 Triad on socket 0 within 0.3% and on socket 1 within 2.6% (sample variation 3.7%); 9 of 10 points
 are inside the 2% criterion, so the launch method does not matter and the October Flat data may
 share rooflines with the SSH data. Cache, on a second node (hbm02) against the first (hbm01): compute
-within 0.6%, Cache-mode Triad 4.0% and 7.3% higher, reported above as node-to-node variance.
+within 0.6%, Cache-mode Triad 4.0% and 7.3% higher, no more than campaigns on the first node differ
+among themselves (see above).

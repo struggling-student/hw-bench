@@ -562,7 +562,9 @@ def placement(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
     """Remote against local bandwidth, for socket 0 (the reference socket)."""
 
     lr = report.local_remote_table(ext, thesis).set_index(["config", "kernel"])
-    ddr_r, hbm_r = lr.loc[("flat_ddr", "read")], lr.loc[("flat_hbm", "read")]
+    first_lr = report.locality_ratio(ext, thesis)
+    first_lr = first_lr[first_lr.socket.eq(0)].set_index(["config", "kernel"])
+    ddr_r, hbm_r = lr.loc[("flat_ddr", "read")], first_lr.loc[("flat_hbm", "read")]
     rt = report.remote_repeat_table(ext)
     at56 = rt[rt.threads.eq(56)]
 
@@ -585,7 +587,8 @@ def placement(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
         ),
         Claim(
             "remote_hbm",
-            h0.gbs_remote < d0.gbs_remote and h0.remote_over_local < 0.15 and h1.remote_over_local < 0.15,
+            bool(h0.gbs_remote < d0.gbs_remote and h0.remote_over_local < 0.15 and h1.remote_over_local < 0.15
+                 and math.isclose(lr.loc[("flat_hbm", "read")].remote, h0.gbs_remote)),
             f"Remote HBM keeps {_pct(float(h0.remote_over_local), 1)} of local read bandwidth for socket 0 ({h0.gbs_remote:.1f} GB/s against "
             f"{h0.gbs_local:.0f} GB/s) and {_pct(float(h1.remote_over_local), 1)} for socket 1 ({h1.gbs_remote:.1f} GB/s) with 56 threads, and "
             f"{_pct(float(n0.remote_over_local))} for non-temporal Triad ({n0.gbs_remote:.0f} GB/s), against {d0.gbs_remote:.0f} GB/s for remote DDR. "

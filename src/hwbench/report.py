@@ -699,13 +699,22 @@ def local_remote_table(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
     Socket 0 is the reference for every headline number in this study.  ``*_spread`` is the
     absolute difference to socket 1, shown so the reader sees how far the two sockets
     differ; it is not a sample-to-sample figure.
+
+    Where the remote repeat (5 s windows, a local control beside every remote point, part
+    ``remotehbm``) measured a pair at 56 threads, its local and remote values replace those of
+    the first campaign (``bandwidth2``); ``source`` says which campaign each row comes from.
     """
 
     loc = locality_ratio(ext, thesis)
-    loc = loc[loc.kernel.isin(["read", "triad_nt"])]
+    loc = loc[loc.kernel.isin(["read", "triad_nt"])].assign(source="first campaign")
+    rt = remote_repeat_table(ext)
+    rt = rt[rt.threads.eq(56)].assign(config=lambda f: ["flat_" + t for t in f.memory_target], source="remote repeat")
+    rt = rt.rename(columns={"gbs_local": "local", "gbs_remote": "remote"})[["config", "kernel", "socket", "local", "remote", "source"]]
+    have = set(zip(rt.config, rt.kernel, rt.socket))
+    loc = pd.concat([rt, loc[[(c, k, s_) not in have for c, k, s_ in zip(loc.config, loc.kernel, loc.socket)]]], ignore_index=True)
     s0 = loc[loc.socket.eq(0)].set_index(["config", "kernel"])
     s1 = loc[loc.socket.eq(1)].set_index(["config", "kernel"])
-    out = s0[["local", "remote"]].copy()
+    out = s0[["local", "remote", "source"]].copy()
     for col in ("local", "remote"):
         out[f"{col}_spread"] = (s1[col] - s0[col]).abs()
     out = out.reset_index()
@@ -874,11 +883,12 @@ def unmeasured_table() -> pd.DataFrame:
         [
             ("Memory-controller traffic (uncore_imc CAS counts)", "needs CAP_PERFMON or paranoid ≤ 0", "per-core DRAM line counts exist for the follow-up campaigns (counted against modeled in notebook 02); the October data and the first GEMM sweep have none, and DDR and HBM bytes cannot be told apart"),
             ("Cache-mode hit rate", "memory-side-cache tag events are uncore (M2M)", "conflict misses are inferred from bandwidth"),
-            ("Why remote HBM collapses", "UPI and CHA counters are uncore", "mechanism unidentified; one campaign"),
+            ("Why remote HBM collapses", "UPI and CHA counters are uncore", "mechanism unidentified; magnitude confirmed by a repeat with 5 s windows and a thread sweep"),
+            ("Why Cache-mode spilled streams order read-only < GEMM ≤ Triad", "memory-side-cache (M2M) tag counters are uncore", "ordering reported, not explained"),
+            ("Address-translation share of far latency", "no TLB-miss counter was read; no Flat chase beyond 4 GiB", "Cache-mode far latency is an upper bound on the miss cost"),
             ("Why the clock falls while HBM streams", "power and turbostat counters need privileges", "cause unidentified"),
             ("Energy", "RAPL needs privileges", "no energy figures"),
             ("HBM device capability beyond 56 cores", "SNC4 / HBM-only modes are not available on the node", "HBM ceiling is a 56-core figure"),
-            ("SMT", "SMT is off on CRESCO8", "no SMT effect"),
         ],
         columns=["not measured", "what blocks it", "consequence here"],
     )

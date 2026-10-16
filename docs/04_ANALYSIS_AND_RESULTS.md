@@ -4,8 +4,8 @@ The executed notebooks are the canonical interpretation and derive every display
 
 | Notebook | Figures | Numerical evidence |
 | --- | --- | --- |
-| 00 Master analysis | Per-cycle efficiency, bandwidth and clock against cores, Cache against working set, headline roofline, GEMM efficiency, placement | Headline ceilings with ranges, ridge points, measured against vendor and firmware figures, what is not measured |
-| 01 Platform and methodology | none | Platform and HMAT record, execution rules, provenance of every campaign, validation, repeatability and the SSH-versus-Slurm and node-to-node cross-check |
+| 00 Master analysis | Per-cycle efficiency, bandwidth and clock against cores, Cache against working set (with decode GEMM points), headline roofline (converged-pool GEMM points; small-pool points hollow), GEMM efficiency, placement | Headline ceilings with sample, repeat, between-campaign and cross-run uncertainty; ridge points on the read-only ceiling; what a decode step streams (Table 5); measured against vendor and firmware figures; what is not measured |
+| 01 Platform and methodology | Repeat runs | Platform and HMAT record, execution rules, provenance of every campaign, validation, first-window effects (cold spilled GEMM, fast first HBM window), repeatability, the SSH-versus-Slurm and second-node cross-check, and the between-campaign spread on one node |
 | 02 Memory hierarchy and bandwidth | Hierarchy bandwidth (1 and 56 cores), latency, Cache-mode latency to 128 GiB, kernel comparison, read scaling, Cache capacity, counted against modeled traffic | Per-level bandwidth and latency, Triad/read/non-temporal, saturation core counts, DDR+HBM concurrent tiers, counted DRAM lines against the traffic model |
 | 03 NUMA and socket scaling | Local/remote, remote HBM against core count, two-socket efficiency, 112-thread span, Triad scaling | Remote penalty per tier and thread count, dual efficiency with overlap, interleave versus first-touch |
 | 04 Compute throughput | Scaling, operations per cycle, BF16 and INT8 GEMM M-sweeps, GEMM pool convergence, prepacked BF16 | Peak per path against vendor figure, effective clock, AMX-busy, accumulator-chain sweep, GEMM fraction of tile peak, per-call overhead |
@@ -15,11 +15,13 @@ Colour has one meaning throughout: hue is the memory configuration (blue DDR, or
 
 ## Reading guide
 
-* **Cache bandwidth** only together with the working-set size. It declines progressively from 8 GiB onward, well before the 64 GiB cache capacity, and falls below Flat DDR kernel by kernel past it; a conflict-miss cause is inferred, not measured.
-* **NUMA bandwidth** with the CPU socket and memory locality: remote HBM is slower than remote DDR (one campaign; to be repeated).
+* **Cache bandwidth** only together with the working-set size, and as a range: campaigns on the same Cache node differ by up to 15% for the same configuration (claim `campaign_spread`). It declines progressively from 8 GiB onward, well before the 64 GiB cache capacity; read-only and non-temporal Triad fall below Flat DDR at 56 GiB, Triad at 96 GiB. A conflict-miss cause is inferred, not measured. Past the capacity a decode GEMM streams weights faster than the read-only kernel, so large-model statements use the GEMM rate (claim `cache_spilled_gemm`).
+* **NUMA bandwidth** with the CPU socket and memory locality: remote HBM is slower than remote DDR, confirmed by a repeat with 5 s windows (46.5 GB/s at 56 threads, about 9% of local); it is fastest with 14–28 threads.
+* **GEMM at small M** only from a converged weight pool: the first sweep's pool overstates the weight traffic at M ≤ 32 by 8–25% (claim `first_sweep_small_m_bias`); those points are drawn hollow.
+* **Decode.** The read ceiling bounds decode; what the library achieves is lower on HBM (60–64% of the read ceiling) than on DDR (86%), so HBM beats DDR by 1.4–1.55× for a decode GEMM, not the 2.07× of the read kernel (Table 5, claim `decode_achieved`).
 * **Latency** is idle and serial; it does not predict saturated bandwidth or loaded latency.
 * **Peaks versus GEMM.** A tile or vector kernel shows what the instruction can do; the library GEMM shows what representative matrix shapes reach.
 * **Efficiency** is judged at the effective clock. Above 100% against base clock is a clock effect.
 * **Two sockets** are two independent processes (or one spanning process, reported separately); this is not tensor-parallel scaling.
 
-Not inferred: HBM hit rates, memory-controller traffic, energy or power, SMT effects (SMT is off), and causes of node-to-node differences.
+Not inferred: HBM hit rates, memory-controller traffic, energy or power, SMT effects (SMT is off), the address-translation share of far latency, and causes of the variation between Cache-mode campaigns.

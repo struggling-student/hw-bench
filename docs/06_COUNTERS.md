@@ -79,5 +79,6 @@ the session (the memory-controller CAS read/write events and the M2M tag events)
   set hits the L3, and the 64 MiB smoke GEMM pool counts almost nothing; neither is a
   validation, which needs the `counted` sizes.
 
-Nothing in the committed measurement data has counters: those campaigns ran before they
-were added, so the columns are empty there.
+The campaigns of 2026-10-12 and later (from the smoke and `counted` parts on) carry the counters
+and are committed; the October-11 campaigns and the first GEMM sweep ran before the counters were
+added, so their columns are empty.
