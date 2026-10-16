@@ -38,6 +38,7 @@ def test_literature_claims_hold_and_say_what_was_not_tested(evidence):
     cs = {c.id: c for c in claims.literature(ext, thesis)}
     assert not claims.check(list(cs.values()))
     assert "was not tested" in cs["literature_agreement"].text
+    assert "STREAMGAP" in cs["literature_agreement"].text and "not the node" in cs["literature_agreement"].text
     assert "like-for-like" in cs["literature_two_socket"].text
 
 

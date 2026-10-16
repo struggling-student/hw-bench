@@ -1204,8 +1204,12 @@ def literature(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"(read-only {ddr_read.measured:.0f} against {ddr_read.published:.0f} GB/s, Triad {ddr_triad.measured:.0f} against {ddr_triad.published:.0f}); "
             f"HBM Triad is lower ({hbm_triad.measured:.0f} against {hbm_triad.published:.0f} GB/s, {_pct(1 - r['HBM STREAM Triad, 1 socket'])} below, "
             f"and the non-temporal kernel does not close the gap). The tier ratios follow: HBM over DDR is {rx_read.measured:.2f}× read-only against "
-            f"{rx_read.published:.1f}× published and {rx_triad.measured:.2f}× Triad against {rx_triad.published:.1f}×. The publication does not state "
-            "compiler flags or clock, and the cause of the Triad difference was not tested.",
+            f"{rx_read.published:.1f}× published and {rx_triad.measured:.2f}× Triad against {rx_triad.published:.1f}×. The Triad difference is the kernel and "
+            "its measurement, not the node: the unmodified STREAM `stream.c`, run on the same node (Triad-gap investigation, docs/STREAMGAP.md, data/raw/streamgap), "
+            "reaches 678 to 711 GB/s, and the thesis kernel loses to its data pattern (constants are 13% faster), its loop (4 cache lines per iteration are 6% faster) "
+            "and its median of one-second windows against the best of many short iterations (9%). The same data effect lowers the read-only ceiling: "
+            "527 GB/s with the thesis pattern or random data, 576 with constants. The publication does not state compiler flags or clock, and why the data "
+            "pattern matters was not tested (RAPL and the uncore clock need root).",
         ),
         Claim(
             "literature_loaded",

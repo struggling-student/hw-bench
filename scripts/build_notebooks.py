@@ -256,7 +256,7 @@ say_claims(claims.core_scaling(ext, thesis, ROOT) + claims.latency(ext, theory, 
 say_claims(claims.platform_caveats(ext, ROOT))
 """),
     md("""
-**Comparison with published results.** The same CPU has one close published single-socket measurement (McCalpin, IXPUG at ISC 2023: Flat mode, one NUMA node per socket, 56 cores) and one two-socket measurement in a different configuration (Reguly, arXiv 2023: HBM-only mode, SNC4). Published values are read off the sources listed in `configs/literature.toml`; the values of this study are the socket-0 medians at 8 GiB. A ratio above 1 means this study measured more.
+**Comparison with published results.** The same CPU has one close published single-socket measurement (McCalpin, IXPUG at ISC 2023: Flat mode, one NUMA node per socket, 56 cores) and one two-socket measurement in a different configuration (Reguly, arXiv 2023: HBM-only mode, SNC4). Published values are read off the sources listed in `configs/literature.toml`; the values of this study are the socket-0 medians at 8 GiB. A ratio above 1 means this study measured more. The HBM Triad below the published value is explained by the kernel and its measurement, not by the node (the unmodified STREAM reaches the published value here); see `docs/STREAMGAP.md`.
 """),
     code("""
 table(report.literature_table(ext, thesis).drop(columns=['same_mode']), 2)
