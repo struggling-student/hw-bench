@@ -401,7 +401,7 @@ def memory_scaling_figure(read: pd.DataFrame, clock: pd.DataFrame):
     return fig
 
 
-def cache_capacity_figure(cache: pd.DataFrame, flat: pd.DataFrame, markers: dict[str, float]):
+def cache_capacity_figure(cache: pd.DataFrame, flat: pd.DataFrame, markers: dict[str, float], gemm: pd.DataFrame | None = None):
     """Cache-mode bandwidth for every kernel against working set, with Flat reference bands.
 
     Only measured working sets are drawn: a kernel with few points gets markers alone,
@@ -428,6 +428,14 @@ def cache_capacity_figure(cache: pd.DataFrame, flat: pd.DataFrame, markers: dict
             marker=dict(size=10, symbol=symbols[kernel], color=CONFIG_COLORS["cache"], line=dict(color=SURFACE, width=1.5)),
             line=dict(color=CONFIG_COLORS["cache"], width=2),
         )
+    # Decode GEMM weight streams (M = 1) at their pool sizes: the access pattern a model has.
+    for dtype, symbol in (("bf16", "star"), ("int8", "hexagon")):
+        part = gemm[gemm.dtype.eq(dtype)] if gemm is not None else pd.DataFrame()
+        if len(part):
+            fig.add_scatter(
+                x=part.pool_gib, y=part.gbs, mode="markers", name=f"Cache · GEMM weight stream, M=1, {dtype.upper()} 14336×4096",
+                marker=dict(size=13, symbol=f"{symbol}-open", color=CONFIG_COLORS["cache"], line=dict(color=CONFIG_COLORS["cache"], width=2.5)),
+            )
     for label, x in markers.items():
         fig.add_vline(x=x, line=dict(color=MUTED, width=1))
         fig.add_annotation(x=x, y=1.0, xref="x", yref="paper", text=label, showarrow=False, yanchor="bottom", font=dict(size=12, color=INK_2))

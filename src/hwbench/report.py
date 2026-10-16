@@ -1142,6 +1142,60 @@ def gemm_prepacked_table(ext: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def decode_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, shape: str = "14336x4096") -> pd.DataFrame:
+    """What a decode step (M = 1) of one projection actually streams, against the read ceiling.
+
+    One row per tier, precision and weight layout, from the converged pools where they exist:
+    Flat plain BF16 and INT8 at 64x the on-chip capacity (``gemm_pool``, counted bytes beside
+    modeled); Flat prepacked BF16 only at 4x (``gemm_prepacked``, not converged); Cache from the
+    first sweep, whose 16 and 96 GiB pools are far beyond the on-chip capacity.  ``tokens_per_s``
+    is the Llama-3.1-8B bound if every weight streamed at this rate: model bytes per precision
+    over the weight rate.  14336x4096 is the largest projection and the fastest-streaming shape
+    measured, so the bound is optimistic for the model as a whole.
+    """
+
+    params = theory.model_parameters()
+    model_gb = {"bf16": params * 2 / 1e9, "int8": params * 1 / 1e9}
+    read = {
+        "Flat HBM": memory_ceiling(ext, thesis, "flat", "hbm", access="read").gbs,
+        "Flat DDR": memory_ceiling(ext, thesis, "flat", "ddr", access="read").gbs,
+        "Cache, 16 GiB": memory_ceiling(ext, thesis, "cache", "effective_cache", access="read", at_gib=16).gbs,
+        "Cache, 96 GiB": memory_ceiling(ext, thesis, "cache", "effective_cache", access="read", at_gib=96).gbs,
+    }
+    tier_name = {"hbm": "Flat HBM", "ddr": "Flat DDR"}
+    rows = []
+    for tier, r in read.items():
+        rows.append(dict(tier=tier, precision="—", layout="read-only kernel", pool="—", gbs=r, counted_gbs=math.nan, read_gbs=r))
+    pool = gemm_pool_table(ext)
+    pool = pool[pool["shape"].eq(shape) & pool.m.eq(1) & pool.pool_x.eq(64)]
+    for r in pool.itertuples():
+        rows.append(
+            dict(tier=tier_name[r.memory_target], precision=r.dtype, layout="plain" if r.dtype == "bf16" else "prepacked",
+                 pool="64× on-chip", gbs=r.modeled_gbs, counted_gbs=r.counted_gbs, read_gbs=read[tier_name[r.memory_target]])
+        )
+    pk = _gemm_frame(ext, ["gemm_prepacked"])
+    pk = pk[pk["shape"].eq(shape) & pk.m.eq(1)].groupby("memory_target").agg(gbs=("bandwidth_gbs", "median"), counted=("counted_gbs", "median"))
+    for tier, r in pk.iterrows():
+        rows.append(
+            dict(tier=tier_name[tier], precision="bf16", layout="prepacked", pool="4× on-chip (not converged)", gbs=r.gbs,
+                 counted_gbs=r.counted, read_gbs=read[tier_name[tier]])
+        )
+    gm = gemm_points(ext)
+    cache = gm[gm.memory_mode.eq("cache") & gm["shape"].eq(shape) & gm.m.eq(1)]
+    for r in cache.itertuples():
+        tier = f"Cache, {r.pool_gib:.0f} GiB"
+        rows.append(
+            dict(tier=tier, precision=r.dtype, layout="plain" if r.dtype == "bf16" else "prepacked", pool=f"{r.pool_gib:.0f} GiB",
+                 gbs=r.gbs, counted_gbs=math.nan, read_gbs=read[tier])
+        )
+    out = pd.DataFrame(rows)
+    out["of_read_ceiling"] = out.gbs / out.read_gbs
+    out["tokens_per_s"] = [g / model_gb[p] if p in model_gb else g / model_gb["bf16"] for g, p in zip(out.gbs, out.precision)]
+    order = {t: i for i, t in enumerate(read)}
+    out["_o"] = out.tier.map(order)
+    return out.sort_values(["_o", "layout", "precision"], key=lambda c: c if c.name == "_o" else c.map(lambda v: (v != "read-only kernel", v))).drop(columns="_o").reset_index(drop=True)
+
+
 def remote_repeat_table(ext: pd.DataFrame) -> pd.DataFrame:
     """Remote against local bandwidth by thread count (the 5 s remote-HBM repeat)."""
 

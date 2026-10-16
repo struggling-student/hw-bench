@@ -83,3 +83,24 @@ def test_hbm_first_window_transient_is_reported(evidence):
     t1 = report.headline_table(ext, thesis, theory).set_index("quantity")
     hbm = t1.loc["Flat HBM read-only (56 cores)"]
     assert hbm.sustained < hbm["median"] < hbm.high  # the fast first window lifts median and max
+
+
+# ------------------------------------------------------------- C3, M1
+def test_spilled_cache_statement_uses_the_gemm_weight_stream(evidence):
+    ext, thesis, _ = evidence
+    c = by_id(claims.cache_mode(ext, thesis))
+    assert c["cache_spilled_gemm"].holds and "unexplained" in c["cache_spilled_gemm"].text
+    assert "cache_spilled_gemm" in c["cache_below_flat_ddr"].text
+
+
+def test_decode_table_and_its_claim(evidence):
+    ext, thesis, theory = evidence
+    dt = report.decode_table(ext, thesis, theory)
+    conv = dt[dt.pool.eq("64× on-chip")]
+    assert len(conv) == 4 and (conv.counted_gbs / conv.gbs).between(0.97, 1.03).all()
+    hbm = conv[conv.tier.eq("Flat HBM")].set_index("precision")
+    ddr = conv[conv.tier.eq("Flat DDR")].set_index("precision")
+    assert (hbm.gbs / ddr.gbs < 1.7).all() and (hbm.of_read_ceiling < ddr.of_read_ceiling).all()
+    assert dt[dt.layout.eq("prepacked") & dt.precision.eq("bf16")].pool.str.contains("not converged").all()
+    c = by_id(claims.decode_bound(ext, thesis, theory))["decode_achieved"]
+    assert c.holds and "1.43×" in c.text

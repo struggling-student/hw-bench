@@ -48,7 +48,7 @@ NOTEBOOKS["00_master_analysis"] = [
 
 **Question.** What can one CRESCO8 Xeon CPU Max 9480 node sustain, per precision and memory configuration, and where do those limits sit relative to the vendor's peaks?
 
-This notebook carries the findings in six figures and four tables; the supporting notebooks hold the detail: [platform and methodology](01_platform_and_methodology.ipynb), [memory](02_memory_hierarchy_and_bandwidth.ipynb), [NUMA and sockets](03_numa_and_socket_scaling.ipynb), [compute](04_compute_throughput.ipynb), [roofline atlas](05_roofline_atlas.ipynb). Every number is computed from the selected campaigns (five steady one-second samples per point).
+This notebook carries the findings in six figures and five tables; the supporting notebooks hold the detail: [platform and methodology](01_platform_and_methodology.ipynb), [memory](02_memory_hierarchy_and_bandwidth.ipynb), [NUMA and sockets](03_numa_and_socket_scaling.ipynb), [compute](04_compute_throughput.ipynb), [roofline atlas](05_roofline_atlas.ipynb). Every number is computed from the selected campaigns (five steady one-second samples per point).
 
 **Kinds of number.** *Measured*: time, operation counts, user-mode cycles, load latency, checksums. *Modeled*: every byte count and therefore every GB/s, arithmetic intensity, GEMM traffic and ridge point. *Theoretical*: vendor or derived per-cycle peaks, DDR5 transfer rate, "up to 1 TB/s" for HBM. *Firmware-advertised*: the ACPI HMAT figures, which are neither measured nor derived here. *Inferred* statements say so where they occur.
 
@@ -107,10 +107,12 @@ say_claims(claims.core_scaling(ext, thesis, ROOT), ['ddr_saturates', 'hbm_still_
     code("""
 bw = report.bandwidth_summary(ext, thesis)
 bw0 = bw[(bw.socket_scope == 'single') & (bw.socket == 0) & (bw.locality == 'local')]
+gm_all = report.gemm_points(ext)
+gemv = gm_all[(gm_all.memory_mode == 'cache') & (gm_all['shape'] == '14336x4096') & (gm_all.m == 1)]
 fig = plotting.cache_capacity_figure(bw0[bw0.config == 'cache'], bw0[(bw0.config != 'cache') & (bw0.working_set_gib.sub(8).abs() < 0.5)],
-                                     {'16 GiB: 8B BF16 model': 16, '64 GiB: HBM capacity': 64})
+                                     {'16 GiB: 8B BF16 model': 16, '64 GiB: HBM capacity': 64}, gemv)
 figure(fig, 'cache_capacity')
-say_claims(claims.cache_mode(ext, thesis), ['cache_declines_before_capacity', 'cache_resident_model', 'cache_below_flat_ddr'])
+say_claims(claims.cache_mode(ext, thesis), ['cache_declines_before_capacity', 'cache_resident_model', 'cache_below_flat_ddr', 'cache_spilled_gemm'])
 say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_far'])
 """),
     md("""
@@ -147,7 +149,15 @@ table(report.ridge_table(ext, thesis), 1)
 **What the roofline says about decoding.** The weights of a decoder-only model are read once per generated token, so the read ceiling gives a bound on single-sequence decode that does not depend on the compute path.
 """),
     code("""
-say_claims(claims.decode_bound(ext, thesis, theory))
+say_claims(claims.decode_bound(ext, thesis, theory), ['decode_bound', 'decode_far_below_ridge'])
+"""),
+    md("""
+**Table 5 — what a decode step streams.** The 14336×4096 projection at M = 1 against the read ceiling of its tier. Flat rows come from the converged pool (64× the on-chip capacity; counted bytes beside modeled), except prepacked BF16, which was measured only with a 4× pool; Cache rows come from the first sweep, whose 16 and 96 GiB pools are far beyond the on-chip capacity. *Tokens/s* is the Llama-3.1-8B bound if every weight streamed at this rate (8.03 billion weights, 2 bytes in BF16, 1 in INT8; read-only rows use BF16). It is optimistic for the whole model: the 4096×4096 projections stream slower.
+"""),
+    code("""
+dt = report.decode_table(ext, thesis, theory)
+table(dt.rename(columns={'gbs': 'GB/s', 'counted_gbs': 'counted GB/s', 'read_gbs': 'read ceiling GB/s', 'of_read_ceiling': 'of read ceiling', 'tokens_per_s': 'tokens/s bound'}), 2)
+say_claims(claims.decode_bound(ext, thesis, theory), ['decode_achieved'])
 """),
     md("""
 ## 5. GEMM efficiency against batch size
@@ -469,7 +479,9 @@ A workload that uses fewer cores than the saturation point (for example a server
     code("""
 cap = bw[(bw.config == 'cache') & (bw.socket_scope == 'single') & (bw.socket == 0)]
 flat_ref = bw[(bw.config != 'cache') & (bw.socket_scope == 'single') & (bw.socket == 0) & (bw.locality == 'local') & ((bw.working_set_gib - 8).abs() < 0.5)]
-fig = plotting.cache_capacity_figure(cap, flat_ref, {'16 GiB: 8B BF16 model': 16, '64 GiB: HBM capacity': 64})
+gm_all = report.gemm_points(ext)
+gemv = gm_all[(gm_all.memory_mode == 'cache') & (gm_all['shape'] == '14336x4096') & (gm_all.m == 1)]
+fig = plotting.cache_capacity_figure(cap, flat_ref, {'16 GiB: 8B BF16 model': 16, '64 GiB: HBM capacity': 64}, gemv)
 figure(fig, 'cache_capacity')
 table(cap.pivot_table(index='working_set_gib', columns='kernel', values='gbs').reset_index())
 """),
@@ -836,10 +848,10 @@ figure(fig, 'atlas_cache_1s')
 table(pd.DataFrame([dict(case=c.tier, kernel=c.kernel, GBs=c.gbs, working_set_gib=c.working_set_gib) for c in (resident, spilled)]))
 """),
     code("""
-say_claims(claims.cache_mode(ext, thesis), ['cache_declines_before_capacity', 'cache_triad_spilled_ceiling'])
+say_claims(claims.cache_mode(ext, thesis), ['cache_declines_before_capacity', 'cache_triad_spilled_ceiling', 'cache_spilled_gemm'])
 """),
     md("""
-Every ridge moves right by the ratio of the two slopes. The 16 GiB line is the best case for a model of that size; the 96 GiB line is the Triad-based ceiling of the spilled case.
+Every ridge moves right by the ratio of the two slopes. The 16 GiB line is the case of a model of that size; the 96 GiB line is the Triad-based ceiling of the spilled case. Spilled, the kernels disagree by almost a factor of two and a GEMM streaming weights is faster than the read-only kernel (below): read-only is therefore not a ceiling for a spilled GEMM, and Triad, the fastest kernel measured there, is used.
 
 ## 3. Flat mode, both sockets
 """),
@@ -921,7 +933,7 @@ say_claims(claims.counted(ext, thesis), ['counted_gemm_weights', 'counted_gemm_p
 
 ## 6. Ceiling audit: points above their own roofline
 
-A ceiling is only an upper bound if no accepted point lies above it. Each point below is compared with `min(compute ceiling, bandwidth ceiling × intensity)` for its own tier and ISA path; it counts as *exceeding* when it is above that bound by more than the larger of its own and the ceiling's run-to-run spread (CV). Cache-mode GEMM uses the best-kernel ceiling at the pool size of the run (16 GiB resident, 96 GiB spilled).
+A ceiling is only an upper bound if no accepted point lies above it. Each point below is compared with `min(compute ceiling, bandwidth ceiling × intensity)` for its own tier and ISA path; it counts as *exceeding* when it is above that bound by more than the larger of its own and the ceiling's run-to-run spread (CV). Flat GEMM uses the read-only ceiling (weights are only read). Cache-mode GEMM uses the best-kernel ceiling at the pool size of the run (16 GiB resident, 96 GiB spilled), because spilled GEMMs stream faster than the read-only kernel (section 2), so read-only would not bound them.
 """),
     code("""
 for pool, ceiling in [(16, resident), (96, spilled)]:

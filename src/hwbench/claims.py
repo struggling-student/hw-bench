@@ -333,6 +333,11 @@ def cache_mode(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
     hbm = {k: _at(bw, "flat_hbm", k, 8) for k in ("read", "triad")}
     ddr = {k: _at(bw, "flat_ddr", k, 8) for k in ("read", "triad", "triad_nt")}
     nt = {s: _at(bw, "cache", "triad_nt", s) for s in sizes}
+    gm = report.gemm_points(ext)
+    spill = gm[gm.memory_mode.eq("cache") & gm.m.eq(1) & gm.pool_gib.gt(64)]
+    big_spill = spill[spill["shape"].eq("14336x4096")].set_index("dtype").gbs
+    per = report.campaign_medians(ext, thesis)
+    read96 = per[per.memory_mode.eq("cache") & per.quantity.eq("stream_read/effective_cache") & per.working_set_gib.eq(96)]["median"]
     decreasing = all(triad[a] > triad[b] for a, b in zip(sizes, sizes[1:]))
     fractions = ", ".join(f"{_pct(triad[s] / hbm['triad'])} at {s:.0f}" for s in (16.0, 32.0, 48.0, 64.0))
     first_below = {}
@@ -364,7 +369,19 @@ def cache_mode(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             all(first_below[k] is not None for k in first_below),
             f"Compared kernel by kernel with Flat DDR, Cache mode falls below it at: {below_text}. At 96 GiB it delivers "
             f"{_pct(read[96.0] / ddr['read'])} (read-only), {_pct(triad[96.0] / ddr['triad'])} (Triad) and "
-            f"{_pct(nt[96.0] / ddr['triad_nt'])} (non-temporal Triad) of Flat DDR. The cache lookup and fill add cost on every miss.",
+            f"{_pct(nt[96.0] / ddr['triad_nt'])} (non-temporal Triad) of Flat DDR. The cache lookup and fill add cost on every miss. "
+            "These are kernel rates; a GEMM streaming weights does better than the read-only kernel there (claim `cache_spilled_gemm`).",
+        ),
+        Claim(
+            "cache_spilled_gemm",
+            bool(spill.gbs.min() > read96.max() * 1.1 and spill.gbs.max() < triad[96.0] * 1.05),
+            f"What a model larger than the HBM cache gets is the rate its GEMMs stream weights, not the read-only kernel's. With a 96 GiB weight pool, "
+            f"decode GEMMs (M=1) stream {spill.gbs.min():.0f}–{spill.gbs.max():.0f} GB/s over the four shapes and both precisions (14336×4096: "
+            f"{big_spill['bf16']:.0f} BF16, {big_spill['int8']:.0f} INT8), {_pct(spill.gbs.min() / ddr['read'])}–{_pct(spill.gbs.max() / ddr['read'])} of Flat DDR "
+            f"read, while the read-only kernel at 96 GiB moves {read96.min():.0f}–{read96.max():.0f} GB/s in two campaigns and Triad {triad[96.0]:.0f}. The ordering "
+            "read-only < GEMM ≤ Triad is unexplained: a pure read stream should not be slower than one that also writes. One difference is that each "
+            "read thread streams its own private array while the GEMM's threads share one matrix at a time (a hypothesis; the memory-side-cache tag "
+            "counters would test it). The read-only kernel is therefore not used as the spilled ceiling of a GEMM.",
         ),
         Claim(
             "cache_triad_spilled_ceiling",
@@ -674,6 +691,14 @@ def decode_bound(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> lis
     intensity = float(one.intensity.median())
     amx = report.compute_ceiling(ext, "amx_bf16", "flat", 56)
     gap = {"hbm": ridge(amx.gops, hbm.gbs) / intensity, "ddr": ridge(amx.gops, ddr.gbs) / intensity}
+    dt = report.decode_table(ext, thesis, theory)
+    conv = dt[dt.pool.eq("64× on-chip")].set_index(["tier", "precision"])
+    pk = dt[dt.layout.eq("prepacked") & dt.precision.eq("bf16")].set_index("tier")
+    pool = report.gemm_pool_table(ext)
+    plain4 = pool[pool["shape"].eq("14336x4096") & pool.m.eq(1) & pool.pool_x.eq(4) & pool.dtype.eq("bf16")].set_index("memory_target")
+    plain64 = conv.loc[("Flat HBM", "bf16")].gbs
+    ratio = {d: conv.loc[("Flat HBM", d)].gbs / conv.loc[("Flat DDR", d)].gbs for d in ("bf16", "int8")}
+    frac = {(t, d): conv.loc[(t, d)].of_read_ceiling for t in ("Flat HBM", "Flat DDR") for d in ("bf16", "int8")}
     return [
         Claim(
             "decode_bound",
@@ -695,6 +720,24 @@ def decode_bound(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> lis
             f"A decode step (M = 1) has a modeled intensity of {intensity:.2f} operations per byte, about {gap['hbm']:.0f}× below the AMX BF16 ridge on HBM "
             f"({ridge(amx.gops, hbm.gbs):.0f} op/B) and {gap['ddr']:.0f}× below it on DDR ({ridge(amx.gops, ddr.gbs):.0f} op/B). "
             "Decode is memory-bound by two orders of magnitude, so the AMX peak does not limit it; batching raises intensity in proportion to M.",
+        ),
+        Claim(
+            "decode_achieved",
+            bool(ratio["bf16"] < tokens["hbm"] / tokens["ddr"] and ratio["int8"] < tokens["hbm"] / tokens["ddr"]
+                 and frac[("Flat HBM", "bf16")] < frac[("Flat DDR", "bf16")]
+                 and plain4.loc["hbm"].counted_gbs <= plain64 <= plain4.loc["hbm"].modeled_gbs * 1.01),
+            f"What a decode step achieves (14336×4096, M=1, converged pool): {conv.loc[('Flat HBM', 'bf16')].gbs:.0f} GB/s for plain BF16 and "
+            f"{conv.loc[('Flat HBM', 'int8')].gbs:.0f} GB/s for INT8 on HBM ({_pct(frac[('Flat HBM', 'bf16')])} and {_pct(frac[('Flat HBM', 'int8')])} of the read "
+            f"ceiling), against {conv.loc[('Flat DDR', 'bf16')].gbs:.0f} and {conv.loc[('Flat DDR', 'int8')].gbs:.0f} GB/s on DDR ({_pct(frac[('Flat DDR', 'bf16')])} and "
+            f"{_pct(frac[('Flat DDR', 'int8')])}). The library streams DDR almost at the read ceiling but leaves a third of HBM unused, so HBM beats DDR by "
+            f"{ratio['bf16']:.2f}× (BF16) and {ratio['int8']:.2f}× (INT8) for this GEMM, not the {tokens['hbm'] / tokens['ddr']:.2f}× of the read kernel. If every "
+            f"weight streamed at this rate, Llama-3.1-8B would decode at most {conv.loc[('Flat HBM', 'bf16')].tokens_per_s:.0f} tokens/s per socket in BF16 and "
+            f"{conv.loc[('Flat HBM', 'int8')].tokens_per_s:.0f} in INT8 on HBM ({conv.loc[('Flat DDR', 'bf16')].tokens_per_s:.0f} and "
+            f"{conv.loc[('Flat DDR', 'int8')].tokens_per_s:.0f} on DDR), against {tokens['hbm']:.0f} from the read ceiling; the 4096×4096 projections stream "
+            f"slower, so the whole model would be slower still. Prepacked BF16 was measured only with a 4× pool: {pk.loc['Flat HBM'].gbs:.0f} GB/s modeled and "
+            f"{pk.loc['Flat HBM'].counted_gbs:.0f} counted on HBM; for plain BF16 the converged value ({plain64:.0f}) lies between the 4× counted "
+            f"({plain4.loc['hbm'].counted_gbs:.0f}) and modeled ({plain4.loc['hbm'].modeled_gbs:.0f}) values, so the converged prepacked value presumably lies between "
+            f"{pk.loc['Flat HBM'].counted_gbs:.0f} and {pk.loc['Flat HBM'].gbs:.0f} GB/s (an extrapolation; the prepared part `gemmconv` measures it).",
         ),
     ]
 
