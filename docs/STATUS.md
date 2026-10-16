@@ -35,7 +35,7 @@ without a decision. The run recipe of every campaign part is in
 | --- | --- | --- |
 | Compute peaks, six paths (AVX-512 FP64/FP32/BF16, VNNI, AMX BF16/INT8) | **Done** | 94–99% of the per-cycle peak at the measured clock; three launches within 0.25%; chain sweep for AVX-512 BF16 |
 | Flat DDR and HBM bandwidth (read, Triad, NT Triad, copy), 1 and 2 sockets, core scaling with clock | **Done** | Seven Flat launches of HBM read agree within 3%; sustained HBM value excludes the fast first window (C4) |
-| Comparison with published Xeon Max 9480 results (M3) | **Done** | HBM read-only within 2.1% of McCalpin 2023 (Flat, one socket); DDR 11–17% higher; HBM Triad 21% lower, cause not tested; loaded latency and concurrency within 7% of the published counter values; two-socket result of Reguly 2023 is another mode and is not compared like for like. Methods text, notebook 01, claims `literature_*` |
+| Comparison with published Xeon Max 9480 results (M3) | **Done** | HBM read-only within 2.1% of McCalpin 2023 (Flat, one socket); DDR 11–17% higher; HBM Triad 21% lower, explained: unmodified STREAM reproduces the published figure, the gap is data pattern (12%), loop unrolling (6%) and median against best-of (9%), see [STREAMGAP.md](STREAMGAP.md); loaded latency and concurrency within 7% of the published counter values; two-socket result of Reguly 2023 is another mode and is not compared like for like. Methods text, notebook 01, claims `literature_*` |
 | Traffic model (counted against modeled bytes) | **Done** | Per-core offcore-response counters: 0.989–1.003 for streams and sweep; no read-for-ownership |
 | Memory hierarchy (L1, L2, L3, memory), idle latency | **Done** | L1 re-measured after the clock-read fix |
 | Latency under load (R3) | **Done** | One core chasing beside 1–55 streaming cores: HBM 139 to 209 ns at 549 GB/s, DDR 116 to 373 ns at 262 GB/s; the chase does not slow the streams. Claim `loaded_latency`, notebook 02 |
@@ -84,6 +84,8 @@ measurements: the HBM-cache hit rate behind the far latency, and the concurrency
 latency.
 
 **Decisions that are yours**: pushing `develop`; merging it into `main`; removing stray cluster
-directories from earlier mistyped submissions; whether the unexplained 21% gap between the published
-HBM STREAM Triad and the Triad measured here deserves a run with the published setup (compiler flags
-and affinity are not stated in the source, so it would be a guess).
+directories from earlier mistyped submissions; whether to carry the data pattern into the thesis text
+where the HBM read ceiling is quoted (random data 527 GB/s, constants 576, [STREAMGAP.md](STREAMGAP.md));
+and whether to rebuild the notebooks with the updated Triad text: claim `literature_agreement`
+(`src/hwbench/claims.py`, asserted by `tests/test_literature.py`) and notebook 01 still say the
+cause "was not tested", which the investigation has since answered.
