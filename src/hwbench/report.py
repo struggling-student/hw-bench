@@ -737,6 +737,60 @@ def library_ceiling(gm: pd.DataFrame, path: str, mode: str = "flat", tier: str =
     )
 
 
+LITERATURE_PATH = ROOT / "configs/literature.toml"
+
+
+def literature_sources(path: Path = LITERATURE_PATH) -> pd.DataFrame:
+    """The cited publications of ``configs/literature.toml``: key, citation, url, setup, same_mode."""
+
+    import tomllib
+
+    with open(path, "rb") as handle:
+        return pd.DataFrame(tomllib.load(handle)["source"])
+
+
+def literature_table(ext: pd.DataFrame, thesis: pd.DataFrame, path: Path = LITERATURE_PATH) -> pd.DataFrame:
+    """Published Xeon Max 9480 bandwidths beside the values of this study (M3).
+
+    One row per published number in ``configs/literature.toml``; ``measured`` is socket 0 at
+    8 GiB (both sockets for two-socket rows) from :func:`bandwidth_summary`, ``ratio`` is
+    measured over published.  Rows from a source whose setup differs from this study (the
+    ``same_mode`` flag) are kept but marked, because a ratio there mixes a configuration
+    difference with a measurement difference.  Tier ratios are in the same table, published
+    over measured, with ``unit`` ``x``.
+    """
+
+    import tomllib
+
+    with open(path, "rb") as handle:
+        spec = tomllib.load(handle)
+    same = {s["key"]: bool(s["same_mode"]) for s in spec["source"]}
+    bw = bandwidth_summary(ext, thesis)
+    bw = bw[bw.memory_mode.eq("flat") & bw.locality.eq("local") & bw.working_set_gib.eq(8.0)]
+
+    def value(key: list[str]) -> float:
+        config, kernel, scope = key
+        part = bw[bw.config.eq(config) & bw.kernel.eq(kernel) & bw.socket_scope.eq(scope)]
+        if scope == "single":
+            part = part[part.socket.eq(0)]
+        if len(part) != 1:
+            raise ValueError(f"expected one measured value for {key}, found {len(part)}")
+        return float(part.gbs.iloc[0])
+
+    rows = []
+    for r in spec["row"]:
+        measured = value(r["measure"])
+        rows.append(dict(quantity=r["quantity"], source=r["source"], location=r["page"], unit="GB/s",
+                         published=r["published"], measured=measured, ratio=measured / r["published"],
+                         same_mode=same[r["source"]]))
+    for r in spec["ratio"]:
+        measured = value(r["numerator"]) / value(r["denominator"])
+        rows.append(dict(quantity=r["quantity"], source=r["source"], location=r["page"], unit="x",
+                         published=r["published"], measured=measured, ratio=measured / r["published"],
+                         same_mode=same[r["source"]]))
+    return pd.DataFrame(rows)
+
+
 def local_remote_table(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
     """Local and remote bandwidth per tier and kernel, for socket 0.
 
@@ -897,19 +951,13 @@ def ridge_table(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
 
 
 def measured_theory_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, hmat: dict[str, float]) -> pd.DataFrame:
-    """T3: measured against vendor or derived peak and against the firmware-advertised figure."""
+    """T3: memory bandwidth against the vendor or derived peak and the firmware-advertised figure.
 
-    peaks = isa_peaks(ext, theory)
-    peaks = peaks[peaks.scope.eq("1S") & peaks.cores.eq(56) & peaks.memory_mode.eq("flat") & peaks.socket.eq(0)].set_index("path")
+    Compute peaks are compared with their per-cycle figures in the master notebook's efficiency figure
+    (and their TOP/s are in Table 1), so they are not repeated here.
+    """
+
     rows = []
-    for key in ["fp64", "fp32", "avx512_bf16", "vnni_int8", "amx_bf16", "amx_int8"]:
-        r = peaks.loc[key]
-        rows.append(
-            dict(
-                quantity=f"{theory.isa(key).label} (TOP/s)", measured=r.gops / 1000, theoretical=r.theory_gops_at_clock / 1000 if "theory_gops_at_clock" in r else r.gops / r.efficiency_at_clock / 1000,
-                theory_status=r.theory_status, firmware=math.nan,
-            )
-        )
     hbm_read = memory_ceiling(ext, thesis, "flat", "hbm", access="read").gbs
     ddr_read = memory_ceiling(ext, thesis, "flat", "ddr", access="read").gbs
     rows.append(dict(quantity="DDR read (GB/s)", measured=ddr_read, theoretical=theory.memory_gbs("ddr"), theory_status="derived", firmware=hmat["ddr"]))

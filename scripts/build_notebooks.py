@@ -60,12 +60,13 @@ This notebook carries the findings in six figures and five tables; the supportin
 
 Two sockets × 56 cores, SMT off, 64 GiB HBM2e and 8-channel DDR5-4800 per socket. *Flat* mode exposes HBM and DDR as separate NUMA nodes; *Cache* mode makes HBM a memory-side cache in front of DDR. Flat results were taken on one dedicated node outside Slurm (the October runs went through an exclusive Slurm allocation on the same node and are labelled as such); Cache results come from Slurm allocations on other nodes.
 
-**Table 1 — headline ceilings of socket 0** (the reference socket for every number here). *Median* [*min*–*max*] are the five samples of one run; *sustained* is their median without the first window, which on HBM is a few percent fast (notebook 01, section 3); *spread* is half the min–max range relative to the median. *Repeat* is the range of three back-to-back launches on one node; *between* is the range of every selected campaign that measured the quantity on its reference node, on different days (*campaigns* counts them). *Cross-run* is the largest deviation of the cross-check (SSH against the October Slurm runs, or a second Cache node) for the quantity or, where it was not repeated, its family; *basis* says which. *Total* is spread plus the largest of repeat, between and cross-run, a conservative sum.
+**Table 1 — headline ceilings of socket 0** (the reference socket for every number here). *Median* [*min*–*max*] are the five samples of one run. *Total* is the uncertainty to quote: half the min–max range plus the largest of three further ranges, a conservative sum. The three are the range of three back-to-back launches on one node, the range of every selected campaign that measured the quantity on its reference node on different days, and the largest deviation of the cross-check (SSH against the October Slurm runs, or a second Cache node). The decomposition of each total, the number of campaigns behind it and the HBM first-window effect are in [notebook 01](01_platform_and_methodology.ipynb), section 3.
 """),
     code("""
 t1 = report.headline_table(ext, thesis, theory)
-table(t1[['quantity', 'unit', 'median', 'low', 'high', 'sustained', 'spread', 'repeat', 'between', 'campaigns', 'cross_run', 'basis', 'total']]
-      .rename(columns={'low': 'min', 'high': 'max', 'spread': 'spread %', 'repeat': 'repeat %', 'between': 'between %', 'cross_run': 'cross-run %', 'total': 'total %'}), 2)
+t1v = t1.assign(**{'median [min–max]': [f'{m:.4g} [{lo:.4g}–{hi:.4g}]' for m, lo, hi in zip(t1['median'], t1.low, t1.high)], 'uncertainty': [f'±{t:.1f}%' for t in t1.total]})
+table(t1v[['quantity', 'unit', 'median [min–max]', 'uncertainty']])
+say('*Basis of the cross-run term:* ' + '; '.join(f'{b} ({", ".join(g.quantity)})' for b, g in t1.groupby('basis')) + '.')
 say_claims(claims.headline_uncertainty(ext, thesis, theory))
 say_claims(claims.xcheck(ext, thesis), ['campaign_spread'])
 """),
@@ -118,7 +119,7 @@ say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_f
     md("""
 ## 4. The headline roofline: one socket, Flat mode
 
-Memory slopes are the read-only ceilings, because GEMM weights are only read. The dotted line is the best rate a library GEMM achieved (not a hardware limit). Points are the BF16 14336×4096 projection for batch sizes M = 1 to 4096, on HBM and on DDR; intensity is modeled. From M = 1 to 256 the points come from the converged sweep (a weight pool of 16× the on-chip capacity, part `gemmconv`; convergence is judged in counted bytes, and 2–3% of the weights are still served on chip at small M, so those modeled rates are that much high); above M = 256 they come from the first sweep, whose small pool no longer matters at those batch sizes. Every point is audited against its ceiling. The shaded bands are decode (small M) and prefill (large M).
+Memory slopes are the read-only ceilings, because GEMM weights are only read. The dotted line is the best rate PyTorch `nn.Linear` achieved through oneDNN with plain (not prepacked) weights (not a hardware limit; prepacked weights are up to 20% faster, see notebook 04). Points are the BF16 14336×4096 projection for batch sizes M = 1 to 4096, on HBM and on DDR; intensity is modeled. From M = 1 to 256 the points come from the converged sweep (a weight pool of 16× the on-chip capacity, part `gemmconv`; convergence is judged in counted bytes, and 2–3% of the weights are still served on chip at small M, so those modeled rates are that much high); above M = 256 they come from the first sweep, whose small pool no longer matters at those batch sizes. Every point is audited against its ceiling. The shaded bands are decode (small M) and prefill (large M).
 
 **Table 2 — ridge points** (operations per byte at which each path stops being memory-bound), against the read-only ceiling of each tier, the same ceiling as the roofline above and the decode bound; Cache mode is read at 16 GiB.
 """),
@@ -130,9 +131,9 @@ compute = [report.compute_ceiling(ext, p, 'flat', 56) for p in ('fp32', 'amx_bf1
 pts = report.gemm_workload_points(head[head.dtype == 'bf16'], theory)
 at = {(p.memory_target, int(p.provenance['label'][2:])): p.intensity for p in pts}
 for p in pts:
-    # Label HBM points at every fourth M; DDR points are unlabelled so labels never overprint.
+    # Label HBM points at every fourth M (not M = 4096: its label would overprint the library-line label); DDR points are unlabelled.
     m = int(p.provenance['label'][2:])
-    p.provenance['label'] = p.provenance['label'] if p.memory_target == 'hbm' and m in (1, 4, 16, 64, 256, 1024, 4096) else ''
+    p.provenance['label'] = p.provenance['label'] if p.memory_target == 'hbm' and m in (1, 4, 16, 64, 256, 1024) else ''
 regions = [(at[('hbm', 1)] / 1.3, at[('hbm', 16)] * 1.3, 'decode'), (at[('hbm', 256)] / 1.3, at[('hbm', 4096)] * 1.3, 'prefill')]
 fig = plotting.roofline_figure(compute, mem_read, pts, title='Roofline · Flat · one socket · BF16 14336×4096 by batch M', regions=regions, point_labels=True)
 figure(fig, 'headline_roofline')
@@ -190,11 +191,11 @@ say_claims(claims.placement(ext, thesis) + claims.sockets(ext, thesis) + claims.
     md("""
 ## 7. Reference tables
 
-**Table 3 — measured against vendor or derived peak and against the firmware figure.** Compute peaks are compared at the clock the cores ran at; the HBM "vendor" figure is a rounded 1 TB/s, and the firmware (HMAT) figures are advertised, not measured.
+**Table 3 — memory bandwidth against the vendor or derived peak and against the firmware figure.** The HBM "vendor" figure is a rounded 1 TB/s, and the firmware (HMAT) figures are advertised, not measured. Compute peaks against their per-cycle figures are in section 2 and their TOP/s in Table 1.
 """),
     code("""
 t3 = report.measured_theory_table(ext, thesis, theory, claims.hmat_gbs(ROOT))
-table(t3.rename(columns={'theoretical': 'theoretical (compute at measured clock)'}), 3)
+table(t3, 3)
 """),
     md("""
 **Table 4 — what is not measured, and why.**
@@ -253,6 +254,14 @@ say_claims(claims.core_scaling(ext, thesis, ROOT) + claims.latency(ext, theory, 
 """),
     code("""
 say_claims(claims.platform_caveats(ext, ROOT))
+"""),
+    md("""
+**Comparison with published results.** The same CPU has one close published single-socket measurement (McCalpin, IXPUG at ISC 2023: Flat mode, one NUMA node per socket, 56 cores) and one two-socket measurement in a different configuration (Reguly, arXiv 2023: HBM-only mode, SNC4). Published values are read off the sources listed in `configs/literature.toml`; the values of this study are the socket-0 medians at 8 GiB. A ratio above 1 means this study measured more.
+"""),
+    code("""
+table(report.literature_table(ext, thesis).drop(columns=['same_mode']), 2)
+table(report.literature_sources()[['key', 'citation', 'setup']])
+say_claims(claims.literature(ext, thesis))
 """),
     md("""
 ## 2. Execution rules and provenance
@@ -333,6 +342,14 @@ say_claims(claims.xcheck(ext, thesis), ['repeat_runs', 'repeat_launches'])
 cs = report.campaign_spread(ext, thesis)
 table(cs[['memory_mode', 'quantity', 'working_set_gib', 'campaigns', 'same_node_campaigns', 'same_node_low', 'same_node_high', 'same_node_percent', 'all_nodes_percent', 'nodes']], 2)
 say_claims(claims.xcheck(ext, thesis), ['campaign_spread'])
+"""),
+    md("""
+**How the total uncertainty of the master Table 1 is built.** *Spread* is half the one-run min–max range relative to the median; *sustained* is the median without the first window; *repeat*, *between* and *cross-run* are the three ranges above (*campaigns* counts those behind *between*); *basis* says which quantity the cross-run term comes from; *total* is the spread plus the largest of the three.
+"""),
+    code("""
+t1 = report.headline_table(ext, thesis, theory)
+table(t1[['quantity', 'unit', 'median', 'sustained', 'spread', 'repeat', 'between', 'campaigns', 'cross_run', 'basis', 'total']]
+      .rename(columns={'spread': 'spread %', 'repeat': 'repeat %', 'between': 'between %', 'cross_run': 'cross-run %', 'total': 'total %'}), 2)
 """),
     md("""
 The same launches as a figure: each dot is the median of one launch relative to the mean of the three, the line joins the lowest and the highest, and the band is the 2% acceptance threshold used for the cross-check above. A row is one quantity in one memory mode; the three launches of each ran on one node.
@@ -550,16 +567,7 @@ Remote and local refer to the memory socket relative to the CPU socket. Two-sock
 **Conditions.** Flat mode, 56 cores of one socket, 8 GiB, memory bound to the local or the other socket's tier. Read-only and non-temporal Triad show how the penalty depends on traffic direction. Where the remote repeat (5 s windows, a local control beside every remote point) measured a pair, it replaces the first campaign; the *source* column says which.
 """),
     code("""
-loc = report.locality_ratio(ext, thesis)
 lr = report.local_remote_table(ext, thesis)
-fig = plotting.go.Figure()
-for placement, hatch in (('local', ''), ('remote', '/')):
-    fig.add_bar(x=lr.label, y=lr[placement], showlegend=False,
-                marker=dict(color=[plotting.CONFIG_COLORS[c] for c in lr.config], pattern=dict(shape=hatch, fgcolor=plotting.SURFACE, size=6, solidity=0.5), line=dict(width=0)),
-                error_y=dict(type='data', array=lr[f'{placement}_spread'], color=plotting.INK_2, thickness=1.2))
-plotting.style(fig, 'Local (solid) and remote (hatched) bandwidth · socket 0, bars show the difference to socket 1', 'Tier and kernel', 'GB/s', 480)
-fig.update_layout(barmode='group', bargap=0.3, margin=dict(l=85, r=40, t=85, b=80))
-figure(fig, 'local_remote_bandwidth')
 table(lr[['label', 'local', 'remote', 'remote_over_local', 'local_spread', 'remote_spread', 'source']].rename(columns={'local_spread': 'local, |socket 1 − 0|', 'remote_spread': 'remote, |socket 1 − 0|'}), 2)
 """),
     code("""
@@ -610,31 +618,10 @@ table(sp[['memory_mode', 'config', 'benchmark', 'placement', 'k', 'gbs', 'gops',
 """),
     code("""
 ref = pd.concat([report.span_reference(ext, thesis, 'read'), report.span_reference(ext, thesis, 'triad')], ignore_index=True)
-fig = plotting.go.Figure()
-for placement, hatch in (('firsttouch', ''), ('interleave', '/')):
-    part = ref[ref.placement == placement]
-    fig.add_bar(x=part.label, y=part.gbs, showlegend=False,
-                marker=dict(color=[plotting.CONFIG_COLORS[c] for c in part.config], pattern=dict(shape=hatch, fgcolor=plotting.SURFACE, size=6, solidity=0.5), line=dict(width=0)))
-once = ref.drop_duplicates('label')
-fig.add_scatter(x=once.label, y=once.isolated_sum, mode='markers', name='two isolated sockets, summed',
-                marker=dict(symbol='diamond', size=12, color=plotting.INK, line=dict(color=plotting.SURFACE, width=1.5)))
-plotting.style(fig, 'One 112-thread process · first-touch (solid) and interleaved (hatched)', 'Tier and kernel', 'GB/s', 500)
-fig.update_layout(barmode='group', bargap=0.3, margin=dict(l=85, r=40, t=85, b=110))
-figure(fig, 'span_bandwidth')
+table(ref, 1)
 """),
     code("""
 say_claims(claims.span(ext, thesis))
-"""),
-    md("""
-## 4. Cores needed to saturate one socket (October Triad)
-"""),
-    code("""
-from hwbench.analysis import scaling_table, knees_table
-core = thesis[(thesis.benchmark == 'stream_triad') & (thesis.notes == 'core_scaling') & (thesis.socket_scope == 'single') & (thesis.socket == 0) & (thesis.locality == 'local')]
-c = core.groupby(['memory_mode', 'memory_target', 'threads']).bandwidth_gbs.median().reset_index()
-c['config'] = [plotting.config_key(m, t) for m, t in zip(c.memory_mode, c.memory_target)]
-fig = plotting.line_by_config(c, 'threads', 'bandwidth_gbs', 'config', 'Triad bandwidth against core count · socket 0, 8 GiB', 'Cores', 'GB/s')
-figure(fig, 'triad_core_scaling')
 """),
 ]
 
@@ -684,10 +671,6 @@ one = one.set_index('path').loc[order].reset_index()
 table(one[['path', 'label', 'gops', 'cv_percent', 'ghz_effective', 'amx_busy_frac', 'ops_per_cycle_per_core', 'theory_ops_per_cycle', 'efficiency_base', 'efficiency_at_clock', 'theory_status']])
 """),
     code("""
-fig = plotting.compute_efficiency_figure(one, {'avx512_bf16': 'bound from instruction table'})
-figure(fig, 'ops_per_cycle')
-"""),
-    code("""
 i = one.set_index('path')
 say(f"**Result.** AMX BF16 reaches {i.loc['amx_bf16','ops_per_cycle_per_core']:.0f} of 1024 operations per cycle ({i.loc['amx_bf16','efficiency_at_clock']:.1%}), "
     f"AMX INT8 {i.loc['amx_int8','ops_per_cycle_per_core']:.0f} of 2048, VNNI {i.loc['vnni_int8','ops_per_cycle_per_core']:.0f} of 256, FP32/FP64 {i.loc['fp32','ops_per_cycle_per_core']:.0f}/{i.loc['fp64','ops_per_cycle_per_core']:.0f} of 64/32. "
@@ -730,48 +713,12 @@ gm['fraction_of_tile_peak'] = gm.gops / gm.dtype.map(tile)
 table(gm.groupby(['config', 'dtype', 'memory_target']).agg(best_TOPs=('gops', lambda s: s.max() / 1000), best_fraction=('fraction_of_tile_peak', 'max')).reset_index())
 """),
     code("""
-sel = gm[(gm.memory_target == 'hbm') & (gm.dtype == 'bf16')]
-raw = ext[(ext.benchmark == 'onednn_gemm_sweep') & (ext.notes == 'gemm_sweep') & (ext.memory_mode == 'flat') & (ext.memory_target == 'hbm') & (ext.dtype == 'bf16')].copy()
-raw['shape'] = raw.n.astype(int).astype(str) + 'x' + raw.k.astype(int).astype(str)
-fig = plotting.go.Figure()
-for shape, part in sel.groupby('shape'):
-    part = part.sort_values('m')
-    color = plotting.SHAPE_COLORS[shape]
-    samples = raw[raw['shape'] == shape]
-    fig.add_scatter(x=samples.m, y=samples.performance_gops / 1000, mode='markers', showlegend=False, hoverinfo='skip',
-                    marker=dict(size=5, color=color, opacity=0.35))
-    fig.add_scatter(x=part.m, y=part.gops / 1000, mode='lines+markers', name=f'{shape}', line=dict(color=color, width=2.2),
-                    marker=dict(size=7, line=dict(color=plotting.SURFACE, width=1.5)))
-plotting.mark_y(fig, tile['bf16'] / 1000, 'AMX BF16 tile peak (measured)')
-plotting.style(fig, 'BF16 GEMM against batch M · Flat HBM, 56 cores · line: median, dots: every sample', 'M (tokens per batch)', 'TOP/s', 520)
-fig.update_xaxes(type='log', dtick=1, tickformat='~g'); fig.update_yaxes(type='log', dtick=1, tickformat='~g')
-figure(fig, 'gemm_bf16_m_sweep')
-"""),
-    code("""
-sel = gm[(gm.memory_target == 'hbm') & (gm.dtype == 'int8')]
-raw = ext[(ext.benchmark == 'onednn_gemm_sweep') & (ext.notes == 'gemm_sweep') & (ext.memory_mode == 'flat') & (ext.memory_target == 'hbm') & (ext.dtype == 'int8')].copy()
-raw['shape'] = raw.n.astype(int).astype(str) + 'x' + raw.k.astype(int).astype(str)
-fig = plotting.go.Figure()
-for shape, part in sel.groupby('shape'):
-    part = part.sort_values('m')
-    color = plotting.SHAPE_COLORS[shape]
-    samples = raw[raw['shape'] == shape]
-    fig.add_scatter(x=samples.m, y=samples.performance_gops / 1000, mode='markers', showlegend=False, hoverinfo='skip',
-                    marker=dict(size=5, color=color, opacity=0.35))
-    fig.add_scatter(x=part.m, y=part.gops / 1000, mode='lines+markers', name=f'{shape}', line=dict(color=color, width=2.2),
-                    marker=dict(size=7, line=dict(color=plotting.SURFACE, width=1.5)))
-plotting.mark_y(fig, tile['int8'] / 1000, 'AMX INT8 tile peak (measured)')
-plotting.style(fig, 'INT8 GEMM against batch M · Flat HBM, 56 cores · line: median, dots: every sample', 'M (tokens per batch)', 'TOP/s', 520)
-fig.update_xaxes(type='log', dtick=1, tickformat='~g'); fig.update_yaxes(type='log', dtick=1, tickformat='~g')
-figure(fig, 'gemm_int8_m_sweep')
-"""),
-    code("""
 big = gm[(gm.memory_target == 'hbm') & (gm.m == 4096)].groupby('dtype').gops.max()
 head = report.headline_gemm_points(ext)
 one = head[(head.memory_target == 'hbm') & (head.m == 1)].set_index('dtype')
 say(f"**Result.** At M=4096 oneDNN reaches {big['bf16']/1000:.1f} TOP/s BF16 ({big['bf16']/tile['bf16']:.0%} of the tile peak) and {big['int8']/1000:.1f} TOP/s INT8 ({big['int8']/tile['int8']:.0%}). "
     f"At M=1 on 14336×4096 with a converged pool it delivers {one.loc['bf16', 'gops']/1000:.2f} and {one.loc['int8', 'gops']/1000:.2f} TOP/s: weight streaming at "
-    f"{one.loc['bf16', 'gbs']:.0f} (BF16) and {one.loc['int8', 'gbs']:.0f} GB/s (INT8). The figures above are the first sweep, whose pool was too small at M ≤ 32 "
+    f"{one.loc['bf16', 'gbs']:.0f} (BF16) and {one.loc['int8', 'gbs']:.0f} GB/s (INT8). The first-sweep rates quoted here come from a pool that was too small at M ≤ 32 "
     "(section 5); its small-M rates overstate the weight traffic.")
 """),
     code("""
@@ -869,9 +816,7 @@ Every ridge moves right by the ratio of the two slopes. The 16 GiB line is the c
 """),
     code("""
 mem2 = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', '2S'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', '2S')]
-fig = plotting.roofline_figure(theory_set(['fp64', 'amx_bf16', 'amx_int8'], '2S', 56) + compute_set('flat', '2S', 56), mem2,
-                               title='Flat · both sockets (two timed processes) · ERT envelope and vendor ceilings')
-figure(fig, 'atlas_flat_2s')
+table(pd.DataFrame([dict(tier=c.tier, kernel=c.kernel, GBs=c.gbs, scope=c.scope) for c in mem2]))
 """),
     code("""
 say_claims(claims.ridges(ext, thesis, theory), ['ridge_points', 'two_sockets_ridge'])

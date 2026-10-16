@@ -1,0 +1,86 @@
+# Published bandwidth results for the Xeon Max 9480, the single outside reference of the
+# study (M3 of the 2026-10-16 review).  Values are read off the cited sources; the comparison
+# with the measured values is computed in ``report.literature_table``.  Nothing here is
+# measured by this repository.
+
+[[source]]
+key = "mccalpin2023"
+citation = "J. D. McCalpin, \"Bandwidth Limits in the Intel Xeon Max (Sapphire Rapids with HBM) Processors\", IXPUG Workshop at ISC High Performance 2023, Texas Advanced Computing Center, 24 May 2023."
+url = "https://www.ixpug.org/images/docs/ISC23/McCalpin_SPR_BW_limits_2023-05-24_final.pdf"
+setup = "Xeon Max 9480, Flat mode with quadrant clustering (one NUMA node per socket), one socket, 56 cores, DDR5-4800 with one single-rank DIMM per channel; compiler flags and clock not stated"
+same_mode = true
+
+[[source]]
+key = "reguly2023"
+citation = "I. Z. Reguly, \"Comparative evaluation of bandwidth-bound applications on the Intel Xeon CPU MAX Series\", arXiv:2309.09084, 2023."
+url = "https://arxiv.org/abs/2309.09084"
+setup = "Xeon Max 9480, HBM-only mode with SNC4 clustering, two sockets of 56 cores, hyperthreading on; BabelStream OpenMP Triad; Intel oneAPI 2023.1"
+same_mode = false
+
+# ``measure`` selects the value of this study: (config, kernel, socket scope) of
+# ``report.bandwidth_summary`` at 8 GiB, socket 0.  ``unit`` is GB/s unless stated.
+[[row]]
+source = "mccalpin2023"
+quantity = "DDR read-only, 1 socket"
+published = 237.0
+page = "slide 4"
+measure = ["flat_ddr", "read", "single"]
+
+[[row]]
+source = "mccalpin2023"
+quantity = "DDR STREAM Triad, 1 socket"
+published = 200.0
+page = "slide 4"
+measure = ["flat_ddr", "triad", "single"]
+
+[[row]]
+source = "mccalpin2023"
+quantity = "HBM read-only, 1 socket"
+published = 555.0
+page = "slide 4"
+measure = ["flat_hbm", "read", "single"]
+
+[[row]]
+source = "mccalpin2023"
+quantity = "HBM STREAM Triad, 1 socket"
+published = 700.0
+page = "slide 4"
+measure = ["flat_hbm", "triad", "single"]
+
+[[row]]
+source = "mccalpin2023"
+quantity = "HBM STREAM Triad (non-temporal stores), 1 socket"
+published = 700.0
+page = "slide 4"
+measure = ["flat_hbm", "triad_nt", "single"]
+
+[[row]]
+source = "reguly2023"
+quantity = "HBM Triad, 2 sockets"
+published = 1446.0
+page = "section 2"
+measure = ["flat_hbm", "triad", "dual"]
+
+[[row]]
+source = "reguly2023"
+quantity = "HBM Triad with streaming stores, 2 sockets"
+published = 1643.0
+page = "section 2"
+measure = ["flat_hbm", "triad_nt", "dual"]
+
+# Ratios of two tiers: published ratio and the pair of measured values that gives ours.
+[[ratio]]
+source = "mccalpin2023"
+quantity = "HBM over DDR, STREAM Triad"
+published = 3.5
+page = "slide 4"
+numerator = ["flat_hbm", "triad", "single"]
+denominator = ["flat_ddr", "triad", "single"]
+
+[[ratio]]
+source = "mccalpin2023"
+quantity = "HBM over DDR, read-only"
+published = 2.3
+page = "slide 4"
+numerator = ["flat_hbm", "read", "single"]
+denominator = ["flat_ddr", "read", "single"]

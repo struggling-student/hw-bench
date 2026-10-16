@@ -1158,6 +1158,44 @@ def headline_uncertainty(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory
     ]
 
 
+def literature(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
+    """The study against published Xeon Max 9480 results (M3): where it agrees and where it does not."""
+
+    lt = report.literature_table(ext, thesis).set_index("quantity")
+    src = report.literature_sources().set_index("key")
+    r = lt.ratio
+    hbm_read, hbm_triad = lt.loc["HBM read-only, 1 socket"], lt.loc["HBM STREAM Triad, 1 socket"]
+    ddr_read, ddr_triad = lt.loc["DDR read-only, 1 socket"], lt.loc["DDR STREAM Triad, 1 socket"]
+    rx_triad, rx_read = lt.loc["HBM over DDR, STREAM Triad"], lt.loc["HBM over DDR, read-only"]
+    two = lt.loc["HBM Triad, 2 sockets"]
+    return [
+        Claim(
+            "literature_agreement",
+            bool(
+                src.loc["mccalpin2023", "same_mode"]
+                and abs(r["HBM read-only, 1 socket"] - 1) < 0.05
+                and r["DDR read-only, 1 socket"] > 1
+                and r["DDR STREAM Triad, 1 socket"] > 1
+                and r["HBM STREAM Triad, 1 socket"] < 0.9
+            ),
+            f"Against the closest published single-socket result for this CPU, in the same setting (Flat mode, one NUMA node per tier and socket as in quadrant clustering; McCalpin 2023): HBM read-only agrees "
+            f"({hbm_read.measured:.0f} GB/s here, {hbm_read.published:.0f} published, {_pct(r['HBM read-only, 1 socket'] - 1, 1)}); DDR is higher here "
+            f"(read-only {ddr_read.measured:.0f} against {ddr_read.published:.0f} GB/s, Triad {ddr_triad.measured:.0f} against {ddr_triad.published:.0f}); "
+            f"HBM Triad is lower ({hbm_triad.measured:.0f} against {hbm_triad.published:.0f} GB/s, {_pct(1 - r['HBM STREAM Triad, 1 socket'])} below, "
+            f"and the non-temporal kernel does not close the gap). The tier ratios follow: HBM over DDR is {rx_read.measured:.2f}× read-only against "
+            f"{rx_read.published:.1f}× published and {rx_triad.measured:.2f}× Triad against {rx_triad.published:.1f}×. The publication does not state "
+            "compiler flags or clock, and the cause of the Triad difference was not tested.",
+        ),
+        Claim(
+            "literature_two_socket",
+            bool(not src.loc["reguly2023", "same_mode"] and two.ratio < 1),
+            f"The published two-socket HBM Triad ({two.published:.0f} GB/s with standard flags, {lt.loc['HBM Triad with streaming stores, 2 sockets'].published:.0f} "
+            f"with streaming stores; Reguly 2023) is for HBM-only mode with SNC4 clustering and hyperthreading on, which this study did not run, so it shows "
+            f"what a different configuration can reach, not a like-for-like comparison: Flat mode here reaches {two.measured:.0f} GB/s ({_pct(two.ratio)} of the first).",
+        ),
+    ]
+
+
 def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = ROOT) -> dict[str, list[Claim]]:
     return {
         "compute": compute_paths(ext, theory),
@@ -1180,4 +1218,5 @@ def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Pa
         "platform": platform_caveats(ext, root),
         "gemm": gemm(ext, thesis, theory, root),
         "counted": counted(ext, thesis),
+        "literature": literature(ext, thesis),
     }
