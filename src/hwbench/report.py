@@ -1376,7 +1376,7 @@ def gemm_pool_points(ext: pd.DataFrame, pool_x: int = 64, shape: str = "14336x40
         WorkloadPoint(
             name=f"{dtype} gemm {shape} M={int(m)} · {tier} · {pool_x}× pool", precision=dtype, isa_path=path[dtype], gops=float(r.gops),
             intensity=float(r.intensity), mode="flat", scope="1S", cores=56, threads=56, memory_target=tier,
-            provenance={"campaign": r.campaign, "series": f"{dtype.upper()} {shape} · {pool_x}× pool", "cv_percent": r.cv},
+            provenance={"campaign": r.campaign, "series": f"{shape} · {pool_x}× pool", "cv_percent": r.cv},
         )
         for (tier, dtype, m), r in rows.iterrows()
     ]

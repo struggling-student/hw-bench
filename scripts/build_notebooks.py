@@ -900,7 +900,7 @@ for dtype, path in [('bf16', 'amx_bf16'), ('int8', 'amx_int8')]:
     else:
         cs.append(report.compute_ceiling(ext, 'vnni_int8', 'flat', 56))
     audits.append(roofline.audit_points(pts, mem_read, cs).assign(group=f'{dtype.upper()} GEMM · Flat · read-only ceiling'))
-    fig = plotting.roofline_figure(cs, mem_read, pts + conv, title=f'{dtype.upper()} GEMM M-sweep at Llama-3.1-8B shapes · Flat · one socket')
+    fig = plotting.roofline_figure(cs, mem_read, pts + conv, title=f'{dtype.upper()} GEMM M-sweep at Llama-3.1-8B shapes · Flat · one socket', height=820)
     figure(fig, f'atlas_gemm_{dtype}')
 """),
     code("""

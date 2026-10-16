@@ -213,7 +213,8 @@ def roofline_figure(
     any_open = False
     for (mode, tier, series), members in groups.items():
         key = config_key(mode or "flat", tier)
-        members = sorted(members, key=lambda q: q.intensity)
+        # Filled points first: the legend shows the first point's marker, which must not look hollow.
+        members = sorted(members, key=lambda q: (bool(q.provenance.get("open")), q.intensity))
         labelled = point_labels and all("label" in q.provenance for q in members)
         # A hollow marker is a point the analysis does not treat as converged (see open_label).
         hollow = [bool(q.provenance.get("open")) for q in members]
