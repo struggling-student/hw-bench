@@ -399,6 +399,9 @@ def latency(ext: pd.DataFrame, theory: Theory, root: Path = ROOT) -> list[Claim]
     mem = lat[lat.level.eq("memory")].set_index("config").latency_ns
     far = report.cache_latency_far(ext).set_index("working_set_gib").latency_ns
     hmat = hmat_latency_ns(root)
+    chase = h[h.notes.eq("hier_latency")].set_index(["config", "per_thread_bytes"]).latency_ns
+    ddr_tail = {g: float(chase.loc[("flat_ddr", g * 2**30)]) for g in (1, 2, 4)}
+    hbm_tail = {g: float(chase.loc[("flat_hbm", g * 2**30)]) for g in (1, 2, 4)}
     return [
         Claim(
             "hmat_latency",
@@ -419,9 +422,21 @@ def latency(ext: pd.DataFrame, theory: Theory, root: Path = ROOT) -> list[Claim]
             "Cache-mode idle latency, measured from inside the HBM cache to far beyond it, rises with the working set: "
             + ", ".join(f"{far.loc[g]:.0f}" for g in (16, 32, 64, 96, 128))
             + f" ns at 16, 32, 64, 96 and 128 GiB, against {mem['flat_ddr']:.0f} ns on Flat DDR and {mem['flat_hbm']:.0f} ns on Flat HBM. "
-            "There is no step at the 64 GiB capacity: the smooth rise is what a growing miss fraction would give (conflict misses in a "
-            f"direct-mapped cache, inferred), and at 128 GiB a load costs {far.loc[128] - mem['cache']:.0f} ns more than a hit "
-            f"({mem['cache']:.0f} ns at 4 GiB), {far.loc[128] / mem['flat_ddr']:.1f}× Flat DDR.",
+            "The Flat values are taken at 4 GiB, the Cache ones at 16 to 128 GiB. There is no step at the 64 GiB capacity: the smooth rise is "
+            "what a growing miss fraction would give (conflict misses in a direct-mapped cache, inferred), but also what a growing share of "
+            f"address-translation misses would give (claim `latency_translation`). At 128 GiB a load takes {far.loc[128] - mem['cache']:.0f} ns "
+            f"longer than at 4 GiB ({mem['cache']:.0f} ns), {far.loc[128] / mem['flat_ddr']:.1f}× Flat DDR at 4 GiB; that difference is an upper "
+            "bound on what a miss of the HBM cache adds.",
+        ),
+        Claim(
+            "latency_translation",
+            bool(ddr_tail[4] > ddr_tail[2] > ddr_tail[1] and hbm_tail[4] > hbm_tail[1]),
+            f"The chase still includes address translation at the largest Flat size: latency keeps rising from 1 to 4 GiB "
+            f"({ddr_tail[1]:.0f}, {ddr_tail[2]:.0f}, {ddr_tail[4]:.0f} ns on DDR; {hbm_tail[1]:.0f} to {hbm_tail[4]:.0f} ns on HBM) although every "
+            "size is already far beyond the L3, which is what an increasing share of second-level TLB misses gives even with 2 MiB pages "
+            "(transparent huge pages are on; inferred, no TLB counter was read). Presumably nearly every load walks the page tables at "
+            "16–128 GiB, a translation cost the Flat 4 GiB figures only partly pay. A Flat DDR chase at the same sizes would separate translation from "
+            "the HBM-cache miss; it was not run.",
         ),
     ]
 

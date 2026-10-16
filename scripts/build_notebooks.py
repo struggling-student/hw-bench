@@ -113,7 +113,7 @@ fig = plotting.cache_capacity_figure(bw0[bw0.config == 'cache'], bw0[(bw0.config
                                      {'16 GiB: 8B BF16 model': 16, '64 GiB: HBM capacity': 64}, gemv)
 figure(fig, 'cache_capacity')
 say_claims(claims.cache_mode(ext, thesis), ['cache_declines_before_capacity', 'cache_resident_model', 'cache_below_flat_ddr', 'cache_spilled_gemm'])
-say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_far'])
+say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_far', 'latency_translation'])
 """),
     md("""
 ## 4. The headline roofline: one socket, Flat mode
@@ -396,7 +396,7 @@ say_claims(claims.hierarchy(ext, theory))
     md("""
 ## 2. Idle dependent-load latency
 
-**Conditions.** One core chasing a random cycle of 64-byte nodes (seed 7); transparent huge pages are enabled system-wide, so translation cost is small. Results describe idle latency, not loaded latency.
+**Conditions.** One core chasing a random cycle of 64-byte nodes (seed 7); transparent huge pages are enabled system-wide, which keeps translation cheap up to a few GiB but not beyond (claim `latency_translation` below). Results describe idle latency, not loaded latency.
 """),
     code("""
 lat = h[h.notes == 'hier_latency']
@@ -420,7 +420,7 @@ mem_lat = latency.pivot(index='level', columns='config', values='latency_ns').lo
 fig = plotting.cache_latency_figure(cache_lat, {'DDR': float(mem_lat['flat_ddr']), 'HBM': float(mem_lat['flat_hbm'])})
 figure(fig, 'cache_latency_far')
 table(far, 1)
-say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_far'])
+say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_far', 'latency_translation'])
 """),
     md("""
 Cache levels are identical across configurations; only beyond the L3 do tiers differ. HBM's benefit is bandwidth under many outstanding requests, not latency.

@@ -104,3 +104,12 @@ def test_decode_table_and_its_claim(evidence):
     assert dt[dt.layout.eq("prepacked") & dt.precision.eq("bf16")].pool.str.contains("not converged").all()
     c = by_id(claims.decode_bound(ext, thesis, theory))["decode_achieved"]
     assert c.holds and "1.43×" in c.text
+
+
+# ------------------------------------------------------------------ C7
+def test_far_latency_is_qualified_for_translation(evidence):
+    ext, _, theory = evidence
+    c = by_id(claims.latency(ext, theory, ROOT))
+    assert c["latency_translation"].holds
+    far = c["cache_latency_far"].text
+    assert "upper bound" in far and "costs" not in far and "latency_translation" in far
