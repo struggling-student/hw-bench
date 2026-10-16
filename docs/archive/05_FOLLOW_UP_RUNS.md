@@ -34,12 +34,40 @@ residual on-chip share, and the fact that the modeled rates and intensities at s
 much high, are stated in claim `gemm_converged_sweep`. `report.headline_gemm_points` takes the
 sweep for every M ≤ 256, `report.decode_table` takes its prepacked BF16 row.
 
+## `flatfar` and `loadedlat` (review of 2026-10-16, items R2 and R3): ran 2026-10-16
+
+Both are Flat parts on `cresco8-hbm14` over SSH and tmux, no new C++ (the existing latency and
+read kernels, the second one in the synchronized-pair mechanism of the concurrent-tier test).
+
+| Part | Records | Timed windows | What it measures |
+| --- | ---: | ---: | --- |
+| `flatfar` | 8 | 0.7 min (about 20 min with the chase initialisation) | One-core chase at 16, 32, 64, 96, 128 GiB on Flat DDR and 16, 32, 48 GiB on Flat HBM (label `flat_latency_far`): the control for the Cache-mode far latency |
+| `loadedlat` | 32 | 9.3 min | One chasing core (1 GiB) beside 1, 4, 14, 28, 55 cores reading the same tier (8 GiB), HBM and DDR, with the idle chase and each stream alone in the same launch |
+
+```bash
+scripts/submit_cresco8.sh flat flatfar
+scripts/submit_cresco8.sh flat loadedlat
+```
+
+**Outcome.** Campaigns `flat-flatfar-20261016T121759Z` and `flat-loadedlat-20261016T124007Z`, all
+records valid, listed under `extended_campaigns`.
+
+* R2: Flat DDR latency is 127 to 131 ns from 16 to 128 GiB (4 ns of rise), Flat HBM 150 to 152 ns
+  from 16 to 48 GiB, while Cache mode rises from 161 to 227 ns. Address translation is therefore not
+  what raises the far latency of Cache mode; the memory-side cache is (claims `latency_translation`,
+  `cache_latency_far`). The previous statement that the far latency was an upper bound on the miss
+  cost was replaced.
+* R3: with 55 cores streaming, a dependent load takes 209 ns on HBM (139 idle, 549 GB/s) and 373 ns
+  on DDR (116 idle, 262 GB/s); the chase takes nothing measurable from the streams (within 3%).
+  The loaded latency and the concurrency Little's law implies agree with the counter-measured values
+  of McCalpin (2023) within 7% (claims `loaded_latency`, `literature_loaded`).
+
 ## Original plan of 2026-10-12 (all ran)
 
 Run definitions for the experiments that the [2026-10-12 review](REVIEW_2026-10-12.md)
 ranks highest. When this plan was written nothing had been executed: the definitions were tested only as plans
 (`tests/test_campaign_plan.py`) and the C++ change only for syntax and generated code.
-Read [02 — Run and retrieve](02_RUN_AND_RETRIEVE.md) first for the execution rules (Flat
+Read [02 — Run and retrieve](../02_RUN_AND_RETRIEVE.md) first for the execution rules (Flat
 only on `cresco8-hbm14` over SSH and tmux, Cache only under Slurm on other nodes).
 
 List what a part will measure without touching any node:

@@ -757,7 +757,9 @@ def literature_table(ext: pd.DataFrame, thesis: pd.DataFrame, path: Path = LITER
     measured over published.  Rows from a source whose setup differs from this study (the
     ``same_mode`` flag) are kept but marked, because a ratio there mixes a configuration
     difference with a measurement difference.  Tier ratios are in the same table, published
-    over measured, with ``unit`` ``x``.
+    over measured, with ``unit`` ``x``.  Loaded-latency rows set the counter-measured queue
+    occupancy and concurrency of the same kernel type against this study's chase beside
+    streaming cores and the concurrency Little's law implies from it (``unit`` ``ns`` or ``lines``).
     """
 
     import tomllib
@@ -781,6 +783,16 @@ def literature_table(ext: pd.DataFrame, thesis: pd.DataFrame, path: Path = LITER
     for r in spec["row"]:
         measured = value(r["measure"])
         rows.append(dict(quantity=r["quantity"], source=r["source"], location=r["page"], unit="GB/s",
+                         published=r["published"], measured=measured, ratio=measured / r["published"],
+                         same_mode=same[r["source"]]))
+    lat = loaded_latency(ext)
+    lat["lines_per_core"] = lat.stream_gbs * lat.loaded_ns / 64 / lat.stream_cores
+    for r in spec.get("loaded", []):
+        pick = lat[lat.config.eq(r["config"]) & lat.stream_cores.eq(r["cores"])]
+        if len(pick) != 1:
+            raise ValueError(f"expected one loaded-latency row for {r['config']} at {r['cores']} cores, found {len(pick)}")
+        measured = float(pick[r["field"]].iloc[0])
+        rows.append(dict(quantity=r["quantity"], source=r["source"], location=r["page"], unit=r["unit"],
                          published=r["published"], measured=measured, ratio=measured / r["published"],
                          same_mode=same[r["source"]]))
     for r in spec["ratio"]:
@@ -977,7 +989,7 @@ def unmeasured_table() -> pd.DataFrame:
             ("Cache-mode hit rate", "memory-side-cache tag events are uncore (M2M)", "conflict misses are inferred from bandwidth"),
             ("Why remote HBM collapses", "UPI and CHA counters are uncore", "mechanism unidentified; magnitude confirmed by a repeat with 5 s windows and a thread sweep"),
             ("Why Cache-mode spilled streams order read-only < GEMM ≤ Triad", "memory-side-cache (M2M) tag counters are uncore", "ordering reported, not explained"),
-            ("Address-translation share of far latency", "no TLB-miss counter was read; no Flat chase beyond 4 GiB", "Cache-mode far latency is an upper bound on the miss cost"),
+            ("Address-translation share of far latency", "no TLB-miss counter is readable", "the Flat DDR chase to 128 GiB bounds it (a few ns per doubling), so Cache-mode far latency is mostly the memory-side cache"),
             ("Why the clock falls while HBM streams", "power and turbostat counters need privileges", "cause unidentified"),
             ("Energy", "RAPL needs privileges", "no energy figures"),
             ("HBM device capability beyond 56 cores", "SNC4 / HBM-only modes are not available on the node", "HBM ceiling is a 56-core figure"),
@@ -1399,6 +1411,52 @@ def cache_latency_far(ext: pd.DataFrame) -> pd.DataFrame:
         .agg(latency_ns=("latency_ns", "median"), cv_percent=("latency_ns", _cv), n_samples=("accepted", "size"))
         .reset_index()
     )
+
+
+def flat_latency_far(ext: pd.DataFrame) -> pd.DataFrame:
+    """Flat-mode idle latency of a one-core chase at 16-128 GiB (part ``flatfar``, review item R2).
+
+    The control for :func:`cache_latency_far`: the same chase on memory without a memory-side
+    cache, so what still rises with the working set is address translation, not a cache miss.
+    """
+
+    d = with_config(ext[ext.notes.eq("flat_latency_far")])
+    return (
+        d.groupby(["config", d.working_set_gib.round(0).rename("working_set_gib")])
+        .agg(latency_ns=("latency_ns", "median"), cv_percent=("latency_ns", _cv), n_samples=("accepted", "size"),
+             campaign_id=("campaign_id", _ids))
+        .reset_index()
+    )
+
+
+def loaded_latency(ext: pd.DataFrame) -> pd.DataFrame:
+    """Dependent-load latency of one core beside ``n`` cores streaming the same tier (part ``loadedlat``, R3).
+
+    ``idle_ns`` is the chase alone in the same launch; ``stream_gbs`` the aggregate read rate of the
+    ``n`` streaming cores during the shared window and ``control_gbs`` the same cores alone, so
+    ``stream_over_control`` says how much the chase took from them.
+    """
+
+    d = with_config(ext[ext.notes.str.startswith("loaded_")])
+    idle = d[d.notes.eq("loaded_latency_idle")].groupby("config").latency_ns.median()
+    rows = []
+    for config, part in d.groupby("config"):
+        for n in sorted({int(x.rsplit("_n", 1)[1]) for x in part.notes if x.startswith("loaded_latency_n")}):
+            chase = part[part.notes.eq(f"loaded_latency_n{n}")]
+            load = part[part.notes.eq(f"loaded_stream_n{n}")]
+            control = part[part.notes.eq(f"loaded_stream_control_n{n}")]
+            rows.append(
+                dict(
+                    config=config, stream_cores=n, idle_ns=float(idle[config]), loaded_ns=float(chase.latency_ns.median()),
+                    cv_percent=_cv(chase.latency_ns), stream_gbs=float(load.bandwidth_gbs.median()),
+                    control_gbs=float(control.bandwidth_gbs.median()), n_samples=len(chase), campaign_id=_ids(chase.campaign_id),
+                )
+            )
+    out = pd.DataFrame(rows)
+    if len(out):
+        out["latency_ratio"] = out.loaded_ns / out.idle_ns
+        out["stream_over_control"] = out.stream_gbs / out.control_gbs
+    return out
 
 
 def counted_gemm_points(ext: pd.DataFrame, theory: Theory, tier: str = "hbm", shape: str = "14336x4096"):

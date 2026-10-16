@@ -691,30 +691,75 @@ def gemm_prepacked_figure(pk: pd.DataFrame):
     return fig
 
 
-def cache_latency_figure(cache: pd.DataFrame, flat: dict[str, float]):
-    """Cache-mode idle latency against working set, with the Flat tiers as reference lines.
+def cache_latency_figure(cache: pd.DataFrame, flat: dict[str, float], flat_far: pd.DataFrame | None = None):
+    """Cache-mode idle latency against working set, with the Flat tiers as the control.
 
     ``cache`` has ``working_set_gib`` and ``latency_ns``; ``flat`` maps ``DDR`` and ``HBM`` to
-    their idle latency.  The HBM cache capacity is marked.
+    their idle latency at the 4 GiB reference size.  ``flat_far`` (``config``, ``working_set_gib``,
+    ``latency_ns``) is the same chase on Flat memory at 16 GiB and beyond: where given, the Flat
+    tiers are drawn as lines over the working set (the 4 GiB reference joins them), so what
+    translation alone adds can be read against what Cache mode adds.  The HBM cache capacity
+    is marked.
     """
 
     fig = go.Figure()
     for name, key in (("Flat DDR", "flat_ddr"), ("Flat HBM", "flat_hbm")):
         value = flat["DDR" if "DDR" in name else "HBM"]
-        fig.add_hline(y=value, line=dict(color=CONFIG_COLORS[key], width=2))
-        fig.add_annotation(
-            x=1.0, xref="paper", y=value, yref="y", text=f"{name} {value:.0f} ns", showarrow=False, xanchor="right", yanchor="bottom",
-            font=dict(size=12, color=INK_2),
+        if flat_far is None:
+            fig.add_hline(y=value, line=dict(color=CONFIG_COLORS[key], width=2))
+            fig.add_annotation(
+                x=1.0, xref="paper", y=value, yref="y", text=f"{name} {value:.0f} ns", showarrow=False, xanchor="right", yanchor="bottom",
+                font=dict(size=12, color=INK_2),
+            )
+            continue
+        far = flat_far[flat_far.config.eq(key)].sort_values("working_set_gib")
+        x = [4.0, *far.working_set_gib]
+        y = [value, *far.latency_ns]
+        fig.add_scatter(
+            x=x, y=y, mode="lines+markers", name=name, line=dict(color=CONFIG_COLORS[key], width=2.2),
+            marker=dict(size=8, color=CONFIG_COLORS[key], line=dict(color=SURFACE, width=1.5)),
         )
+        fig.add_annotation(x=np.log10(x[-1]), y=y[-1], xref="x", yref="y", text=name, showarrow=False, xanchor="left", yanchor="middle", xshift=8,
+                           font=dict(size=12, color=INK_2))
     part = cache.sort_values("working_set_gib")
     fig.add_scatter(
         x=part.working_set_gib, y=part.latency_ns, mode="lines+markers", name="Cache mode",
         line=dict(color=CONFIG_COLORS["cache"], width=2.2), marker=dict(size=10, color=CONFIG_COLORS["cache"], line=dict(color=SURFACE, width=1.5)),
     )
+    if flat_far is not None:
+        fig.add_annotation(x=np.log10(part.working_set_gib.iloc[-1]), y=part.latency_ns.iloc[-1], xref="x", yref="y", text="Cache", showarrow=False,
+                           xanchor="left", yanchor="middle", xshift=8, font=dict(size=12, color=INK_2))
     fig.add_vline(x=64, line=dict(color=MUTED, width=1))
     fig.add_annotation(x=np.log10(64), y=1.0, xref="x", yref="paper", text="HBM cache 64 GiB", showarrow=False, yanchor="bottom", font=dict(size=12, color=INK_2))
-    style(fig, "Cache-mode idle load latency against working set", "Working set (GiB)", "ns per dependent load", 480)
-    fig.update_xaxes(type="log", tickmode="array", tickvals=[4, 16, 32, 64, 96, 128], ticktext=["4", "16", "32", "64", "96", "128"])
+    style(fig, "Idle load latency against working set · Cache mode and the Flat control", "Working set (GiB)", "ns per dependent load", 480)
+    fig.update_xaxes(type="log", tickmode="array", tickvals=[4, 16, 32, 64, 96, 128], ticktext=["4", "16", "32", "64", "96", "128"],
+                     range=[np.log10(3.2), np.log10(170)])
     fig.update_yaxes(rangemode="tozero")
-    fig.update_layout(showlegend=False)
+    fig.update_layout(showlegend=False, margin=dict(l=85, r=70, t=85, b=70))
+    return fig
+
+
+def loaded_latency_figure(loaded: pd.DataFrame):
+    """Load-latency curve: dependent-load latency of one core against what the other cores stream.
+
+    ``loaded`` is :func:`hwbench.report.loaded_latency`.  Each point is a number of streaming
+    cores (labelled from 14), at the aggregate rate they reached; the idle latency is the first point
+    of each curve (no streaming cores).
+    """
+
+    fig = go.Figure()
+    for key in ("flat_ddr", "flat_hbm"):
+        part = loaded[loaded.config.eq(key)].sort_values("stream_cores")
+        idle = float(part.idle_ns.iloc[0])
+        fig.add_scatter(
+            x=[0, *part.stream_gbs], y=[idle, *part.loaded_ns], mode="lines+markers+text", name=CONFIG_LABELS[key],
+            text=["", *[f"{int(n)} cores" if n >= 14 else "" for n in part.stream_cores]],
+            textposition="bottom right" if key == "flat_ddr" else "top center", textfont=dict(size=11, color=INK_2),
+            line=dict(color=CONFIG_COLORS[key], width=2.2),
+            marker=dict(size=9, color=CONFIG_COLORS[key], line=dict(color=SURFACE, width=1.5)),
+            hovertemplate="%{x:.0f} GB/s streamed · %{y:.0f} ns<extra></extra>",
+        )
+    style(fig, "Dependent-load latency beside streaming cores · Flat, one socket", "Read bandwidth of the streaming cores (GB/s)", "ns per dependent load", 480)
+    fig.update_yaxes(rangemode="tozero")
+    fig.update_xaxes(rangemode="tozero")
     return fig

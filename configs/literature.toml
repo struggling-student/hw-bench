@@ -84,3 +84,48 @@ published = 2.3
 page = "slide 4"
 numerator = ["flat_hbm", "read", "single"]
 denominator = ["flat_ddr", "read", "single"]
+
+# Counter-measured queue occupancy and concurrency of an all-read stream (offcore data reads),
+# against the loaded latency of this study (a one-core chase beside N streaming cores, part
+# ``loadedlat``) and the concurrency Little's law implies from it:
+# lines per core = aggregate GB/s x loaded ns / 64 B / streaming cores.
+# ``field`` is a column of ``report.loaded_latency``.
+[[loaded]]
+source = "mccalpin2023"
+quantity = "HBM load latency, 1 core streaming"
+published = 134.2
+unit = "ns"
+page = "slide 14"
+config = "flat_hbm"
+cores = 1
+field = "loaded_ns"
+
+[[loaded]]
+source = "mccalpin2023"
+quantity = "HBM load latency, all cores streaming"
+published = 198.6
+unit = "ns"
+page = "slide 16"
+config = "flat_hbm"
+cores = 55
+field = "loaded_ns"
+
+[[loaded]]
+source = "mccalpin2023"
+quantity = "HBM outstanding line reads per core, 1 core"
+published = 40.2
+unit = "lines"
+page = "slide 14"
+config = "flat_hbm"
+cores = 1
+field = "lines_per_core"
+
+[[loaded]]
+source = "mccalpin2023"
+quantity = "HBM outstanding line reads per core, all cores"
+published = 31.8
+unit = "lines"
+page = "slide 16"
+config = "flat_hbm"
+cores = 55
+field = "lines_per_core"

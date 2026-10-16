@@ -416,7 +416,7 @@ say_claims(claims.hierarchy(ext, theory))
     md("""
 ## 2. Idle dependent-load latency
 
-**Conditions.** One core chasing a random cycle of 64-byte nodes (seed 7); transparent huge pages are enabled system-wide, which keeps translation cheap up to a few GiB but not beyond (claim `latency_translation` below). Results describe idle latency, not loaded latency.
+**Conditions.** One core chasing a random cycle of 64-byte nodes (seed 7); transparent huge pages are enabled system-wide, so translation stays cheap: the Flat DDR chase rises by about 15 ns from 1 to 128 GiB (claim `latency_translation` below). Results describe idle latency, not loaded latency.
 """),
     code("""
 lat = h[h.notes == 'hier_latency']
@@ -430,17 +430,29 @@ figure(fig, 'hierarchy_latency')
 table(latency.pivot(index='level', columns='config', values='latency_ns').reset_index())
 """),
     md("""
-The cache-mode latency of a miss was measured by chasing a cycle of 16 to 128 GiB (a one-core pointer chase; building and walking the 128 GiB cycle takes minutes).
+The Cache-mode latency beyond the HBM cache was measured by chasing a cycle of 16 to 128 GiB (a one-core pointer chase; building and walking the 128 GiB cycle takes minutes). The same chase on Flat DDR (16 to 128 GiB) and Flat HBM (16 to 48 GiB, its capacity is 64 GiB) is the control: whatever it still shows is address translation, and what Cache mode adds on top is the memory-side cache.
 """),
     code("""
 far = report.cache_latency_far(ext)
 near = lat[(lat.config == 'cache') & (lat.per_thread_bytes == 4 * 2**30)]
 cache_lat = pd.concat([pd.DataFrame({'working_set_gib': [4.0], 'latency_ns': [float(near.latency_ns.iloc[0])]}), far[['working_set_gib', 'latency_ns']]], ignore_index=True)
 mem_lat = latency.pivot(index='level', columns='config', values='latency_ns').loc['memory']
-fig = plotting.cache_latency_figure(cache_lat, {'DDR': float(mem_lat['flat_ddr']), 'HBM': float(mem_lat['flat_hbm'])})
+flat_far = report.flat_latency_far(ext)
+fig = plotting.cache_latency_figure(cache_lat, {'DDR': float(mem_lat['flat_ddr']), 'HBM': float(mem_lat['flat_hbm'])}, flat_far)
 figure(fig, 'cache_latency_far')
-table(far, 1)
+table(far.merge(flat_far[flat_far.config == 'flat_ddr'][['working_set_gib', 'latency_ns']].rename(columns={'latency_ns': 'flat_ddr_ns'}), on='working_set_gib', how='left').assign(cache_minus_flat_ddr_ns=lambda f: f.latency_ns - f.flat_ddr_ns), 1)
+table(flat_far, 1)
 say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_far', 'latency_translation'])
+"""),
+    md("""
+**Latency under load.** One core chases a 1 GiB cycle while the other cores of the socket stream the same tier (read-only, 8 GiB), in one synchronized window; the chase alone, in the same launch, is the idle level. This is the load-latency curve of each tier: where the streaming cores approach the bandwidth ceiling, a dependent load waits in the queues.
+"""),
+    code("""
+ll = report.loaded_latency(ext)
+fig = plotting.loaded_latency_figure(ll)
+figure(fig, 'loaded_latency')
+table(ll.drop(columns=['campaign_id']), 2)
+say_claims(claims.latency(ext, theory, ROOT), ['loaded_latency'])
 """),
     md("""
 Cache levels are identical across configurations; only beyond the L3 do tiers differ. HBM's benefit is bandwidth under many outstanding requests, not latency.

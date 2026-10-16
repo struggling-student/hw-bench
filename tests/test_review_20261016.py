@@ -114,12 +114,13 @@ def test_decode_table_and_its_claim(evidence):
 
 
 # ------------------------------------------------------------------ C7
-def test_far_latency_is_qualified_for_translation(evidence):
+def test_far_latency_is_controlled_for_translation(evidence):
     ext, _, theory = evidence
     c = by_id(claims.latency(ext, theory, ROOT))
     assert c["latency_translation"].holds
     far = c["cache_latency_far"].text
-    assert "upper bound" in far and "costs" not in far and "latency_translation" in far
+    assert "flatfar" in far and "upper bound" not in far and "not measured" in far
+    assert "not the page tables" in c["latency_translation"].text
 
 
 # ------------------------------------------------------------------ C8
@@ -144,8 +145,8 @@ STALE = [
     ("docs/VALIDATION.md", "comparable to\n  the clock read that ends each pass"),
     ("docs/VALIDATION.md", "are flagged, not removed"),
     ("docs/06_COUNTERS.md", "Nothing in the committed measurement data has counters"),
-    ("docs/STATUS_2026-10-12.md", "⏳ |"),
-    ("docs/STATUS_2026-10-12.md", "every commit is local"),
+    ("docs/archive/STATUS_2026-10-12.md", "⏳ |"),
+    ("docs/archive/STATUS_2026-10-12.md", "every commit is local"),
     ("docs/README.md", "not yet executed"),
     ("docs/03_METHODS_AND_DATA.md", "node-to-node difference"),
 ]
@@ -162,3 +163,26 @@ def test_placement_uses_the_remote_repeat_and_table4_is_current(evidence):
     assert lr.loc["HBM read", "remote"] < 50 and lr.loc["HBM read", "source"] == "remote repeat"
     t4 = report.unmeasured_table()
     assert not t4["consequence here"].str.contains("one campaign").any()
+
+
+# ------------------------------------------------------------------ R2
+def test_flat_far_latency_is_the_translation_control(evidence):
+    ext, *_ = evidence
+    f = report.flat_latency_far(ext)
+    ddr = f[f.config.eq("flat_ddr")].set_index("working_set_gib").latency_ns
+    cache = report.cache_latency_far(ext).set_index("working_set_gib").latency_ns
+    assert list(ddr.index) == [16, 32, 64, 96, 128] and ddr.is_monotonic_increasing
+    # translation adds a few percent over the range where Cache mode adds more than 40%
+    assert ddr.loc[128] / ddr.loc[16] < 1.05 < 1.4 < cache.loc[128] / cache.loc[16]
+    assert f[f.config.eq("flat_hbm")].working_set_gib.max() == 48
+
+
+# ------------------------------------------------------------------ R3
+def test_loaded_latency_rises_with_the_streaming_cores_and_does_not_slow_them(evidence):
+    ext, _, theory = evidence
+    ll = report.loaded_latency(ext)
+    assert sorted(ll.stream_cores.unique()) == [1, 4, 14, 28, 55] and set(ll.config) == {"flat_ddr", "flat_hbm"}
+    for _, part in ll.groupby("config"):
+        assert part.sort_values("stream_cores").loaded_ns.is_monotonic_increasing and (part.loaded_ns > part.idle_ns).all()
+    assert ll.stream_over_control.between(0.95, 1.05).all()
+    assert by_id(claims.latency(ext, theory, ROOT))["loaded_latency"].holds

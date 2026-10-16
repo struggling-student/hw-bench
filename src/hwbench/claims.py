@@ -404,6 +404,13 @@ def latency(ext: pd.DataFrame, theory: Theory, root: Path = ROOT) -> list[Claim]
     chase = h[h.notes.eq("hier_latency")].set_index(["config", "per_thread_bytes"]).latency_ns
     ddr_tail = {g: float(chase.loc[("flat_ddr", g * 2**30)]) for g in (1, 2, 4)}
     hbm_tail = {g: float(chase.loc[("flat_hbm", g * 2**30)]) for g in (1, 2, 4)}
+    flat_far = report.flat_latency_far(ext)
+    flat_ddr = flat_far[flat_far.config.eq("flat_ddr")].set_index("working_set_gib").latency_ns
+    flat_hbm = flat_far[flat_far.config.eq("flat_hbm")].set_index("working_set_gib").latency_ns
+    extra = far - flat_ddr.reindex(far.index)
+    loaded = report.loaded_latency(ext)
+    ld_hbm = loaded[loaded.config.eq("flat_hbm")].sort_values("stream_cores").iloc[-1]
+    ld_ddr = loaded[loaded.config.eq("flat_ddr")].sort_values("stream_cores").iloc[-1]
     return [
         Claim(
             "hmat_latency",
@@ -420,25 +427,39 @@ def latency(ext: pd.DataFrame, theory: Theory, root: Path = ROOT) -> list[Claim]
         ),
         Claim(
             "cache_latency_far",
-            bool(far.is_monotonic_increasing and far.loc[128] > 1.4 * mem["flat_ddr"]),
+            bool(far.is_monotonic_increasing and far.loc[128] > 1.4 * mem["flat_ddr"] and extra.loc[128] > extra.loc[16] > 0),
             "Cache-mode idle latency, measured from inside the HBM cache to far beyond it, rises with the working set: "
             + ", ".join(f"{far.loc[g]:.0f}" for g in (16, 32, 64, 96, 128))
-            + f" ns at 16, 32, 64, 96 and 128 GiB, against {mem['flat_ddr']:.0f} ns on Flat DDR and {mem['flat_hbm']:.0f} ns on Flat HBM. "
-            "The Flat values are taken at 4 GiB, the Cache ones at 16 to 128 GiB. There is no step at the 64 GiB capacity: the smooth rise is "
-            "what a growing miss fraction would give (conflict misses in a direct-mapped cache, inferred), but also what a growing share of "
-            f"address-translation misses would give (claim `latency_translation`). At 128 GiB a load takes {far.loc[128] - mem['cache']:.0f} ns "
-            f"longer than at 4 GiB ({mem['cache']:.0f} ns), {far.loc[128] / mem['flat_ddr']:.1f}× Flat DDR at 4 GiB; that difference is an upper "
-            "bound on what a miss of the HBM cache adds.",
+            + f" ns at 16, 32, 64, 96 and 128 GiB, against {mem['cache']:.0f} ns at 4 GiB. There is no step at the 64 GiB capacity: the smooth rise is "
+            "what a growing miss fraction gives (conflict misses in a direct-mapped cache, inferred; the tag counters are not readable). The same chase "
+            f"on Flat DDR (part `flatfar`) takes {flat_ddr.loc[16]:.0f} to {flat_ddr.loc[128]:.0f} ns over the same sizes, so what Cache mode adds at "
+            f"equal size is {extra.loc[16]:.0f} ns at 16 GiB and {extra.loc[128]:.0f} ns at 128 GiB ({far.loc[128] / flat_ddr.loc[128]:.1f}× Flat DDR). "
+            "That difference is the cost of the memory-side cache on a one-core chase, translation included on both sides; its split between hits "
+            "of the HBM cache and misses is not measured.",
+        ),
+        Claim(
+            "loaded_latency",
+            bool(
+                loaded.groupby("config").loaded_ns.apply(lambda x: x.is_monotonic_increasing).all()
+                and ld_ddr.latency_ratio > ld_hbm.latency_ratio > 1.3
+                and loaded.stream_over_control.between(0.95, 1.05).all()
+            ),
+            f"Latency under load (a one-core chase beside N cores streaming the same tier, one shared window): on HBM a load takes {ld_hbm.idle_ns:.0f} ns idle and "
+            f"{ld_hbm.loaded_ns:.0f} ns beside {int(ld_hbm.stream_cores)} streaming cores that together read {ld_hbm.stream_gbs:.0f} GB/s ({ld_hbm.latency_ratio:.1f}×); on DDR "
+            f"{ld_ddr.idle_ns:.0f} ns idle and {ld_ddr.loaded_ns:.0f} ns beside {int(ld_ddr.stream_cores)} cores at {ld_ddr.stream_gbs:.0f} GB/s ({ld_ddr.latency_ratio:.1f}×): "
+            f"the streams add {ld_hbm.loaded_ns - ld_hbm.idle_ns:.0f} ns to a HBM load and {ld_ddr.loaded_ns - ld_ddr.idle_ns:.0f} ns to a DDR load. The chase takes nothing measurable "
+            f"from the streams (their rate stays within {_pct(float((loaded.stream_over_control - 1).abs().max()))} of the same cores alone).",
         ),
         Claim(
             "latency_translation",
-            bool(ddr_tail[4] > ddr_tail[2] > ddr_tail[1] and hbm_tail[4] > hbm_tail[1]),
-            f"The chase still includes address translation at the largest Flat size: latency keeps rising from 1 to 4 GiB "
-            f"({ddr_tail[1]:.0f}, {ddr_tail[2]:.0f}, {ddr_tail[4]:.0f} ns on DDR; {hbm_tail[1]:.0f} to {hbm_tail[4]:.0f} ns on HBM) although every "
-            "size is already far beyond the L3, which is what an increasing share of second-level TLB misses gives even with 2 MiB pages "
-            "(transparent huge pages are on; inferred, no TLB counter was read). Presumably nearly every load walks the page tables at "
-            "16–128 GiB, a translation cost the Flat 4 GiB figures only partly pay. A Flat DDR chase at the same sizes would separate translation from "
-            "the HBM-cache miss; it was not run.",
+            bool(ddr_tail[4] > ddr_tail[2] > ddr_tail[1] and hbm_tail[4] > hbm_tail[1] and flat_ddr.loc[128] - ddr_tail[1] < 0.2 * ddr_tail[1]
+                 and (far.loc[128] - far.loc[16]) > 3 * (flat_ddr.loc[128] - flat_ddr.loc[16])),
+            f"Address translation does not explain the rise of Cache-mode latency. On Flat DDR the chase costs {ddr_tail[1]:.0f}, {ddr_tail[2]:.0f} and "
+            f"{ddr_tail[4]:.0f} ns at 1, 2 and 4 GiB and then {flat_ddr.loc[16]:.0f}, {flat_ddr.loc[32]:.0f}, {flat_ddr.loc[64]:.0f}, {flat_ddr.loc[96]:.0f} and "
+            f"{flat_ddr.loc[128]:.0f} ns at 16 to 128 GiB: it keeps creeping up, as second-level TLB misses with 2 MiB pages would give (inferred, no TLB "
+            f"counter was read), but by {flat_ddr.loc[128] - flat_ddr.loc[16]:.0f} ns from 16 to 128 GiB, against {far.loc[128] - far.loc[16]:.0f} ns in Cache mode. "
+            f"Flat HBM goes from {hbm_tail[1]:.0f} ns at 1 GiB to {flat_hbm.loc[16]:.0f}, {flat_hbm.loc[32]:.0f} and {flat_hbm.loc[48]:.0f} ns at 16, 32 and 48 GiB. "
+            "The rise of the far latency in Cache mode is therefore the memory-side cache, not the page tables.",
         ),
     ]
 
@@ -1185,6 +1206,17 @@ def literature(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"and the non-temporal kernel does not close the gap). The tier ratios follow: HBM over DDR is {rx_read.measured:.2f}× read-only against "
             f"{rx_read.published:.1f}× published and {rx_triad.measured:.2f}× Triad against {rx_triad.published:.1f}×. The publication does not state "
             "compiler flags or clock, and the cause of the Triad difference was not tested.",
+        ),
+        Claim(
+            "literature_loaded",
+            bool(abs(r["HBM load latency, all cores streaming"] - 1) < 0.1 and abs(r["HBM outstanding line reads per core, all cores"] - 1) < 0.1),
+            f"The loaded latency agrees with the counter-measured one of the same CPU: McCalpin reports {lt.loc['HBM load latency, all cores streaming'].published:.0f} ns "
+            f"average queue occupancy and {lt.loc['HBM outstanding line reads per core, all cores'].published:.1f} outstanding line reads per core with all cores streaming HBM; "
+            f"the chase beside 55 streaming cores takes {lt.loc['HBM load latency, all cores streaming'].measured:.0f} ns, and Little's law on this study's rate and latency "
+            f"gives {lt.loc['HBM outstanding line reads per core, all cores'].measured:.1f} lines per core (inferred, no counter read here). With one streaming core the values are "
+            f"{lt.loc['HBM load latency, 1 core streaming'].measured:.0f} ns and {lt.loc['HBM outstanding line reads per core, 1 core'].measured:.1f} lines against "
+            f"{lt.loc['HBM load latency, 1 core streaming'].published:.0f} ns and {lt.loc['HBM outstanding line reads per core, 1 core'].published:.1f}. "
+            "The published reading (McCalpin 2023) is that the concurrency a core sustains falls and the latency rises as cores are added, which is why HBM stays far below its peak; the numbers here are consistent with it, not a test of it.",
         ),
         Claim(
             "literature_two_socket",
