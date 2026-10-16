@@ -23,28 +23,35 @@ def by_id(items):
 
 
 # ------------------------------------------------------------------ C1
-def test_headline_gemm_points_use_the_converged_pool_where_measured(evidence):
+def test_headline_gemm_points_use_the_converged_sweep(evidence):
     ext, *_ = evidence
     head = report.headline_gemm_points(ext)
-    for m in (1, 16, 256):
-        rows = head[head.m.eq(m)]
-        assert len(rows) == 4 and rows.status.eq("converged pool").all() and rows.pool_x.ge(16).all()
-    small = head[head.m.le(report.SMALL_POOL_MAX_M) & ~head.m.isin([1, 16])]
-    assert small.status.eq("small pool, M ≤ 32").all() and len(small) == 4 * 4
+    low = head[head.m.le(256)]
+    assert len(low) == 4 * 9 and low.status.eq("converged pool").all() and low.pool_x.ge(16).all()
+    assert not head.status.eq("small pool, M ≤ 32").any()
 
 
-def test_no_filled_headline_point_lies_above_its_ceiling(evidence):
+def test_no_headline_point_lies_above_its_ceiling(evidence):
     ext, thesis, theory = evidence
     head = report.headline_gemm_points(ext)
     mem = [report.memory_ceiling(ext, thesis, "flat", t, access="read") for t in ("hbm", "ddr")]
     comp = [report.compute_ceiling(ext, p, "flat", 56) for p in ("amx_bf16", "amx_int8")]
     audit = roofline.audit_points(report.gemm_workload_points(head, theory), mem, comp)
-    assert audit.unconverged.sum() == 4 * 4
-    assert not audit[~audit.unconverged].exceeds.any()
+    assert not audit.unconverged.any() and not audit.exceeds.any()
     # the first sweep's exceedances are all small-pool points
     first = report.gemm_points(ext)
     full = roofline.audit_points(report.gemm_workload_points(first[first.memory_mode.eq("flat")], theory), mem, comp)
     assert full.exceeds.any() and full[full.exceeds].unconverged.all()
+
+
+def test_converged_sweep_meets_its_acceptance(evidence):
+    ext, thesis, theory = evidence
+    cs = report.converged_sweep(ext)
+    assert len(cs) == 54 and set(cs.layout) == {"plain", "prepacked"}
+    small = cs[cs.m.le(16)]
+    # judged in counted bytes: a 16x pool still serves a few percent of the weights on chip (reported in the claim)
+    assert (small.counted_gbs / small.gbs).between(0.95, 1.0).all()
+    assert by_id(claims.gemm(ext, thesis, theory, ROOT))["gemm_converged_sweep"].holds
 
 
 def test_small_m_bias_claim_quantifies_the_first_sweep(evidence):
@@ -101,7 +108,7 @@ def test_decode_table_and_its_claim(evidence):
     hbm = conv[conv.tier.eq("Flat HBM")].set_index("precision")
     ddr = conv[conv.tier.eq("Flat DDR")].set_index("precision")
     assert (hbm.gbs / ddr.gbs < 1.7).all() and (hbm.of_read_ceiling < ddr.of_read_ceiling).all()
-    assert dt[dt.layout.eq("prepacked") & dt.precision.eq("bf16")].pool.str.contains("not converged").all()
+    assert dt[dt.layout.eq("prepacked") & dt.precision.eq("bf16")].pool.eq("16× on-chip").all()
     c = by_id(claims.decode_bound(ext, thesis, theory))["decode_achieved"]
     assert c.holds and "1.43×" in c.text
 

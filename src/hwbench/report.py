@@ -279,25 +279,31 @@ def _pool_status(pool_x: float, m: float) -> str:
     return "small pool, M ≤ 32" if m <= SMALL_POOL_MAX_M else "small pool, M ≥ 64"
 
 
-def headline_gemm_points(ext: pd.DataFrame, shape: str = "14336x4096", pool_x: int = 64) -> pd.DataFrame:
-    """One Flat GEMM shape over M for the headline: converged-pool points where they exist.
+def _layout(source_file: pd.Series, dtype: pd.Series) -> pd.Series:
+    """Weight layout of a GEMM record: INT8 is always prepacked; BF16 records name it in the file."""
 
-    The pool-size sweep (``gemm_pool``, ``pool_x`` times the on-chip capacity) replaces the first
-    sweep at the batch sizes it measured (M = 1, 16, 256); every other M comes from the first sweep
-    and keeps its ``status``, so a small-pool point at M <= 32 can be drawn hollow and left out of the
-    ceiling audit.  Same columns as ``gemm_points``.
+    packed = source_file.str.endswith("-prepacked.json") | dtype.eq("int8")
+    return packed.map({True: "prepacked", False: "plain"})
+
+
+def converged_sweep(ext: pd.DataFrame, shape: str = "14336x4096") -> pd.DataFrame:
+    """The converged-pool M-sweep (part ``gemmconv``, label ``gemm_converged``).
+
+    One row per tier, precision, weight layout and M, with modeled and counted bandwidth.  The pool
+    is 16x the on-chip capacity, converged by claim ``gemm_pool_convergence``.  Empty when the
+    campaign is not selected.
     """
 
-    first = gemm_points(ext)
-    first = first[first.memory_mode.eq("flat") & first["shape"].eq(shape)]
-    g = _gemm_frame(ext, ["gemm_pool"])
-    g = g[g.pool_x.eq(pool_x) & g["shape"].eq(shape)]
-    conv = (
-        with_config(g)
-        .groupby(["memory_mode", "config", "memory_target", "dtype", "n", "k", "m", "working_set_bytes"])
+    g = _gemm_frame(ext, ["gemm_converged"])
+    g = g[g["shape"].eq(shape)]
+    g = with_config(g.assign(layout=_layout(g.source_file, g["dtype"])))
+    keys = ["memory_mode", "config", "memory_target", "dtype", "layout", "n", "k", "m", "working_set_bytes"]
+    out = (
+        g.groupby(keys)
         .agg(
             gops=("performance_gops", "median"),
             gbs=("bandwidth_gbs", "median"),
+            counted_gbs=("counted_gbs", "median"),
             intensity=("arithmetic_intensity", "median"),
             cv_percent=("performance_gops", _cv),
             n_samples=("accepted", "size"),
@@ -306,10 +312,48 @@ def headline_gemm_points(ext: pd.DataFrame, shape: str = "14336x4096", pool_x: i
         )
         .reset_index()
     )
-    conv["pool_gib"] = conv.working_set_bytes / 2**30
-    conv["shape"] = shape
-    conv["pool_x"] = conv.working_set_bytes / ONCHIP_BYTES
-    conv["status"] = "converged pool"
+    out["pool_gib"] = out.working_set_bytes / 2**30
+    out["shape"] = shape
+    out["pool_x"] = out.working_set_bytes / ONCHIP_BYTES
+    out["status"] = "converged pool"
+    return out
+
+
+def headline_gemm_points(ext: pd.DataFrame, shape: str = "14336x4096", pool_x: int = 64) -> pd.DataFrame:
+    """One Flat GEMM shape over M for the headline: converged-pool points where they exist.
+
+    The converged M-sweep (``gemmconv``, plain BF16 and INT8) replaces the first sweep at every
+    batch size it measured (M = 1 to 256).  Without it, the pool-size sweep (``gemm_pool``,
+    ``pool_x`` times the on-chip capacity) replaces the first sweep at M = 1, 16 and 256.  Every
+    other M comes from the first sweep and keeps its ``status``, so a small-pool point at M <= 32
+    can be drawn hollow and left out of the ceiling audit.  Same columns as ``gemm_points``.
+    """
+
+    first = gemm_points(ext)
+    first = first[first.memory_mode.eq("flat") & first["shape"].eq(shape)]
+    conv = converged_sweep(ext, shape)
+    conv = conv[conv.layout.eq("plain") | conv["dtype"].eq("int8")].drop(columns=["layout", "counted_gbs"])
+    if conv.empty:
+        g = _gemm_frame(ext, ["gemm_pool"])
+        g = g[g.pool_x.eq(pool_x) & g["shape"].eq(shape)]
+        conv = (
+            with_config(g)
+            .groupby(["memory_mode", "config", "memory_target", "dtype", "n", "k", "m", "working_set_bytes"])
+            .agg(
+                gops=("performance_gops", "median"),
+                gbs=("bandwidth_gbs", "median"),
+                intensity=("arithmetic_intensity", "median"),
+                cv_percent=("performance_gops", _cv),
+                n_samples=("accepted", "size"),
+                campaign_id=("campaign_id", _ids),
+                node=("node", "first"),
+            )
+            .reset_index()
+        )
+        conv["pool_gib"] = conv.working_set_bytes / 2**30
+        conv["shape"] = shape
+        conv["pool_x"] = conv.working_set_bytes / ONCHIP_BYTES
+        conv["status"] = "converged pool"
     have = set(zip(conv.memory_target, conv["dtype"], conv.m))
     keep = [(t, d, m) not in have for t, d, m in zip(first.memory_target, first["dtype"], first.m)]
     out = pd.concat([conv, first[keep]], ignore_index=True)
@@ -1189,11 +1233,18 @@ def decode_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, shape:
             dict(tier=tier_name[r.memory_target], precision=r.dtype, layout="plain" if r.dtype == "bf16" else "prepacked",
                  pool="64× on-chip", gbs=r.modeled_gbs, counted_gbs=r.counted_gbs, read_gbs=read[tier_name[r.memory_target]])
         )
-    pk = _gemm_frame(ext, ["gemm_prepacked"])
-    pk = pk[pk["shape"].eq(shape) & pk.m.eq(1)].groupby("memory_target").agg(gbs=("bandwidth_gbs", "median"), counted=("counted_gbs", "median"))
+    # Prepacked BF16: the converged sweep (16x) when it ran, else the 4x pool of gemmvalid.
+    cs = converged_sweep(ext, shape)
+    cs = cs[cs.layout.eq("prepacked") & cs["dtype"].eq("bf16") & cs.m.eq(1)]
+    if len(cs):
+        pk, pool_text = cs.set_index("memory_target").rename(columns={"counted_gbs": "counted"}), "16× on-chip"
+    else:
+        pk = _gemm_frame(ext, ["gemm_prepacked"])
+        pk = pk[pk["shape"].eq(shape) & pk.m.eq(1)].groupby("memory_target").agg(gbs=("bandwidth_gbs", "median"), counted=("counted_gbs", "median"))
+        pool_text = "4× on-chip (not converged)"
     for tier, r in pk.iterrows():
         rows.append(
-            dict(tier=tier_name[tier], precision="bf16", layout="prepacked", pool="4× on-chip (not converged)", gbs=r.gbs,
+            dict(tier=tier_name[tier], precision="bf16", layout="prepacked", pool=pool_text, gbs=r.gbs,
                  counted_gbs=r.counted, read_gbs=read[tier_name[tier]])
         )
     gm = gemm_points(ext)

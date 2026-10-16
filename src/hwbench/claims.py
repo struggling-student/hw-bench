@@ -717,6 +717,7 @@ def decode_bound(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> lis
     dt = report.decode_table(ext, thesis, theory)
     conv = dt[dt.pool.eq("64× on-chip")].set_index(["tier", "precision"])
     pk = dt[dt.layout.eq("prepacked") & dt.precision.eq("bf16")].set_index("tier")
+    pk_converged = bool(pk.pool.eq("16× on-chip").all())
     pool = report.gemm_pool_table(ext)
     plain4 = pool[pool["shape"].eq("14336x4096") & pool.m.eq(1) & pool.pool_x.eq(4) & pool.dtype.eq("bf16")].set_index("memory_target")
     plain64 = conv.loc[("Flat HBM", "bf16")].gbs
@@ -757,10 +758,17 @@ def decode_bound(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> lis
             f"weight streamed at this rate, Llama-3.1-8B would decode at most {conv.loc[('Flat HBM', 'bf16')].tokens_per_s:.0f} tokens/s per socket in BF16 and "
             f"{conv.loc[('Flat HBM', 'int8')].tokens_per_s:.0f} in INT8 on HBM ({conv.loc[('Flat DDR', 'bf16')].tokens_per_s:.0f} and "
             f"{conv.loc[('Flat DDR', 'int8')].tokens_per_s:.0f} on DDR), against {tokens['hbm']:.0f} from the read ceiling; the 4096×4096 projections stream "
-            f"slower, so the whole model would be slower still. Prepacked BF16 was measured only with a 4× pool: {pk.loc['Flat HBM'].gbs:.0f} GB/s modeled and "
-            f"{pk.loc['Flat HBM'].counted_gbs:.0f} counted on HBM; for plain BF16 the converged value ({plain64:.0f}) lies between the 4× counted "
-            f"({plain4.loc['hbm'].counted_gbs:.0f}) and modeled ({plain4.loc['hbm'].modeled_gbs:.0f}) values, so the converged prepacked value presumably lies between "
-            f"{pk.loc['Flat HBM'].counted_gbs:.0f} and {pk.loc['Flat HBM'].gbs:.0f} GB/s (an extrapolation; the prepared part `gemmconv` measures it).",
+            f"slower, so the whole model would be slower still. "
+            + (
+                f"With the weights prepacked once (converged 16× pool), BF16 streams {pk.loc['Flat HBM'].gbs:.0f} GB/s on HBM "
+                f"({_pct(pk.loc['Flat HBM'].of_read_ceiling)} of the read ceiling, {pk.loc['Flat HBM'].tokens_per_s:.0f} tokens/s) and "
+                f"{pk.loc['Flat DDR'].gbs:.0f} GB/s on DDR ({_pct(pk.loc['Flat DDR'].of_read_ceiling)})."
+                if pk_converged
+                else f"Prepacked BF16 was measured only with a 4× pool: {pk.loc['Flat HBM'].gbs:.0f} GB/s modeled and "
+                f"{pk.loc['Flat HBM'].counted_gbs:.0f} counted on HBM; for plain BF16 the converged value ({plain64:.0f}) lies between the 4× counted "
+                f"({plain4.loc['hbm'].counted_gbs:.0f}) and modeled ({plain4.loc['hbm'].modeled_gbs:.0f}) values, so the converged prepacked value presumably "
+                f"lies between {pk.loc['Flat HBM'].counted_gbs:.0f} and {pk.loc['Flat HBM'].gbs:.0f} GB/s (an extrapolation; the prepared part `gemmconv` measures it)."
+            ),
         ),
     ]
 
@@ -867,6 +875,7 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
     conv64 = pool[pool["shape"].eq("14336x4096") & pool.pool_x.eq(64)].set_index(["memory_target", "dtype", "m"]).modeled_gbs
     bias = (first.reindex(conv64.index) / conv64).dropna()
     small_bias, large_bias = bias[bias.index.get_level_values("m") <= 16], bias[bias.index.get_level_values("m") >= 256]
+    has_conv = not report.converged_sweep(ext).empty
     m256 = pool[pool.m.eq(256)].pivot_table(index=["memory_target", "dtype", "shape"], columns="pool_x", values="gops")
     pool_effect_256 = float(((m256[4] - m256[64]).abs() / m256[64]).max())
     m16 = pool[pool.m.eq(16)].pivot_table(index=["memory_target", "dtype", "shape"], columns="pool_x", values="gops")
@@ -881,7 +890,7 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
     frac_gemv = {t: gemv[t] / ceil[t] for t in gemv}
     frac_no_floor = {t: no_floor[t] / ceil[t] for t in gemv}
     int8_4x = float(pool[pool["shape"].eq("14336x4096") & pool.m.eq(1) & pool.pool_x.eq(4) & pool.memory_target.eq("hbm") & pool["dtype"].eq("int8")].modeled_gbs.iloc[0])
-    return [
+    out = [
         Claim(
             "gemm_fraction_of_tile_peak",
             0.15 < big["bf16"] / tile["bf16"] < 0.6 and 0.15 < big["int8"] / tile["int8"] < 0.6,
@@ -905,16 +914,26 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
             f"The first sweep overstates the weight traffic at small M: against the converged 64× pool its 14336×4096 rate at M=1 is "
             f"{b1[('hbm', 'bf16')] - 1:+.0%} (HBM BF16), {b1[('hbm', 'int8')] - 1:+.0%} (HBM INT8), {b1[('ddr', 'bf16')] - 1:+.0%} (DDR BF16) and "
             f"{b1[('ddr', 'int8')] - 1:+.0%} (DDR INT8), and {small_bias.min() - 1:+.0%} to {small_bias.max() - 1:+.0%} over M = 1 and 16. Its points at "
-            f"M ≤ {report.SMALL_POOL_MAX_M} are therefore drawn hollow and left out of the ceiling audit; where the pool sweep measured a batch size "
-            "(M = 1, 16, 256) the converged point is drawn instead.",
+            + (
+                f"M ≤ {report.SMALL_POOL_MAX_M} are therefore replaced by the converged sweep (part `gemmconv`, a 16× pool, M = 1 to 256) in the "
+                "headline roofline, the GEMM-efficiency figure and the decode table."
+                if has_conv
+                else f"M ≤ {report.SMALL_POOL_MAX_M} are therefore drawn hollow and left out of the ceiling audit; where the pool sweep measured a "
+                "batch size (M = 1, 16, 256) the converged point is drawn instead."
+            ),
         ),
         Claim(
             "pool_insensitive_large_m",
             bool(pool_effect_256 < 0.05 and pool_effect_16 > pool_effect_256),
             f"At M=256 the pool size no longer matters: 4× and 64× pools give the same rate within {_pct(pool_effect_256, 1)} for both shapes, precisions "
             f"and tiers, against up to {_pct(pool_effect_16, 1)} at M=16; the first sweep at M=256 is {large_bias.min() - 1:+.1%} to {large_bias.max() - 1:+.1%} "
-            "from the 64× pool, which the absent pool trend at M=256 attributes to the campaign, not the pool (inferred). M = 64 and 128 were not measured with a larger pool; "
-            "they are kept as first-sweep points (filled), which the prepared part `gemmconv` would replace.",
+            "from the 64× pool, which the absent pool trend at M=256 attributes to the campaign, not the pool (inferred). "
+            + (
+                "Above M = 256 the headline keeps the first sweep's points, which this makes safe to use."
+                if has_conv
+                else "M = 64 and 128 were not measured with a larger pool; they are kept as first-sweep points (filled), which the prepared part "
+                "`gemmconv` would replace."
+            ),
         ),
         Claim(
             "gemm_asymmetry",
@@ -960,6 +979,50 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
                 if same_impl
                 else "The verbose log shows different implementations for neighbouring M."
             ),
+        ),
+    ]
+    return out + converged_sweep(ext, pool, hbm_read, ddr_read, small_bias)
+
+
+def converged_sweep(ext: pd.DataFrame, pool: pd.DataFrame, hbm_read, ddr_read, first_bias: pd.Series) -> list[Claim]:
+    """The converged M-sweep (part ``gemmconv``) against its acceptance criteria (review R1).
+
+    Convergence is judged in counted bytes, the basis of claim ``gemm_pool_convergence``: what the
+    cores' DRAM counters saw against the 64x pool.  A 16x pool still serves a few percent of the
+    weight bytes on chip; that share is reported, and bounded, rather than required to vanish.
+    """
+
+    cs = report.converged_sweep(ext)
+    if cs.empty:
+        return []
+    read = {"hbm": hbm_read.gbs, "ddr": ddr_read.gbs}
+    small = cs[cs.m.le(16)]
+    onchip = 1 - small.counted_gbs / small.gbs
+    p64 = pool[pool["shape"].eq("14336x4096") & pool.pool_x.eq(64) & pool.m.isin([1, 16])].set_index(["memory_target", "dtype", "m"])
+    plain = cs[cs.layout.eq("plain") | cs["dtype"].eq("int8")].set_index(["memory_target", "dtype", "m"])
+    dev_counted = (plain.counted_gbs.reindex(p64.index) / p64.counted_gbs - 1).dropna()
+    dev_modeled = (plain.gbs.reindex(p64.index) / p64.modeled_gbs - 1).dropna()
+    onchip64 = 1 - p64.counted_gbs / p64.modeled_gbs
+    of_read = cs.gbs / cs.memory_target.map(read)
+    excess = of_read > 1 + cs.cv_percent.fillna(0) / 100
+    m1 = cs[cs.m.eq(1)].set_index(["memory_target", "dtype", "layout"]).gbs
+    bf = cs[cs["dtype"].eq("bf16")].pivot_table(index=["memory_target", "m"], columns="layout", values="gops")
+    speed = (bf["prepacked"] / bf["plain"]).dropna()
+    return [
+        Claim(
+            "gemm_converged_sweep",
+            bool(dev_counted.abs().max() < 0.03 and onchip.between(0, 0.05).all() and not excess.any()),
+            f"The converged sweep (part `gemmconv`: 14336×4096, M = 1 to 256, a pool of 16× the on-chip capacity, {len(cs)} configurations) "
+            f"agrees with the 64× pool in counted bytes within {_pct(float(dev_counted.abs().max()), 1)} at M = 1 and 16, and no point streams above "
+            f"the read ceiling of its tier (highest {_pct(float(of_read.max()))}). The 16× pool is not fully converged: at M ≤ 16 the cores' DRAM "
+            f"counters see {_pct(float(1 - onchip.max()), 1)}–{_pct(float(1 - onchip.min()), 1)} of the modeled bytes, so {_pct(float(onchip.min()), 1)}–"
+            f"{_pct(float(onchip.max()), 1)} of the weights are still served on chip (64× pool: {_pct(float(max(onchip64.min(), 0)), 1)}–"
+            f"{_pct(float(onchip64.max()), 1)}). Its modeled rates at small M are therefore that much high (against the 64× pool, modeled differs by "
+            f"{_pct(float(dev_modeled.min()), 1)} to {_pct(float(dev_modeled.max()), 1)}), as are its modeled intensities; the bias the first sweep "
+            f"carried at M = 1 and 16 was {_pct(float(first_bias.min()) - 1)}–{_pct(float(first_bias.max()) - 1)}. At M = 1 on HBM plain BF16 streams {m1[('hbm', 'bf16', 'plain')]:.0f} GB/s, prepacked BF16 "
+            f"{m1[('hbm', 'bf16', 'prepacked')]:.0f} and INT8 {m1[('hbm', 'int8', 'prepacked')]:.0f} (DDR {m1[('ddr', 'bf16', 'plain')]:.0f}, "
+            f"{m1[('ddr', 'bf16', 'prepacked')]:.0f}, {m1[('ddr', 'int8', 'prepacked')]:.0f}), modeled. Prepacking the BF16 weights is "
+            f"{speed.min():.2f}–{speed.max():.2f}× the plain rate over M = 1 to 256.",
         ),
     ]
 

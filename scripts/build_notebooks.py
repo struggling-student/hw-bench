@@ -118,7 +118,7 @@ say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_f
     md("""
 ## 4. The headline roofline: one socket, Flat mode
 
-Memory slopes are the read-only ceilings, because GEMM weights are only read. The dotted line is the best rate a library GEMM achieved (not a hardware limit). Points are the BF16 14336×4096 projection for batch sizes M = 1 to 4096, on HBM and on DDR; intensity is modeled. At M = 1, 16 and 256 the points come from the converged weight pool (64× the on-chip capacity); the other batch sizes come from the first sweep, whose pool was about twice the on-chip capacity, and its points at M ≤ 32 are drawn **hollow** because that pool overstates their weight traffic. Hollow points are not audited against the ceilings. The shaded bands are decode (small M) and prefill (large M).
+Memory slopes are the read-only ceilings, because GEMM weights are only read. The dotted line is the best rate a library GEMM achieved (not a hardware limit). Points are the BF16 14336×4096 projection for batch sizes M = 1 to 4096, on HBM and on DDR; intensity is modeled. From M = 1 to 256 the points come from the converged sweep (a weight pool of 16× the on-chip capacity, part `gemmconv`; convergence is judged in counted bytes, and 2–3% of the weights are still served on chip at small M, so those modeled rates are that much high); above M = 256 they come from the first sweep, whose small pool no longer matters at those batch sizes. Every point is audited against its ceiling. The shaded bands are decode (small M) and prefill (large M).
 
 **Table 2 — ridge points** (operations per byte at which each path stops being memory-bound), against the read-only ceiling of each tier, the same ceiling as the roofline above and the decode bound; Cache mode is read at 16 GiB.
 """),
@@ -138,10 +138,13 @@ fig = plotting.roofline_figure(compute, mem_read, pts, title='Roofline · Flat �
 figure(fig, 'headline_roofline')
 audit = roofline.audit_points(pts, mem_read, compute)
 filled = audit[~audit.unconverged]
-say(f"**Result.** {int(filled.exceeds.sum())} of the {len(filled)} filled points lie above their roofline by more than their spread "
-    f"(highest at {filled.ratio.max():.0%} of its bound); the {int(audit.unconverged.sum())} hollow points are not audited (the full audit is in the [atlas](05_roofline_atlas.ipynb)). "
+hollow = int(audit.unconverged.sum())
+say(f"**Result.** {int(filled.exceeds.sum())} of the {len(filled)} {'filled ' if hollow else ''}points lie above their roofline by more than their spread "
+    f"(highest at {filled.ratio.max():.0%} of its bound)"
+    + (f"; the {hollow} hollow points are not audited" if hollow else "")
+    + f"; the full audit is in the [atlas](05_roofline_atlas.ipynb). "
     f"The best library rate is {compute[-1].gops/1000:.0f} TOP/s, {compute[-1].gops/compute[1].gops:.0%} of the measured AMX BF16 peak.")
-say_claims(claims.gemm(ext, thesis, theory, ROOT), ['first_sweep_small_m_bias', 'pool_insensitive_large_m'])
+say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_converged_sweep', 'first_sweep_small_m_bias', 'pool_insensitive_large_m'])
 say_claims(claims.ridges(ext, thesis, theory), ['ridge_points'])
 table(report.ridge_table(ext, thesis), 1)
 """),
@@ -152,7 +155,7 @@ table(report.ridge_table(ext, thesis), 1)
 say_claims(claims.decode_bound(ext, thesis, theory), ['decode_bound', 'decode_far_below_ridge'])
 """),
     md("""
-**Table 5 — what a decode step streams.** The 14336×4096 projection at M = 1 against the read ceiling of its tier. Flat rows come from the converged pool (64× the on-chip capacity; counted bytes beside modeled), except prepacked BF16, which was measured only with a 4× pool; Cache rows come from the first sweep, whose 16 and 96 GiB pools are far beyond the on-chip capacity. *Tokens/s* is the Llama-3.1-8B bound if every weight streamed at this rate (8.03 billion weights, 2 bytes in BF16, 1 in INT8; read-only rows use BF16). It is optimistic for the whole model: the 4096×4096 projections stream slower.
+**Table 5 — what a decode step streams.** The 14336×4096 projection at M = 1 against the read ceiling of its tier. Flat rows come from converged pools, with counted bytes beside modeled: plain BF16 and INT8 from the 64× pool sweep, prepacked BF16 from the converged M-sweep (16×); Cache rows come from the first sweep, whose 16 and 96 GiB pools are far beyond the on-chip capacity. *Tokens/s* is the Llama-3.1-8B bound if every weight streamed at this rate (8.03 billion weights, 2 bytes in BF16, 1 in INT8; read-only rows use BF16). It is optimistic for the whole model: the 4096×4096 projections stream slower.
 """),
     code("""
 dt = report.decode_table(ext, thesis, theory)
@@ -162,7 +165,7 @@ say_claims(claims.decode_bound(ext, thesis, theory), ['decode_achieved'])
     md("""
 ## 5. GEMM efficiency against batch size
 
-Two panels share the M axis: the share of the measured tile peak reached, and the share of the read-bandwidth ceiling that the modeled bytes imply. The points are the same as in the headline roofline (converged pool at M = 1, 16, 256; hollow: first sweep at M ≤ 32 with a pool too small).
+Two panels share the M axis: the share of the measured tile peak reached, and the share of the read-bandwidth ceiling that the modeled bytes imply. The points are the same as in the headline roofline (converged sweep up to M = 256, first sweep above).
 """),
     code("""
 sweeps = {}
@@ -728,7 +731,7 @@ table(gm.groupby(['config', 'dtype', 'memory_target']).agg(best_TOPs=('gops', la
 """),
     code("""
 sel = gm[(gm.memory_target == 'hbm') & (gm.dtype == 'bf16')]
-raw = ext[(ext.benchmark == 'onednn_gemm_sweep') & (ext.memory_mode == 'flat') & (ext.memory_target == 'hbm') & (ext.dtype == 'bf16')].copy()
+raw = ext[(ext.benchmark == 'onednn_gemm_sweep') & (ext.notes == 'gemm_sweep') & (ext.memory_mode == 'flat') & (ext.memory_target == 'hbm') & (ext.dtype == 'bf16')].copy()
 raw['shape'] = raw.n.astype(int).astype(str) + 'x' + raw.k.astype(int).astype(str)
 fig = plotting.go.Figure()
 for shape, part in sel.groupby('shape'):
@@ -746,7 +749,7 @@ figure(fig, 'gemm_bf16_m_sweep')
 """),
     code("""
 sel = gm[(gm.memory_target == 'hbm') & (gm.dtype == 'int8')]
-raw = ext[(ext.benchmark == 'onednn_gemm_sweep') & (ext.memory_mode == 'flat') & (ext.memory_target == 'hbm') & (ext.dtype == 'int8')].copy()
+raw = ext[(ext.benchmark == 'onednn_gemm_sweep') & (ext.notes == 'gemm_sweep') & (ext.memory_mode == 'flat') & (ext.memory_target == 'hbm') & (ext.dtype == 'int8')].copy()
 raw['shape'] = raw.n.astype(int).astype(str) + 'x' + raw.k.astype(int).astype(str)
 fig = plotting.go.Figure()
 for shape, part in sel.groupby('shape'):
@@ -796,6 +799,15 @@ fig = plotting.gemm_prepacked_figure(pk)
 figure(fig, 'gemm_prepacked')
 table(pk, 2)
 say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_pool_convergence', 'gemm_asymmetry', 'gemv_prepacked_bandwidth', 'gemm_call_floor'])
+"""),
+    md("""
+**The converged M-sweep.** The headline projection repeated from M = 1 to 256 with a pool of 16× the on-chip capacity, for plain BF16, prepacked BF16 and INT8, with the cores' DRAM counters on. It replaces the first sweep wherever that sweep's pool was too small. Convergence is judged in counted bytes against the 64× pool; the counters also show the share of the weights a 16× pool still serves on chip.
+"""),
+    code("""
+cs = report.converged_sweep(ext)
+cs['of_read_ceiling'] = cs.gbs / cs.memory_target.map({t: report.memory_ceiling(ext, thesis, 'flat', t, access='read').gbs for t in ('hbm', 'ddr')})
+table(cs[['memory_target', 'dtype', 'layout', 'm', 'gops', 'gbs', 'counted_gbs', 'of_read_ceiling', 'cv_percent']], 2)
+say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_converged_sweep'])
 """),
     md("""
 At decode batch sizes the fixed cost of a call dominates small matrices but explains only a small part of the gap between the large projection and the HBM read ceiling; most of that gap is inside the library's GEMV, and it is specific to HBM (claim `gemm_call_floor`). The pool and the weight layout, not the memory system, set most of the earlier gap between the 4096² and 14336×4096 shapes and between BF16 and INT8. The 4096² shape and the first sweep's modeled bandwidths should not be read as HBM or DDR bandwidth.
@@ -883,7 +895,7 @@ say_claims(claims.fp64_sweep(ext, thesis, theory))
     md("""
 ## 5. Achieved points: BF16 and INT8 GEMM
 
-Each point is one (shape, M) pair of the first sweep. Intensity rises with M because the same weights are reused for more tokens; the point leaves the memory slope when the GEMM becomes compute-limited. The first sweep's pool was about twice the on-chip capacity, so its points at M ≤ 32 are drawn **hollow** (weight traffic overstated); the converged 64× pool points of 14336×4096 and 4096×4096 (M = 1, 16, 256) are drawn as their own series.
+Each point is one (shape, M) pair of the first sweep. Intensity rises with M because the same weights are reused for more tokens; the point leaves the memory slope when the GEMM becomes compute-limited. The first sweep's pool was about twice the on-chip capacity, so its points at M ≤ 32 are drawn **hollow** (weight traffic overstated); the converged sweep of 14336×4096 (16× pool, M = 1 to 256) and the 64× pool points of 4096×4096 (M = 1, 16, 256) are drawn as their own series.
 """),
     code("""
 gm = report.gemm_points(ext)
@@ -891,9 +903,12 @@ mem_read = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', access='read'), re
 for dtype, path in [('bf16', 'amx_bf16'), ('int8', 'amx_int8')]:
     sel = gm[(gm.memory_mode == 'flat') & (gm.dtype == dtype)]
     pts = report.gemm_workload_points(sel, theory)
-    conv = [p for p in report.gemm_pool_points(ext, 64) if p.precision == dtype]
-    for shape in ('4096x4096',):
-        conv += [p for p in report.gemm_pool_points(ext, 64, shape) if p.precision == dtype]
+    sweep = report.converged_sweep(ext)
+    conv = report.gemm_workload_points(sweep[(sweep.dtype == dtype) & ((sweep.layout == 'plain') | (sweep.dtype == 'int8'))], theory)
+    for q in conv:
+        q.provenance['series'] = '14336x4096 · converged sweep (16× pool)'
+    conv += [p for p in report.gemm_pool_points(ext, 64, '4096x4096') if p.precision == dtype]
+    audits.append(roofline.audit_points(conv, mem_read, [report.compute_ceiling(ext, path, 'flat', 56)]).assign(group=f'{dtype.upper()} GEMM · Flat · converged pools · read-only ceiling'))
     cs = [report.compute_ceiling(ext, path, 'flat', 56), report.theoretical_ceiling(theory, path, 56)]
     if dtype == 'bf16':
         cs.append(report.compute_ceiling(ext, 'avx512_bf16', 'flat', 56))

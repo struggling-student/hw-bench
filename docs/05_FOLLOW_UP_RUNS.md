@@ -4,10 +4,10 @@
 campaigns are committed (`data/raw`, listed under `extended_campaigns` in
 `configs/analysis.json`); notebooks 01–05 carry the results and
 [the status report](STATUS_2026-10-12.md) lists the outcomes. The text below is the original
-plan and is kept for the run recipe. One part is prepared and **not yet run**: `gemmconv`
-(next section).
+plan and is kept for the run recipe. The part `gemmconv` of the 2026-10-16 review ran on
+2026-10-16 (next section).
 
-## Prepared, not run: `gemmconv` (review of 2026-10-16, item R1)
+## `gemmconv` (review of 2026-10-16, item R1): ran 2026-10-16
 
 The headline roofline, the GEMM-efficiency figure and the decode table need the 14336×4096
 projection over the decode-to-prefill range with a converged weight pool; the first GEMM sweep
@@ -20,12 +20,19 @@ by 10–25% (claim `first_sweep_small_m_bias`).
 
 ```bash
 .venv/bin/python scripts/run_campaign.py flat /tmp/unused --only gemmconv --dry-run
-scripts/submit_cresco8.sh flat gemmconv   # only when authorised; run smoke first
+scripts/submit_cresco8.sh flat gemmconv
 ```
 
-After it is fetched and listed under `extended_campaigns`, `report.headline_gemm_points` should
-take its points for every M ≤ 256 in place of the first sweep (the analysis does not yet read the
-label `gemm_converged`).
+**Outcome.** Campaign `flat-gemmconv-20261016T111248Z` on `cresco8-hbm14`, 54 records, all valid,
+listed under `extended_campaigns`. No point streams above its read ceiling. Two criteria as first
+written were not met: counted over modeled bytes at M ≤ 16 is 0.967–0.982 (not ≥ 0.97 everywhere),
+and DDR INT8 at M = 1 and 16 is 3.7% and 3.3% above the modeled 64× pool (not within 3%). The
+counters explain both: a 16× pool still serves 1.8–3.3% of the weights on chip (64× pool:
+0–1.6%). Convergence was therefore judged in counted bytes, the basis of claim
+`gemm_pool_convergence`: the sweep agrees with the 64× pool within 2.9% in counted bytes. The
+residual on-chip share, and the fact that the modeled rates and intensities at small M are that
+much high, are stated in claim `gemm_converged_sweep`. `report.headline_gemm_points` takes the
+sweep for every M ≤ 256, `report.decode_table` takes its prepacked BF16 row.
 
 ## Original plan of 2026-10-12 (all ran)
 
