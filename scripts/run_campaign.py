@@ -26,6 +26,10 @@ copy         copy kernel (one load, one store per element): the ceiling of the
              intensity sweep, with Triad and the sweep at K=1 in the same launch
 gemmconv     (flat) the 14336x4096 GEMM M-sweep (M = 1..256) with a converged weight pool
              (16x the on-chip capacity): BF16 plain, BF16 prepacked and INT8, HBM and DDR
+flatfar      (flat) idle latency of a one-core chase at 16-128 GiB on DDR and 16-48 GiB on HBM:
+             the translation control for the Cache-mode far latency (review item R2)
+loadedlat    (flat) loaded latency: one chasing core beside N cores streaming the same tier,
+             in one synchronized window (review item R3)
 smoke        a few seconds of every kernel; proves build and counters, not a result
 
 memory, compute, sweep, memory-sweep, concurrency, all
@@ -71,6 +75,8 @@ NEW_PARTS = [
     "counted",
     "copy",
     "gemmconv",
+    "flatfar",
+    "loadedlat",
 ]
 
 THREAD_STEPS = [1, 2, 4, 8, 14, 28, 56]
@@ -97,6 +103,9 @@ REMOTE_THREADS = [1, 4, 14, 28, 56]
 CACHEFILL_GIB = [24, 32, 40, 48, 56]
 CACHEFILL_TRIAD_GIB = [24, 40, 56]  # Triad already has 16, 32, 48, 64, 96, 128
 LATENCY_FAR_GIB = [16, 32, 64, 96, 128]
+FLATFAR_HBM_GIB = [16, 32, 48]  # HBM holds 64 GiB per socket
+LOADED_STREAM_CORES = [1, 4, 14, 28, 55]  # cores streaming beside the chasing core (core 0)
+LOADED_CHASE_BYTES = GIB  # the October idle-latency working set
 SWEEP_K = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
 
 
@@ -918,6 +927,31 @@ def main():
         for t in (1, 56):
             for c in (6, 12, 24):
                 execute(spec(0, "avx512bf16", t, label=f"chains_bf16_c{c}", chains=c))
+
+    # ----------------------------------------------------------------- flatfar
+    if part == "flatfar":
+        if args.mode != "flat":
+            raise SystemExit("flatfar is a Flat-mode part")
+        # Same chase as hier_latency_far, but on Flat memory: any latency that still rises
+        # here is address translation, not a miss of the memory-side cache.
+        for gib in LATENCY_FAR_GIB:
+            execute(spec(0, "latency", 1, "ddr", gib=gib, label="flat_latency_far"))
+        for gib in FLATFAR_HBM_GIB:
+            execute(spec(0, "latency", 1, "hbm", gib=gib, label="flat_latency_far"))
+
+    # --------------------------------------------------------------- loadedlat
+    if part == "loadedlat":
+        if args.mode != "flat":
+            raise SystemExit("loadedlat is a Flat-mode part")
+        for target in targets:
+            # Idle control in the same launch, then the chase beside N streaming cores.
+            execute(spec(0, "latency", 1, target, bytes=LOADED_CHASE_BYTES, label="loaded_latency_idle"))
+            for n in LOADED_STREAM_CORES:
+                chase = spec(0, "latency", 1, target, bytes=LOADED_CHASE_BYTES, scope="concurrent_tier_component", label=f"loaded_latency_n{n}")
+                load = spec(0, "read", n, target, gib=8, scope="concurrent_tier_component", label=f"loaded_stream_n{n}")
+                load["cpus"] = sockets[0]["logical_cpus"][1 : 1 + n]
+                execute(dict(load, scope="single", label=f"loaded_stream_control_n{n}"))
+                pair([chase, load], f"loaded-{target}-n{n}")
 
     # ----------------------------------------------------------------- sweep12
     if part == "sweep12":

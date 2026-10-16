@@ -38,6 +38,8 @@ def test_dry_run_writes_nothing():
         ("flat", "copy", 10),
         ("cache", "copy", 5),
         ("flat", "gemmconv", 54),
+        ("flat", "flatfar", 8),
+        ("flat", "loadedlat", 32),
     ],
 )
 def test_part_sizes_and_unique_record_names(mode, part, count):
@@ -46,7 +48,7 @@ def test_part_sizes_and_unique_record_names(mode, part, count):
     assert len(set(names)) == len(names)
 
 
-@pytest.mark.parametrize("part", ["gemmvalid", "remotehbm", "chains", "sweep12", "gemmconv"])
+@pytest.mark.parametrize("part", ["gemmvalid", "remotehbm", "chains", "sweep12", "gemmconv", "flatfar", "loadedlat"])
 def test_flat_only_parts_refuse_cache_mode(part):
     result = subprocess.run(
         [sys.executable, str(ROOT / "scripts/run_campaign.py"), "cache", str(ROOT / "build/never-created"), "--only", part, "--dry-run"],
@@ -113,3 +115,11 @@ def test_gemmconv_repeats_the_headline_sweep_with_a_converged_pool():
         tiered = [n for n in names if f"-{tier}-" in n]
         assert sum("bf16" in n and "prepacked" not in n for n in tiered) == 9
         assert sum("prepacked" in n for n in tiered) == 9 and sum("int8" in n for n in tiered) == 9
+
+
+def test_loadedlat_pairs_one_chasing_core_with_streaming_cores_on_other_cores():
+    _, names = plan("flat", "loadedlat")
+    chase = [n for n in names if n.split()[-1].startswith("loaded_latency_n")]
+    load = [n for n in names if n.split()[-1].startswith("loaded_stream_n")]
+    assert len(chase) == len(load) == 10 and all("-t1-" in n for n in chase)
+    assert sum("loaded_latency_idle" in n for n in names) == 2  # one idle control per tier
