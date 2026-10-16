@@ -85,7 +85,4 @@ latency.
 
 **Decisions that are yours**: pushing `develop`; merging it into `main`; removing stray cluster
 directories from earlier mistyped submissions; whether to carry the data pattern into the thesis text
-where the HBM read ceiling is quoted (random data 527 GB/s, constants 576, [STREAMGAP.md](STREAMGAP.md));
-and whether to rebuild the notebooks with the updated Triad text: claim `literature_agreement`
-(`src/hwbench/claims.py`, asserted by `tests/test_literature.py`) and notebook 01 still say the
-cause "was not tested", which the investigation has since answered.
+where the HBM read ceiling is quoted (random data 527 GB/s, constants 576, [STREAMGAP.md](STREAMGAP.md)).
