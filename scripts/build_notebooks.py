@@ -120,7 +120,7 @@ say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_f
 
 Memory slopes are the read-only ceilings, because GEMM weights are only read. The dotted line is the best rate a library GEMM achieved (not a hardware limit). Points are the BF16 14336×4096 projection for batch sizes M = 1 to 4096, on HBM and on DDR; intensity is modeled. At M = 1, 16 and 256 the points come from the converged weight pool (64× the on-chip capacity); the other batch sizes come from the first sweep, whose pool was about twice the on-chip capacity, and its points at M ≤ 32 are drawn **hollow** because that pool overstates their weight traffic. Hollow points are not audited against the ceilings. The shaded bands are decode (small M) and prefill (large M).
 
-**Table 2 — ridge points** (operations per byte at which each path stops being memory-bound).
+**Table 2 — ridge points** (operations per byte at which each path stops being memory-bound), against the read-only ceiling of each tier, the same ceiling as the roofline above and the decode bound; Cache mode is read at 16 GiB.
 """),
     code("""
 gm = report.gemm_points(ext)
@@ -809,7 +809,7 @@ NOTEBOOKS["05_roofline_atlas"] = [
 
 **Question.** Where do the measured compute and bandwidth ceilings meet for each precision and memory configuration, and where do achieved kernels sit relative to them?
 
-Line style tells the origin of a ceiling: **dashed** = theoretical (vendor or derived), **solid** = best measured by a dedicated kernel, **dotted** = what a library kernel (oneDNN GEMM) achieved. Memory slopes use the best sustained of Triad, non-temporal Triad and read-only (ERT convention) unless a figure says otherwise: the GEMM figures use the read-only ceiling (weights are only read) and the FP64 sweep uses the best read/write kernel (it loads one array and stores another). Bytes are modeled, so these are empirical envelopes, not counter-based bounds. Section 6 lists every point that lies above its own roofline.
+Line style tells the origin of a ceiling: **dashed** = theoretical (vendor or derived), **solid** = best measured by a dedicated kernel, **dotted** = what a library kernel (oneDNN GEMM) achieved. Each memory ceiling has one purpose. Sections 1 and 3 draw the **ERT reference envelope**: the best sustained rate of every kernel (read-only, Triad, non-temporal Triad, copy), which on Flat HBM is copy. Every LLM statement uses the **read-only** ceiling (weights are only read): the GEMM figures here, the headline roofline, Table 2 and the decode bound of the master notebook. The FP64 sweep uses the **copy** ceiling (it loads one array and stores another), and Cache mode is read at a stated working set. Bytes are modeled, so these are empirical envelopes, not counter-based bounds. Section 6 lists every point that lies above its own roofline.
 """),
     code(setup("05_roofline_atlas")),
     code("""
@@ -826,12 +826,12 @@ def theory_set(paths, scope, cores):
     code("""
 mem = [report.memory_ceiling(ext, thesis, 'flat', 'hbm'), report.memory_ceiling(ext, thesis, 'flat', 'ddr')]
 fig = plotting.roofline_figure(theory_set(['fp64', 'amx_bf16', 'amx_int8'], '1S', 56) + compute_set('flat', '1S', 56), mem,
-                               title='Flat · one socket · measured ceilings (solid) and vendor peaks (dashed)')
+                               title='Flat · one socket · ERT envelope (best kernel) and vendor peaks (dashed)')
 figure(fig, 'atlas_flat_1s')
 table(pd.DataFrame([dict(memory=f'{m.tier} ({m.kernel})', GBs=m.gbs, **{p: roofline.ridge(c.gops, m.gbs) for p, c in zip(PATHS, compute_set('flat', '1S', 56))}) for m in mem]))
 """),
     md("""
-The table gives the **ridge** (operations per byte) at which each path stops being memory-bound. Higher-throughput paths need proportionally more reuse; the ridge values for HBM and DDR are stated below.
+The table gives the **ridge** (operations per byte) of the ERT envelope, at which each path stops being memory-bound. Higher-throughput paths need proportionally more reuse. The ridges quoted for LLM work (master Table 2, below) use the read-only ceiling instead.
 """),
     code("""
 say_claims(claims.ridges(ext, thesis, theory), ['ridge_points'])
@@ -840,7 +840,7 @@ say_claims(claims.ridges(ext, thesis, theory), ['ridge_points'])
 ## 2. Cache mode, one socket
 """),
     code("""
-resident = report.memory_ceiling(ext, thesis, 'cache', 'effective_cache', resident_gib=16)
+resident = report.memory_ceiling(ext, thesis, 'cache', 'effective_cache', access='read', at_gib=16)
 spilled = report.memory_ceiling(ext, thesis, 'cache', 'effective_cache', at_gib=96)
 fig = plotting.roofline_figure(theory_set(['amx_bf16', 'amx_int8'], '1S', 56) + compute_set('cache', '1S', 56), [resident, spilled],
                                title='Cache · one socket · data resident in HBM (16 GiB) and spilled to DDR (96 GiB)')
@@ -858,7 +858,7 @@ Every ridge moves right by the ratio of the two slopes. The 16 GiB line is the c
     code("""
 mem2 = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', '2S'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', '2S')]
 fig = plotting.roofline_figure(theory_set(['fp64', 'amx_bf16', 'amx_int8'], '2S', 56) + compute_set('flat', '2S', 56), mem2,
-                               title='Flat · both sockets (two timed processes) · measured and vendor ceilings')
+                               title='Flat · both sockets (two timed processes) · ERT envelope and vendor ceilings')
 figure(fig, 'atlas_flat_2s')
 """),
     code("""

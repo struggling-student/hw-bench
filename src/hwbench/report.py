@@ -453,12 +453,14 @@ def theoretical_ceiling(theory: Theory, path: str, cores: int = 56, scope: str =
     )
 
 
-#: Kernel sets for workload-matched ceilings: ``best`` is the ERT convention, ``read``
-#: matches read-only streams (weights in decode), ``readwrite`` matches kernels that also
-#: write (Triad, two loads per store), and ``copy`` matches one load per store, the pattern
-#: of the intensity sweep at low intensity.
+#: Kernel sets, one per purpose.  ``read`` matches read-only streams (weights in decode) and is
+#: the ceiling of every LLM statement: the headline roofline, the ridge table (T2), the decode
+#: bound and the GEMM audit.  ``copy`` matches one load per store, the pattern of the intensity
+#: sweep at low intensity, ``readwrite`` its stand-in where copy was not measured.  ``best`` is
+#: the ERT reference envelope of the atlas: the best sustained rate of every kernel, copy included
+#: (on Flat HBM copy is the fastest pattern measured).
 ACCESS_KERNELS = {
-    "best": {"read", "triad", "triad_nt"},
+    "best": {"read", "triad", "triad_nt", "copy", "copy_nt"},
     "read": {"read"},
     "readwrite": {"triad", "triad_nt"},
     "copy": {"copy", "copy_nt"},
@@ -494,7 +496,7 @@ def memory_ceiling(
 
     from hwbench.roofline import MemoryCeiling
 
-    table = bandwidth_summary(ext, thesis, copy=access == "copy")
+    table = bandwidth_summary(ext, thesis, copy=access in ("copy", "best"))
     table = table[table.memory_mode.eq(mode) & table.locality.eq("local")]
     table = table[table.socket_scope.eq("dual" if scope == "2S" else "single")]
     table = table[table.kernel.isin(ACCESS_KERNELS[access])]
@@ -821,14 +823,18 @@ def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> p
 
 
 def ridge_table(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
-    """T2: ridge point (operations per byte) of each compute path on each tier, one socket."""
+    """T2: ridge point (operations per byte) of each compute path on each tier, one socket.
+
+    Every column uses the read-only ceiling, the one the headline roofline and the decode bound
+    use; Cache mode is read at 16 GiB (the weights of an 8B BF16 model), not at the best working set.
+    """
 
     from hwbench.roofline import ridge as _ridge
 
     tiers = {
-        "HBM": memory_ceiling(ext, thesis, "flat", "hbm"),
-        "DDR": memory_ceiling(ext, thesis, "flat", "ddr"),
-        "Cache, 16 GiB": memory_ceiling(ext, thesis, "cache", "effective_cache", resident_gib=16),
+        "HBM read": memory_ceiling(ext, thesis, "flat", "hbm", access="read"),
+        "DDR read": memory_ceiling(ext, thesis, "flat", "ddr", access="read"),
+        "Cache read at 16 GiB": memory_ceiling(ext, thesis, "cache", "effective_cache", access="read", at_gib=16),
     }
     rows = []
     for key, label in [("fp64", "AVX-512 FP64"), ("fp32", "AVX-512 FP32"), ("avx512_bf16", "AVX-512 BF16"), ("vnni_int8", "VNNI INT8"), ("amx_bf16", "AMX BF16"), ("amx_int8", "AMX INT8")]:

@@ -642,14 +642,15 @@ def span(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
 def ridges(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Claim]:
     from hwbench.roofline import ridge
 
-    hbm = report.memory_ceiling(ext, thesis, "flat", "hbm")
-    ddr = report.memory_ceiling(ext, thesis, "flat", "ddr")
+    hbm = report.memory_ceiling(ext, thesis, "flat", "hbm", access="read")
+    ddr = report.memory_ceiling(ext, thesis, "flat", "ddr", access="read")
+    ert = report.memory_ceiling(ext, thesis, "flat", "hbm", access="best")
     c = {p: report.compute_ceiling(ext, p, "flat", 56) for p in ("fp64", "amx_bf16", "amx_int8")}
     two = {
         p: report.compute_ceiling(ext, p, "flat", 56, "2S").gops / c[p].gops for p in ("fp64", "amx_bf16")
     }
-    hbm2 = report.memory_ceiling(ext, thesis, "flat", "hbm", "2S")
-    ddr2 = report.memory_ceiling(ext, thesis, "flat", "ddr", "2S")
+    hbm2 = report.memory_ceiling(ext, thesis, "flat", "hbm", "2S", access="read")
+    ddr2 = report.memory_ceiling(ext, thesis, "flat", "ddr", "2S", access="read")
     r = {(p, n): ridge(c[p].gops, m.gbs) for p in c for n, m in (("hbm", hbm), ("ddr", ddr))}
     ridge_shift = {
         "fp64": (two["fp64"] / (hbm2.gbs / hbm.gbs)),
@@ -658,19 +659,21 @@ def ridges(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Clai
     return [
         Claim(
             "ridge_points",
-            r[("amx_bf16", "hbm")] > 100 and 5 < r[("fp64", "hbm")] < 12,
+            r[("amx_bf16", "hbm")] > 100 and 5 < r[("fp64", "hbm")] < 12 and hbm.kernel == ddr.kernel == "read" and ert.gbs >= hbm.gbs,
             f"On HBM ({hbm.gbs:.0f} GB/s, {hbm.kernel}) the ridge is {r[('fp64', 'hbm')]:.1f} FLOP/B for FP64, "
             f"{r[('amx_bf16', 'hbm')]:.0f} op/B for AMX BF16 and {r[('amx_int8', 'hbm')]:.0f} op/B for AMX INT8; on DDR "
             f"({ddr.gbs:.0f} GB/s, {ddr.kernel}) {r[('fp64', 'ddr')]:.1f}, {r[('amx_bf16', 'ddr')]:.0f} and {r[('amx_int8', 'ddr')]:.0f}. "
-            "Ridge points are order-of-magnitude statements: bytes are modeled and the HBM ceiling is a 56-core figure.",
+            "These are the read-only ceilings, the ones the headline roofline, Table 2 and the decode bound use. Ridge points are "
+            "order-of-magnitude statements: bytes are modeled and the HBM ceiling is a 56-core figure. The ERT reference envelope of the atlas "
+            f"takes the fastest kernel instead ({ert.kernel}, {ert.gbs:.0f} GB/s on HBM), which moves the HBM ridges "
+            f"{1 - hbm.gbs / ert.gbs:.0%} to the left.",
         ),
         Claim(
             "two_sockets_ridge",
             all(abs(v - 1) < 0.05 for v in ridge_shift.values()),
             f"Two sockets multiply the compute ceilings by {two['fp64']:.2f} (FP64) and {two['amx_bf16']:.2f} (AMX BF16) and the "
-            f"HBM bandwidth ceiling by {hbm2.gbs / hbm.gbs:.2f} (DDR {ddr2.gbs / ddr.gbs:.2f}), so HBM ridge points move by "
-            f"{ridge_shift['fp64'] - 1:+.1%} (FP64) and {ridge_shift['amx_bf16'] - 1:+.1%} (AMX BF16): essentially unchanged, "
-            "because socket 1's HBM ceiling is a little higher than socket 0's.",
+            f"HBM read ceiling by {hbm2.gbs / hbm.gbs:.2f} (DDR {ddr2.gbs / ddr.gbs:.2f}), so HBM ridge points move by "
+            f"{ridge_shift['fp64'] - 1:+.1%} (FP64) and {ridge_shift['amx_bf16'] - 1:+.1%} (AMX BF16): essentially unchanged.",
         ),
     ]
 

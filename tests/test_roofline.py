@@ -204,6 +204,7 @@ def test_sweep_ceiling_uses_copy_when_it_was_measured_and_triad_otherwise():
     assert (without.kernel, without.gbs) == ("triad_nt", 554.0)
     with_copy = report.sweep_ceiling(_stream_rows(triad + copy), thesis, "hbm")
     assert (with_copy.kernel, with_copy.gbs) == ("copy", 580.0)
-    # The headline kernels never see the copy rows.
+    # The ERT envelope ("best") includes copy; the headline kernel tables never see the copy rows.
     best = report.memory_ceiling(_stream_rows(triad + copy), thesis, "flat", "hbm", access="best")
-    assert best.kernel == "triad_nt"
+    assert (best.kernel, best.gbs) == ("copy", 580.0)
+    assert not report.bandwidth_summary(_stream_rows(triad + copy), thesis).kernel.str.startswith("copy").any()
