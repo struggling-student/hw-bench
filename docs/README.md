@@ -13,7 +13,9 @@ interpret a CRESCO8 campaign.
 | [Validation appendix](VALIDATION.md) | Preserved failed/superseded runs and the explicit acceptance rules. |
 | [05 — Follow-up runs](05_FOLLOW_UP_RUNS.md) | The cluster runs of review roadmap step 6 (all ran) and the prepared, not yet run, `gemmconv` part of the 2026-10-16 review: what each answers, commands, and how results join the analysis. |
 | [06 — Hardware counters](06_COUNTERS.md) | Which counters work without privileges (instructions, reference cycles, DRAM read and write lines), how they were validated, and what needs an administrator. |
+| [Current status](STATUS.md) | What is finished, running and left, and how to resume after an interruption. Start here when picking the work up. |
 | [Status of the review follow-up](STATUS_2026-10-12.md) | What is done, running and still to do for every finding, roadmap step and gap of the review. |
+| [Scientific review, 2026-10-16](REVIEW_2026-10-16.md) | Second audit: corrections C1–C10, missing evidence M1–M3, runs R1–R3, instrumentation U1–U4. |
 | [Scientific review, 2026-10-12](REVIEW_2026-10-12.md) | Independent audit of the roofline analysis: prioritized findings and the follow-up roadmap. |
 
 `data/raw/` (scrubbed of account-identifying strings by `scripts/scrub_raw.py`),
