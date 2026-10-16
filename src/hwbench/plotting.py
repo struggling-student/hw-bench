@@ -127,6 +127,7 @@ def roofline_figure(
     height: int = 620,
     regions: list[tuple[float, float, str]] | None = None,
     point_labels: bool = False,
+    open_label: str = "hollow: first sweep at M ≤ 32, weight pool too small (bytes overstated)",
 ):
     """Memory slopes, compute plateaus and achieved points on one log-log plane.
 
@@ -209,16 +210,25 @@ def roofline_figure(
     for p in points or []:
         groups.setdefault((p.mode, p.memory_target, p.provenance.get("series", p.isa_path)), []).append(p)
     symbols = {s: SYMBOLS[i % len(SYMBOLS)] for i, s in enumerate(sorted({k[2] for k in groups}))}
+    any_open = False
     for (mode, tier, series), members in groups.items():
         key = config_key(mode or "flat", tier)
         members = sorted(members, key=lambda q: q.intensity)
         labelled = point_labels and all("label" in q.provenance for q in members)
+        # A hollow marker is a point the analysis does not treat as converged (see open_label).
+        hollow = [bool(q.provenance.get("open")) for q in members]
+        any_open |= any(hollow)
         fig.add_scatter(
             x=[q.intensity for q in members],
             y=[q.gops / 1000 for q in members],
             mode="markers+text" if labelled else "markers",
             name=f"{CONFIG_LABELS[key]} · {series}",
-            marker=dict(color=CONFIG_COLORS[key], symbol=symbols[series], size=9, line=dict(color=SURFACE, width=1.5)),
+            marker=dict(
+                color=CONFIG_COLORS[key],
+                symbol=[f"{symbols[series]}-open" if h else symbols[series] for h in hollow],
+                size=9,
+                line=dict(color=[CONFIG_COLORS[key] if h else SURFACE for h in hollow], width=[2 if h else 1.5 for h in hollow]),
+            ),
             text=[q.provenance["label"] if labelled else q.name for q in members],
             textposition="top center",
             textfont=dict(size=11, color=INK_2),
@@ -227,7 +237,12 @@ def roofline_figure(
                 "%{text}<br>%{y:.3f} TOP/s · %{x:.2f} op/B<br>%{customdata[0]} · %{customdata[1]}<extra></extra>"
             ),
         )
-    style(fig, title, "Operations per byte of memory traffic", "TOP/s", height)
+    if any_open:
+        fig.add_scatter(
+            x=[None], y=[None], mode="markers", name=open_label,
+            marker=dict(symbol="circle-open", size=9, color=MUTED, line=dict(color=MUTED, width=2)),
+        )
+    style(fig, title, "Operations per byte of memory traffic (modeled)", "TOP/s", height)
     fig.update_xaxes(type="log", range=[np.log10(x_range[0]), np.log10(x_range[1])], dtick=1, tickformat="~g")
     fig.update_yaxes(type="log", dtick=1, tickformat="~g")
     fig.update_layout(margin=dict(l=85, r=40, t=95, b=125))
@@ -431,14 +446,26 @@ def gemm_efficiency_figure(sweeps: dict[str, pd.DataFrame], decode_max: int, pre
     """
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08)
+    any_open = False
     for path, part in sweeps.items():
         part = part.sort_values("m")
+        hollow = list(part.status.eq("small pool, M ≤ 32")) if "status" in part else [False] * len(part)
+        any_open |= any(hollow)
         for row, col in ((1, "tile_fraction"), (2, "bandwidth_fraction")):
             fig.add_scatter(
                 x=part.m, y=part[col], mode="lines+markers", name=PATH_LABELS[path], legendgroup=path, showlegend=row == 1,
                 line=dict(color=PATH_COLORS[path], width=2.2),
-                marker=dict(size=7, color=PATH_COLORS[path], line=dict(color=SURFACE, width=1.5)), row=row, col=1,
+                marker=dict(
+                    size=8, color=[SURFACE if h else PATH_COLORS[path] for h in hollow],
+                    line=dict(color=[PATH_COLORS[path] if h else SURFACE for h in hollow], width=[2 if h else 1.5 for h in hollow]),
+                ),
+                row=row, col=1,
             )
+    if any_open:
+        fig.add_scatter(
+            x=[None], y=[None], mode="markers", name="hollow: first sweep at M ≤ 32, weight pool too small",
+            marker=dict(size=8, color=SURFACE, line=dict(color=MUTED, width=2)), row=1, col=1,
+        )
     for row in (1, 2):
         fig.add_vrect(x0=0.7, x1=decode_max * 1.2, fillcolor=GRID, opacity=0.55, line_width=0, layer="below", row=row, col=1)
         fig.add_vrect(x0=prefill_min / 1.2, x1=6000, fillcolor=GRID, opacity=0.55, line_width=0, layer="below", row=row, col=1)

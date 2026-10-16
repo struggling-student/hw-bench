@@ -260,7 +260,60 @@ def gemm_points(ext: pd.DataFrame) -> pd.DataFrame:
     )
     out["pool_gib"] = out.working_set_bytes / 2**30
     out["shape"] = out.n.astype(int).astype(str) + "x" + out.k.astype(int).astype(str)
+    out["pool_x"] = out.working_set_bytes / ONCHIP_BYTES
+    out["status"] = [_pool_status(x, m) for x, m in zip(out.pool_x, out.m)]
     return out
+
+
+#: Pools of at least this many times the on-chip capacity count as converged: counted bandwidth
+#: agrees between 16x and 64x (claim ``gemm_pool_convergence``).
+CONVERGED_POOL_X = 16
+#: Batch sizes up to this one are biased by a small pool (claim ``first_sweep_small_m_bias``);
+#: at M = 256 the pool size no longer matters (claim ``pool_insensitive_large_m``).
+SMALL_POOL_MAX_M = 32
+
+
+def _pool_status(pool_x: float, m: float) -> str:
+    if pool_x >= CONVERGED_POOL_X:
+        return "converged pool"
+    return "small pool, M ≤ 32" if m <= SMALL_POOL_MAX_M else "small pool, M ≥ 64"
+
+
+def headline_gemm_points(ext: pd.DataFrame, shape: str = "14336x4096", pool_x: int = 64) -> pd.DataFrame:
+    """One Flat GEMM shape over M for the headline: converged-pool points where they exist.
+
+    The pool-size sweep (``gemm_pool``, ``pool_x`` times the on-chip capacity) replaces the first
+    sweep at the batch sizes it measured (M = 1, 16, 256); every other M comes from the first sweep
+    and keeps its ``status``, so a small-pool point at M <= 32 can be drawn hollow and left out of the
+    ceiling audit.  Same columns as ``gemm_points``.
+    """
+
+    first = gemm_points(ext)
+    first = first[first.memory_mode.eq("flat") & first["shape"].eq(shape)]
+    g = _gemm_frame(ext, ["gemm_pool"])
+    g = g[g.pool_x.eq(pool_x) & g["shape"].eq(shape)]
+    conv = (
+        with_config(g)
+        .groupby(["memory_mode", "config", "memory_target", "dtype", "n", "k", "m", "working_set_bytes"])
+        .agg(
+            gops=("performance_gops", "median"),
+            gbs=("bandwidth_gbs", "median"),
+            intensity=("arithmetic_intensity", "median"),
+            cv_percent=("performance_gops", _cv),
+            n_samples=("accepted", "size"),
+            campaign_id=("campaign_id", _ids),
+            node=("node", "first"),
+        )
+        .reset_index()
+    )
+    conv["pool_gib"] = conv.working_set_bytes / 2**30
+    conv["shape"] = shape
+    conv["pool_x"] = conv.working_set_bytes / ONCHIP_BYTES
+    conv["status"] = "converged pool"
+    have = set(zip(conv.memory_target, conv["dtype"], conv.m))
+    keep = [(t, d, m) not in have for t, d, m in zip(first.memory_target, first["dtype"], first.m)]
+    out = pd.concat([conv, first[keep]], ignore_index=True)
+    return out.sort_values(["memory_target", "dtype", "m"]).reset_index(drop=True)
 
 
 # --------------------------------------------------------------------- span
@@ -568,6 +621,9 @@ def gemm_workload_points(gemm: pd.DataFrame, theory: Theory, cores: int = 56):
                     "cv_percent": r.cv_percent,
                     "series": r.shape,
                     "label": f"M={int(r.m)}",
+                    "status": getattr(r, "status", ""),
+                    # hollow marker, left out of the audit: a pool too small for the batch size
+                    "open": getattr(r, "status", "") == "small pool, M ≤ 32",
                 },
             )
         )

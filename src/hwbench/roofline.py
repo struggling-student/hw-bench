@@ -162,6 +162,7 @@ def audit_points(
                 ratio=ratio,
                 tolerance_percent=tolerance,
                 exceeds=bool(ratio == ratio and ratio > 1 + tolerance / 100),
+                unconverged=bool(p.provenance.get("open", False)),
             )
         )
     return pd.DataFrame(rows)

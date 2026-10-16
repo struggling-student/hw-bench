@@ -776,6 +776,16 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
     int8_m1 = pool[pool["shape"].eq("14336x4096") & pool.m.eq(1) & pool.pool_x.eq(64) & pool.memory_target.eq("hbm")].set_index("dtype")
     pk_hbm_m1 = pk_big[pk_big.memory_target.eq("hbm") & pk_big.m.eq(1)].iloc[0]
     pass_us = 14336 * 4096 * 2 / (hbm_read.gbs * 1e9) * 1e6  # one pass over BF16 weights at the read ceiling
+    # First sweep (pool about 2x on-chip) against the converged 64x pool, 14336x4096.
+    first = fl[fl["shape"].eq("14336x4096")].set_index(["memory_target", "dtype", "m"]).gbs
+    conv64 = pool[pool["shape"].eq("14336x4096") & pool.pool_x.eq(64)].set_index(["memory_target", "dtype", "m"]).modeled_gbs
+    bias = (first.reindex(conv64.index) / conv64).dropna()
+    small_bias, large_bias = bias[bias.index.get_level_values("m") <= 16], bias[bias.index.get_level_values("m") >= 256]
+    m256 = pool[pool.m.eq(256)].pivot_table(index=["memory_target", "dtype", "shape"], columns="pool_x", values="gops")
+    pool_effect_256 = float(((m256[4] - m256[64]).abs() / m256[64]).max())
+    m16 = pool[pool.m.eq(16)].pivot_table(index=["memory_target", "dtype", "shape"], columns="pool_x", values="gops")
+    pool_effect_16 = float(((m16[4] - m16[64]).abs() / m16[64]).max())
+    b1 = {k: float(bias.loc[(*k, 1.0)]) for k in [("hbm", "bf16"), ("hbm", "int8"), ("ddr", "bf16"), ("ddr", "int8")]}
     int8_4x = float(pool[pool["shape"].eq("14336x4096") & pool.m.eq(1) & pool.pool_x.eq(4) & pool.memory_target.eq("hbm") & pool["dtype"].eq("int8")].modeled_gbs.iloc[0])
     return [
         Claim(
@@ -794,6 +804,23 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
             f"{hbm_bf[16]:.0f}, {hbm_bf[64]:.0f}). Counted bandwidth agrees between 16× and 64× to {_pct(conv_gap, 1)} for both precisions and tiers, "
             f"so a pool of at least 16× is converged. At 64× DDR GEMM sits at {ddr_bf[64]:.0f} GB/s, below the {ddr_read.gbs:.0f} GB/s read ceiling: the "
             "DDR points that lay above their ceiling came from cache reuse in a small pool, not from a ceiling that was too low.",
+        ),
+        Claim(
+            "first_sweep_small_m_bias",
+            bool(small_bias.min() > 1.03),
+            f"The first sweep overstates the weight traffic at small M: against the converged 64× pool its 14336×4096 rate at M=1 is "
+            f"{b1[('hbm', 'bf16')] - 1:+.0%} (HBM BF16), {b1[('hbm', 'int8')] - 1:+.0%} (HBM INT8), {b1[('ddr', 'bf16')] - 1:+.0%} (DDR BF16) and "
+            f"{b1[('ddr', 'int8')] - 1:+.0%} (DDR INT8), and {small_bias.min() - 1:+.0%} to {small_bias.max() - 1:+.0%} over M = 1 and 16. Its points at "
+            f"M ≤ {report.SMALL_POOL_MAX_M} are therefore drawn hollow and left out of the ceiling audit; where the pool sweep measured a batch size "
+            "(M = 1, 16, 256) the converged point is drawn instead.",
+        ),
+        Claim(
+            "pool_insensitive_large_m",
+            bool(pool_effect_256 < 0.05 and pool_effect_16 > pool_effect_256),
+            f"At M=256 the pool size no longer matters: 4× and 64× pools give the same rate within {_pct(pool_effect_256, 1)} for both shapes, precisions "
+            f"and tiers, against up to {_pct(pool_effect_16, 1)} at M=16; the first sweep at M=256 is {large_bias.min() - 1:+.1%} to {large_bias.max() - 1:+.1%} "
+            "from the 64× pool, which the absent pool trend at M=256 attributes to the campaign, not the pool (inferred). M = 64 and 128 were not measured with a larger pool; "
+            "they are kept as first-sweep points (filled), which the prepared part `gemmconv` would replace.",
         ),
         Claim(
             "gemm_asymmetry",
