@@ -36,7 +36,7 @@ def test_every_headline_entry_has_an_uncertainty_and_its_basis(evidence):
     assert len(t1) == 11
     assert t1[["spread", "cross_run", "total"]].notna().all().all()
     assert (t1.basis.str.len() > 0).all()
-    assert all(math.isclose(r.total, r.spread + r.cross_run) for r in t1.itertuples())
+    assert all(math.isclose(r.total, r.spread + max(r.repeat, r.between, r.cross_run)) for r in t1.itertuples())
     ddr = t1[t1.quantity.str.startswith("Flat DDR read")].iloc[0]
     assert ddr.basis == "Triad repeat, same tier"
     cache = t1[t1.quantity.str.startswith("Cache")].iloc[0]

@@ -60,13 +60,14 @@ This notebook carries the findings in six figures and four tables; the supportin
 
 Two sockets × 56 cores, SMT off, 64 GiB HBM2e and 8-channel DDR5-4800 per socket. *Flat* mode exposes HBM and DDR as separate NUMA nodes; *Cache* mode makes HBM a memory-side cache in front of DDR. Flat results were taken on one dedicated node outside Slurm (the October runs went through an exclusive Slurm allocation on the same node and are labelled as such); Cache results come from Slurm allocations on other nodes.
 
-**Table 1 — headline ceilings of socket 0** (the reference socket for every number here). *Median* [*min*–*max*] are the five samples of one run; *spread* is half that range relative to the median. *Repeat* is the range of three independent launches of the quantity on one node. *Cross-run* is the largest deviation of the cross-check (SSH against the October Slurm runs, or a second Cache node) for the quantity or, where it was not repeated, its family; *basis* says which. *Total* is spread plus the larger of the two, a conservative sum.
+**Table 1 — headline ceilings of socket 0** (the reference socket for every number here). *Median* [*min*–*max*] are the five samples of one run; *sustained* is their median without the first window, which on HBM is a few percent fast (notebook 01, section 3); *spread* is half the min–max range relative to the median. *Repeat* is the range of three back-to-back launches on one node; *between* is the range of every selected campaign that measured the quantity on its reference node, on different days (*campaigns* counts them). *Cross-run* is the largest deviation of the cross-check (SSH against the October Slurm runs, or a second Cache node) for the quantity or, where it was not repeated, its family; *basis* says which. *Total* is spread plus the largest of repeat, between and cross-run, a conservative sum.
 """),
     code("""
 t1 = report.headline_table(ext, thesis, theory)
-table(t1[['quantity', 'unit', 'median', 'low', 'high', 'spread', 'repeat', 'cross_run', 'basis', 'total', 'n', 'kind']]
-      .rename(columns={'low': 'min', 'high': 'max', 'spread': 'spread %', 'repeat': 'repeat %', 'cross_run': 'cross-run %', 'total': 'total %', 'n': 'samples'}), 2)
+table(t1[['quantity', 'unit', 'median', 'low', 'high', 'sustained', 'spread', 'repeat', 'between', 'campaigns', 'cross_run', 'basis', 'total']]
+      .rename(columns={'low': 'min', 'high': 'max', 'spread': 'spread %', 'repeat': 'repeat %', 'between': 'between %', 'cross_run': 'cross-run %', 'total': 'total %'}), 2)
 say_claims(claims.headline_uncertainty(ext, thesis, theory))
+say_claims(claims.xcheck(ext, thesis), ['campaign_spread'])
 """),
     code("""
 prov = (ctx.everything[ctx.everything.campaign_id.isin(
@@ -284,15 +285,19 @@ The first of the five windows of a configuration can differ from the rest. The t
     code("""
 fw = report.first_window_effect(ext)
 fw['pool'] = np.where(fw.working_set_bytes > 64 * 2**30, 'spilled (>64 GiB)', 'other')
-view = fw.groupby(['memory_mode', 'family', 'pool']).agg(configurations=('ratio', 'size'), median_ratio=('ratio', 'median'),
-        lowest_ratio=('ratio', 'min'), below_90_percent=('ratio', lambda r: (r < 0.9).mean()), median_shift=('median_shift', lambda r: r.abs().max())).reset_index()
+# Bandwidth is split by tier and by 56 cores against fewer: the HBM transient only shows at 56 cores.
+fw['tier'] = np.where(fw.family.eq('bandwidth'), fw.memory_target.fillna(''), '')
+fw['cores'] = np.where(fw.family.eq('bandwidth'), np.where(fw.threads.eq(56), '56', 'fewer'), '')
+view = fw.groupby(['memory_mode', 'family', 'tier', 'cores', 'pool']).agg(configurations=('ratio', 'size'), median_ratio=('ratio', 'median'),
+        lowest_ratio=('ratio', 'min'), highest_ratio=('ratio', 'max'), below_90_percent=('ratio', lambda r: (r < 0.9).mean()),
+        above_103_percent=('ratio', lambda r: (r > 1.03).mean()), median_shift=('median_shift', lambda r: r.abs().max())).reset_index()
 table(view[(view.configurations > 0)], 3)
-say_claims(claims.repeatability(ext, thesis), ['cold_first_window'])
+say_claims(claims.repeatability(ext, thesis), ['cold_first_window', 'hbm_first_window'])
 """),
     md("""
 ## 4. Repeat run against the October values
 
-Flat repeats run over SSH on the same node; Cache repeats run on a second node, so their deviation measures node-to-node variance. The acceptance threshold is 2%.
+Flat repeats run over SSH on the same node; Cache repeats run on a second node. The acceptance threshold is 2%. Whether a Cache deviation is a property of the node is tested below against the spread between campaigns on one node.
 """),
     code("""
 x = report.xcheck_table(ext, thesis)
@@ -306,7 +311,15 @@ say(f"**Result.** Flat, SSH versus the October Slurm-exclusive runs: {flat_x.wit
 """),
     code("""
 table(report.repeat_ranges(ext).rename(columns={'min': 'lowest launch', 'max': 'highest launch', 'mean': 'mean of launches'}), 3)
-say_claims(claims.xcheck(ext, thesis))
+say_claims(claims.xcheck(ext, thesis), ['repeat_runs', 'repeat_launches'])
+"""),
+    md("""
+**Between campaigns.** Every selected campaign that measured a headline configuration (socket 0, 56 cores, 8 GiB, and 96 GiB in Cache mode) gives an independent launch on another day. *Same node* is the mode's reference node (hbm14 for Flat, hbm01 for Cache):
+"""),
+    code("""
+cs = report.campaign_spread(ext, thesis)
+table(cs[['memory_mode', 'quantity', 'working_set_gib', 'campaigns', 'same_node_campaigns', 'same_node_low', 'same_node_high', 'same_node_percent', 'all_nodes_percent', 'nodes']], 2)
+say_claims(claims.xcheck(ext, thesis), ['campaign_spread'])
 """),
     md("""
 The same launches as a figure: each dot is the median of one launch relative to the mean of the three, the line joins the lowest and the highest, and the band is the 2% acceptance threshold used for the cross-check above. A row is one quantity in one memory mode; the three launches of each ran on one node.

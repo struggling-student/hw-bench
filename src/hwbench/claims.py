@@ -464,6 +464,14 @@ def xcheck(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
     x = report.xcheck_table(ext, thesis)
     f, c = x[x.memory_mode.eq("flat")], x[x.memory_mode.eq("cache")]
     rr = report.repeat_ranges(ext)
+    cs = report.campaign_spread(ext, thesis)
+    streams = cs[cs.quantity.str.startswith("stream_")]
+    flat_s, cache_s = streams[streams.memory_mode.eq("flat")], streams[streams.memory_mode.eq("cache")]
+    widest_flat = flat_s.loc[flat_s.same_node_percent.idxmax()]
+    widest = cache_s.loc[cache_s.same_node_percent.idxmax()]
+    node_dev = float(c.deviation_percent.abs().max())
+    kernel_name = {"stream_read": "read-only", "stream_triad": "Triad", "stream_triad_nt": "non-temporal Triad"}
+    label = lambda r: f"{kernel_name[r.quantity.split('/')[0]]} at {r.working_set_gib:.0f} GiB"  # noqa: E731
     return [
         Claim(
             "repeat_runs",
@@ -471,8 +479,8 @@ def xcheck(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"Repeat runs on the same Flat node differ by at most {f.deviation_percent.abs().max():.1f}% "
             f"({_pct(f.within_tolerance.mean())} of {len(f)} points within 2%), including the October Slurm-exclusive runs against "
             f"the SSH runs, so the launch method is not a visible source of error. Cache repeats on a second node differ by up to "
-            f"{c.deviation_percent.abs().max():.1f}% ({_pct(c.within_tolerance.mean())} of {len(c)} within 2%), which is node-to-node "
-            "variance. These cross-run differences are a systematic uncertainty on top of the sample-to-sample spread.",
+            f"{c.deviation_percent.abs().max():.1f}% ({_pct(c.within_tolerance.mean())} of {len(c)} within 2%). "
+            "These cross-run differences are a systematic uncertainty on top of the sample-to-sample spread.",
         ),
         Claim(
             "repeat_launches",
@@ -483,7 +491,19 @@ def xcheck(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"{rr[rr.quantity.eq('stream_read/hbm')].repeat_range_percent.iloc[0]:.1f}% for HBM read-only; in Cache mode "
             f"{rr[(rr.memory_mode == 'cache') & rr.quantity.eq('stream_triad/effective_cache')].repeat_range_percent.iloc[0]:.1f}% (Triad) and "
             f"{rr[(rr.memory_mode == 'cache') & rr.quantity.eq('stream_read/effective_cache')].repeat_range_percent.iloc[0]:.1f}% (read-only). "
-            "Run-to-run noise on one node is small; the 4–7% deviation of the second Cache node is therefore a node-to-node difference.",
+            "Those launches ran back to back, minutes apart.",
+        ),
+        Claim(
+            "campaign_spread",
+            bool(widest_flat.same_node_percent < 3.5 and widest.same_node_percent > 0.8 * node_dev),
+            f"Campaigns on different days measured the same configurations again. On the Flat node they agree to "
+            f"{widest_flat.same_node_percent:.1f}% at most ({label(widest_flat)} on {widest_flat.quantity.split('/')[1].upper()}); on the reference Cache "
+            f"node ({report.REFERENCE_NODE['cache'].split('-')[-1]}) they differ by up to {widest.same_node_percent:.0f}% ({label(widest)}: "
+            f"{widest.same_node_low:.0f} to {widest.same_node_high:.0f} GB/s over {int(widest.same_node_campaigns)} campaigns), "
+            f"{'more than' if widest.same_node_percent > node_dev else 'as much as'} the {node_dev:.1f}% between the two Cache nodes. The difference "
+            "between Cache nodes therefore cannot be attributed to the node: Cache-mode bandwidth varies as much between launches on one node, "
+            "plausibly because the pages land differently in the direct-mapped memory-side cache each time (inferred; no hit-rate counter). "
+            "Cache-mode rates are quoted with that between-campaign range.",
         ),
     ]
 
@@ -944,6 +964,10 @@ def repeatability(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
     g = fw[fw.family.eq("gemm") & fw.memory_mode.eq("cache") & fw.notes.eq("gemm_sweep")].assign(pool=lambda f: (f.working_set_bytes / 2**30).round())
     spilled, resident = g[g.pool.gt(64)], g[g.pool.le(64)]
     flat = fw[fw.memory_mode.eq("flat") & fw.notes.eq("gemm_sweep")]
+    bwf = fw[fw.family.eq("bandwidth") & fw.memory_mode.eq("flat") & fw.locality.eq("local") & fw.working_set_bytes.ge(2**30)]
+    at56 = bwf[bwf.threads.eq(56)].groupby("memory_target").ratio
+    hbm_by_threads = bwf[bwf.memory_target.eq("hbm")].groupby("threads").ratio.median()
+    hbm56 = bwf[bwf.threads.eq(56) & bwf.memory_target.eq("hbm")]
     return [
         Claim(
             "per_configuration_cv",
@@ -964,6 +988,17 @@ def repeatability(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             "minimum of those samples is not a steady-state value. Flat windows show no such effect "
             f"(median ratio {_pct(float(flat.ratio.median()), 1)}). The cause (the weight pool still being pulled into the HBM cache) is inferred.",
         ),
+        Claim(
+            "hbm_first_window",
+            bool(at56.median()["hbm"] > 1.03 and abs(at56.median()["ddr"] - 1) < 0.01 and hbm_by_threads.loc[14] < 1.01),
+            f"On Flat HBM the first one-second window of a 56-core stream is faster than the rest: {_pct(float(at56.median()['hbm']) - 1, 1)} in the "
+            f"median over {int(at56.size()['hbm'])} configurations (up to {_pct(float(at56.max()['hbm']) - 1)}), against "
+            f"{_pct(float(at56.median()['ddr']) - 1, 1)} on DDR. It appears only with many cores ({_pct(float(hbm_by_threads.loc[14]) - 1, 1)} at 14 "
+            f"threads, {_pct(float(hbm_by_threads.loc[28]) - 1, 1)} at 28), the regime in which the clock falls while HBM streams, so a power or "
+            "frequency transient after an idle gap is the plausible cause (inferred; neither is counted). The five-window median moves by at most "
+            f"{_pct(float(hbm56.median_shift.abs().max()), 1)}; Table 1 also lists the sustained median without the first window, and the "
+            "min–max range of HBM rows is mostly this transient.",
+        ),
     ]
 
 
@@ -974,9 +1009,9 @@ def headline_uncertainty(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory
     return [
         Claim(
             "headline_uncertainty",
-            bool(t1.total.notna().all() and t1.basis.ne("").all()),
-            f"Every headline ceiling carries an uncertainty: the sample spread plus the larger of the three-launch range and the cross-check "
-            f"deviation is {best.total:.1f}% for {best.quantity} and up to {worst.total:.1f}% for {worst.quantity}. Where a quantity was "
+            bool(t1.total.notna().all() and t1.basis.ne("").all() and (t1.total >= t1.spread + t1.between.fillna(0) - 1e-9).all()),
+            f"Every headline ceiling carries an uncertainty: the sample spread plus the largest of the three-launch range, the between-campaign range "
+            f"and the cross-check deviation is {best.total:.1f}% for {best.quantity} and up to {worst.total:.1f}% for {worst.quantity}. Where a quantity was "
             "not repeated in the cross-check, the deviation of its family is used and labelled as such.",
         )
     ]

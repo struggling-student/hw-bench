@@ -52,3 +52,34 @@ def test_small_m_bias_claim_quantifies_the_first_sweep(evidence):
     c = by_id(claims.gemm(ext, thesis, theory, ROOT))
     assert c["first_sweep_small_m_bias"].holds and c["pool_insensitive_large_m"].holds
     assert "+10% (HBM BF16)" in c["first_sweep_small_m_bias"].text
+
+
+# ------------------------------------------------------------- C2, C4
+def test_table1_carries_the_between_campaign_range(evidence):
+    ext, thesis, theory = evidence
+    t1 = report.headline_table(ext, thesis, theory)
+    assert t1["between"].notna().all() and t1.campaigns.ge(4).all()
+    assert (t1.total >= t1.spread + t1["between"] - 1e-9).all()
+    cache = t1[t1.quantity.str.startswith("Cache")].iloc[0]
+    assert cache["between"] > cache["repeat"]  # back-to-back launches understate the Cache spread
+
+
+def test_cache_node_difference_is_not_attributed_to_the_node(evidence):
+    ext, thesis, _ = evidence
+    c = by_id(claims.xcheck(ext, thesis))
+    assert c["campaign_spread"].holds
+    assert "node-to-node difference" not in c["repeat_launches"].text
+    assert "cannot be attributed to the node" in c["campaign_spread"].text
+    cs = report.campaign_spread(ext, thesis)
+    cache = cs[cs.memory_mode.eq("cache") & cs.quantity.str.startswith("stream_")]
+    flat = cs[cs.memory_mode.eq("flat") & cs.quantity.str.startswith("stream_")]
+    assert cache.same_node_percent.max() > 2 * flat.same_node_percent.max()
+
+
+def test_hbm_first_window_transient_is_reported(evidence):
+    ext, thesis, theory = evidence
+    c = by_id(claims.repeatability(ext, thesis))["hbm_first_window"]
+    assert c.holds
+    t1 = report.headline_table(ext, thesis, theory).set_index("quantity")
+    hbm = t1.loc["Flat HBM read-only (56 cores)"]
+    assert hbm.sustained < hbm["median"] < hbm.high  # the fast first window lifts median and max

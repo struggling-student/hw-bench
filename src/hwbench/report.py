@@ -735,18 +735,37 @@ def span_reference(ext: pd.DataFrame, thesis: pd.DataFrame, kernel: str = "read"
 def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> pd.DataFrame:
     """T1: the headline ceilings of one socket (socket 0), each with its uncertainty.
 
-    ``median``, ``min`` and ``max`` are the five samples of one run.  ``spread`` is half
+    ``median``, ``min`` and ``max`` are the five samples of one run; ``sustained`` is the median
+    without the first window (``first_window_effect``).  ``spread`` is half
     that range relative to the median.  ``repeat`` is the range of three independent launches
-    of the same quantity on the same node (``repeat_ranges``); ``cross_run`` is the largest
+    of the same quantity on the same node (``repeat_ranges``); ``between`` is the range of every
+    selected campaign that measured the quantity on its reference node (``campaign_spread``),
+    launches on different days; ``cross_run`` is the largest
     deviation seen in the cross-check (SSH against the October Slurm runs, or a second
     Cache node), for the quantity or, where it was not repeated, its family; ``basis`` says
-    which.  ``total`` is spread plus the larger of the two, a conservative linear sum.  ``kind`` says what sort of number it is: operation counts
+    which.  ``total`` is spread plus the largest of the three, a conservative linear sum.  ``kind`` says what sort of number it is: operation counts
     over a timed window, or kernel bytes over a timed window (modeled, not counted by the
     memory controller).
     """
 
     cross = cross_run_percent(ext, thesis)
     repeats = repeat_ranges(ext).set_index(["memory_mode", "quantity"])
+    spread_c = campaign_spread(ext, thesis).set_index(["memory_mode", "quantity", "working_set_gib"])
+    per_campaign = campaign_medians(ext, thesis)
+
+    def between(mode: str, quantity: str, ws: float):
+        key = (mode, quantity, ws)
+        if key not in spread_c.index:
+            return math.nan, 0
+        row = spread_c.loc[key]
+        return float(row.same_node_percent), int(row.same_node_campaigns)
+
+    def sustained(mode: str, quantity: str, campaigns: str, ws: float = math.nan) -> float:
+        sel = per_campaign[
+            per_campaign.memory_mode.eq(mode) & per_campaign.quantity.eq(quantity) & per_campaign.campaign_id.isin(campaigns.split(";"))
+            & (per_campaign.working_set_gib.isna() if ws != ws else per_campaign.working_set_gib.eq(ws))
+        ]
+        return float(sel.sustained.median()) if len(sel) else math.nan
     inverse = {path: key for key, path in KERNEL_PATHS.items()}
 
     def launches(mode: str, quantity: str):
@@ -762,11 +781,13 @@ def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> p
         c = cross.get(("flat", bench_of[key])) or cross[("flat", "compute")]
         bench, dtype = inverse[key]
         rep_pct, n_launch = launches("flat", f"{bench}/{dtype}")
+        btw, n_camp = between("flat", f"{bench}/{dtype}", math.nan)
         rows.append(
             dict(
                 quantity=f"{theory.isa(key).label} peak", unit="TOP/s", median=r.gops / 1000, low=r.gops_min / 1000,
                 high=r.gops_max / 1000, n=int(r.n_samples), kind="measured, ops counted",
-                repeat=rep_pct, launches=n_launch, cross_run=c["percent"], basis=c["basis"],
+                sustained=sustained("flat", f"{bench}/{dtype}", r.campaign_id) / 1000,
+                repeat=rep_pct, launches=n_launch, between=btw, campaigns=n_camp, cross_run=c["percent"], basis=c["basis"],
             )
         )
     bw = bandwidth_summary(ext, thesis)
@@ -783,16 +804,19 @@ def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> p
         rep_pct, n_launch = launches(mode, f"stream_{kernel}/{tier}")
         basis = c["basis"] if kernel != "triad" or mode == "cache" else "repeat of this quantity"
         if mode == "cache":
-            basis = "Triad repeat on a second node" if kernel == "triad" else "Triad repeat on a second node (node-to-node)"
+            basis = "Triad on a second node"
+        quantity = f"stream_{kernel}/{tier}"
+        btw, n_camp = between(mode, quantity, 8.0)
         rows.append(
             dict(
                 quantity=f"{name} (56 cores)", unit="GB/s", median=r.gbs, low=r.gbs_min, high=r.gbs_max, n=int(r.n_samples),
-                kind="measured, bytes modeled", repeat=rep_pct, launches=n_launch, cross_run=c["percent"], basis=basis,
+                kind="measured, bytes modeled", sustained=sustained(mode, quantity, r.campaign_id, 8.0),
+                repeat=rep_pct, launches=n_launch, between=btw, campaigns=n_camp, cross_run=c["percent"], basis=basis,
             )
         )
     out = pd.DataFrame(rows)
     out["spread"] = 100 * (out.high - out.low) / 2 / out["median"]
-    out["total"] = out.spread + out[["repeat", "cross_run"]].max(axis=1)
+    out["total"] = out.spread + out[["repeat", "between", "cross_run"]].max(axis=1)
     return out
 
 
@@ -894,10 +918,12 @@ def first_window_effect(ext: pd.DataFrame) -> pd.DataFrame:
 
     ``ratio`` is the first window over the median of the others.  ``median_shift`` is how
     much keeping the first window moves the five-sample median relative to dropping it.
+    A cold first window (ratio below 1) and a fast one (above 1, as on HBM at 56 cores) are
+    both kept; the claims ``cold_first_window`` and ``hbm_first_window`` read them.
     """
 
     keys = [
-        "memory_mode", "benchmark", "dtype", "socket", "memory_target", "threads", "working_set_bytes",
+        "memory_mode", "benchmark", "dtype", "socket", "memory_target", "locality", "threads", "working_set_bytes",
         "m", "n", "k", "notes", "campaign_id",
     ]
     metric = ext.bandwidth_gbs.where(ext.benchmark.isin(FAMILIES["bandwidth"] + FAMILIES["gemm"]), ext.performance_gops)
@@ -914,6 +940,75 @@ def first_window_effect(ext: pd.DataFrame) -> pd.DataFrame:
                 family=_family(key[1]),
                 ratio=part._metric.iloc[0] / rest,
                 median_shift=part._metric.median() / rest - 1,
+            )
+        )
+    return pd.DataFrame(rows)
+
+
+#: The node most campaigns of a mode ran on: Flat has one node; Cache's October data are from hbm01.
+REFERENCE_NODE = {"flat": "cresco8-hbm14", "cache": "cresco8-hbm01"}
+
+
+def campaign_medians(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
+    """Median of every selected campaign that measured a headline configuration, one row each.
+
+    Headline configurations are socket 0, one socket, 56 cores: the six compute paths and the
+    read, Triad and non-temporal Triad streams on local memory at 8 GiB (and 96 GiB in Cache mode).
+    ``median`` uses all five windows, as every table does; ``sustained`` drops the first window
+    (``first_window_effect``).  Chain-count campaigns are left out (other kernels).
+    """
+
+    data = pd.concat([thesis, ext], ignore_index=True)
+    data = data[
+        data.socket_scope.eq("single") & data.socket.eq(0) & data.threads.eq(56) & data.accepted.astype(bool)
+        & ~data.notes.fillna("").str.startswith("chains_")
+    ]
+    streams = data[
+        data.benchmark.isin(["stream_read", "stream_triad", "stream_triad_nt"]) & data.locality.eq("local")
+    ].copy()
+    streams["working_set_gib"] = streams.working_set_gib.round(0)
+    streams = streams[streams.working_set_gib.eq(8) | (streams.memory_mode.eq("cache") & streams.working_set_gib.eq(96))]
+    streams["quantity"] = streams.benchmark + "/" + streams.memory_target
+    streams["metric"] = streams.bandwidth_gbs
+    comp = data[data.benchmark.isin(COMPUTE_BENCHMARKS) & data["dtype"].notna()].copy()
+    comp["quantity"] = comp.benchmark + "/" + comp["dtype"]
+    comp["working_set_gib"] = math.nan
+    comp["metric"] = comp.performance_gops
+    both = pd.concat([streams, comp], ignore_index=True)
+    rows = []
+    for (mode, quantity, ws, campaign), part in both.groupby(
+        ["memory_mode", "quantity", "working_set_gib", "campaign_id"], dropna=False
+    ):
+        rows.append(
+            dict(
+                memory_mode=mode, quantity=quantity, working_set_gib=ws, campaign_id=campaign,
+                node=part.node.iloc[0], median=part.metric.median(),
+                sustained=part[part.iteration.ne(0)].metric.median(), n_samples=len(part),
+            )
+        )
+    return pd.DataFrame(rows)
+
+
+def campaign_spread(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
+    """Between-campaign spread of each headline configuration, on its reference node and overall.
+
+    ``same_node_percent`` is (max - min) / mean of the campaign medians on the mode's reference
+    node (``REFERENCE_NODE``); ``all_nodes_percent`` includes campaigns on other nodes.  These are
+    independent launches on different days, unlike the three back-to-back ``repeat`` launches.
+    """
+
+    per = campaign_medians(ext, thesis)
+    rows = []
+    for (mode, quantity, ws), part in per.groupby(["memory_mode", "quantity", "working_set_gib"], dropna=False):
+        ref = part[part.node.eq(REFERENCE_NODE[mode])]
+        rng = lambda v: 100 * (v.max() - v.min()) / v.mean() if len(v) > 1 else math.nan  # noqa: E731
+        rows.append(
+            dict(
+                memory_mode=mode, quantity=quantity, working_set_gib=ws,
+                campaigns=len(part), same_node_campaigns=len(ref),
+                same_node_low=ref["median"].min(), same_node_high=ref["median"].max(),
+                same_node_percent=rng(ref["median"]), all_nodes_percent=rng(part["median"]),
+                nodes=";".join(sorted(part.node.unique())),
             )
         )
     return pd.DataFrame(rows)
