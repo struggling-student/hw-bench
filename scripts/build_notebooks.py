@@ -798,7 +798,7 @@ table(pk, 2)
 say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_pool_convergence', 'gemm_asymmetry', 'gemv_prepacked_bandwidth', 'gemm_call_floor'])
 """),
     md("""
-At decode batch sizes a BF16 call from PyTorch is therefore limited by the library call as much as by memory; the pool and the weight layout, not the memory system, set most of the earlier gap between the 4096² and 14336×4096 shapes and between BF16 and INT8. The 4096² shape and the first sweep's modeled bandwidths should not be read as HBM or DDR bandwidth.
+At decode batch sizes the fixed cost of a call dominates small matrices but explains only a small part of the gap between the large projection and the HBM read ceiling; most of that gap is inside the library's GEMV, and it is specific to HBM (claim `gemm_call_floor`). The pool and the weight layout, not the memory system, set most of the earlier gap between the 4096² and 14336×4096 shapes and between BF16 and INT8. The 4096² shape and the first sweep's modeled bandwidths should not be read as HBM or DDR bandwidth.
 """),
 ]
 

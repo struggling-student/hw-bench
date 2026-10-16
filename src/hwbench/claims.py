@@ -869,6 +869,14 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
     m16 = pool[pool.m.eq(16)].pivot_table(index=["memory_target", "dtype", "shape"], columns="pool_x", values="gops")
     pool_effect_16 = float(((m16[4] - m16[64]).abs() / m16[64]).max())
     b1 = {k: float(bias.loc[(*k, 1.0)]) for k in [("hbm", "bf16"), ("hbm", "int8"), ("ddr", "bf16"), ("ddr", "int8")]}
+    # How much of the converged GEMV's gap to the read ceiling the fixed call cost explains.
+    weight_b = 14336 * 4096 * 2
+    gemv = {t: float(conv64.loc[(t, "bf16", 1.0)]) for t in ("hbm", "ddr")}
+    call_us = {t: weight_b / (gemv[t] * 1e9) * 1e6 for t in gemv}
+    ceil = {"hbm": hbm_read.gbs, "ddr": ddr_read.gbs}
+    no_floor = {t: weight_b / ((call_us[t] - float(floor["max"].max())) * 1e-6) / 1e9 for t in gemv}
+    frac_gemv = {t: gemv[t] / ceil[t] for t in gemv}
+    frac_no_floor = {t: no_floor[t] / ceil[t] for t in gemv}
     int8_4x = float(pool[pool["shape"].eq("14336x4096") & pool.m.eq(1) & pool.pool_x.eq(4) & pool.memory_target.eq("hbm") & pool["dtype"].eq("int8")].modeled_gbs.iloc[0])
     return [
         Claim(
@@ -926,13 +934,17 @@ def gemm(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = R
         ),
         Claim(
             "gemm_call_floor",
-            bool(float(floor["max"].max()) < 40 and float(floor["min"].min()) > 10),
+            bool(float(floor["max"].max()) < 40 and float(floor["min"].min()) > 10 and frac_no_floor["hbm"] < 0.8
+                 and frac_no_floor["hbm"] - frac_gemv["hbm"] < 0.5 * (1 - frac_gemv["hbm"])),
             f"A GEMM call has a fixed cost of roughly {floor['min'].min():.0f}–{floor['max'].max():.0f} µs from Python (dispatch, oneDNN primitive lookup, "
             f"56-thread fork/join): a 256×256 and a 1024×1024 matrix whose weights stay in cache take {floor.loc['256x256', 'min']:.0f}–"
-            f"{floor.loc['256x256', 'max']:.0f} and {floor.loc['1024x1024', 'min']:.0f}–{floor.loc['1024x1024', 'max']:.0f} µs at M=1. For a 14336×4096 BF16 "
-            f"matrix at {hbm_read.gbs:.0f} GB/s a pass takes about {pass_us:.0f} µs, so the floor is {_pct(float(floor['min'].min()) / pass_us)}–"
-            f"{_pct(float(floor['max'].max()) / pass_us)} of it there but dominates small matrices; decode-sized GEMM measures the library call as much "
-            "as memory.",
+            f"{floor.loc['256x256', 'max']:.0f} and {floor.loc['1024x1024', 'min']:.0f}–{floor.loc['1024x1024', 'max']:.0f} µs at M=1, so the floor dominates "
+            f"small matrices. For the large projection it does not: a converged plain-BF16 14336×4096 call at M=1 takes {call_us['hbm']:.0f} µs on HBM "
+            f"({gemv['hbm']:.0f} GB/s, {_pct(frac_gemv['hbm'])} of the {hbm_read.gbs:.0f} GB/s read ceiling; at the ceiling it would take {pass_us:.0f} µs). "
+            f"Without the largest floor it would stream {no_floor['hbm']:.0f} GB/s, {_pct(frac_no_floor['hbm'])} of the ceiling, so the call cost explains "
+            f"{100 * (frac_no_floor['hbm'] - frac_gemv['hbm']):.0f} of the {100 * (1 - frac_gemv['hbm']):.0f} percentage points between the GEMV and the read kernel. "
+            f"The rest is spent inside the library's GEMV (cause not measured). On DDR the same call reaches {_pct(frac_gemv['ddr'])} of its ceiling "
+            f"({_pct(frac_no_floor['ddr'])} without the floor), so the shortfall is specific to HBM.",
         ),
         Claim(
             "gemm_bimodal_points",

@@ -121,3 +121,11 @@ def test_cache_claims_use_the_fill_in_working_sets(evidence):
     c = by_id(claims.cache_mode(ext, thesis))
     assert "read 56 GiB" in c["cache_below_flat_ddr"].text and "triad_nt 56 GiB" in c["cache_below_flat_ddr"].text
     assert "24, 32, 40, 48, 56, 64 GiB" in c["cache_declines_before_capacity"].text
+
+
+# ------------------------------------------------------------------ C9
+def test_call_floor_claim_says_how_much_of_the_gap_it_explains(evidence):
+    ext, thesis, theory = evidence
+    c = by_id(claims.gemm(ext, thesis, theory, ROOT))["gemm_call_floor"]
+    assert c.holds and "percentage points" in c.text
+    assert "as much as memory" not in c.text
