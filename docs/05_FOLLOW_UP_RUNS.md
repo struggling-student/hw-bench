@@ -4,10 +4,33 @@
 campaigns are committed (`data/raw`, listed under `extended_campaigns` in
 `configs/analysis.json`); notebooks 01–05 carry the results and
 [the status report](STATUS_2026-10-12.md) lists the outcomes. The text below is the original
-plan and is kept for the run recipe.
+plan and is kept for the run recipe. One part is prepared and **not yet run**: `gemmconv`
+(next section).
+
+## Prepared, not run: `gemmconv` (review of 2026-10-16, item R1)
+
+The headline roofline, the GEMM-efficiency figure and the decode table need the 14336×4096
+projection over the decode-to-prefill range with a converged weight pool; the first GEMM sweep
+used a pool of about twice the on-chip capacity, which overstates the weight traffic at M ≤ 32
+by 10–25% (claim `first_sweep_small_m_bias`).
+
+| Part | Mode | Records | Timed windows | What it measures | Acceptance |
+| --- | --- | ---: | ---: | --- | --- |
+| `gemmconv` | Flat | 54 | 4.5 min | 14336×4096, M = 1, 2, 4, 8, 16, 32, 64, 128, 256, pool 16× the on-chip capacity (3.77 GB), two warm-up passes; BF16 plain, BF16 prepacked and INT8; HBM and DDR; socket 0; counters on (label `gemm_converged`) | counted/modeled 0.97–1.03 at M ≤ 16; no point above its read ceiling; M = 1 and 16 within 3% of the 64× `gemm_pool` points |
+
+```bash
+.venv/bin/python scripts/run_campaign.py flat /tmp/unused --only gemmconv --dry-run
+scripts/submit_cresco8.sh flat gemmconv   # only when authorised; run smoke first
+```
+
+After it is fetched and listed under `extended_campaigns`, `report.headline_gemm_points` should
+take its points for every M ≤ 256 in place of the first sweep (the analysis does not yet read the
+label `gemm_converged`).
+
+## Original plan of 2026-10-12 (all ran)
 
 Run definitions for the experiments that the [2026-10-12 review](REVIEW_2026-10-12.md)
-ranks highest. Nothing here has been executed: the definitions are tested only as plans
+ranks highest. When this plan was written nothing had been executed: the definitions were tested only as plans
 (`tests/test_campaign_plan.py`) and the C++ change only for syntax and generated code.
 Read [02 — Run and retrieve](02_RUN_AND_RETRIEVE.md) first for the execution rules (Flat
 only on `cresco8-hbm14` over SSH and tmux, Cache only under Slurm on other nodes).

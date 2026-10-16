@@ -37,6 +37,7 @@ def test_dry_run_writes_nothing():
         ("cache", "counted", 18),
         ("flat", "copy", 10),
         ("cache", "copy", 5),
+        ("flat", "gemmconv", 54),
     ],
 )
 def test_part_sizes_and_unique_record_names(mode, part, count):
@@ -45,7 +46,7 @@ def test_part_sizes_and_unique_record_names(mode, part, count):
     assert len(set(names)) == len(names)
 
 
-@pytest.mark.parametrize("part", ["gemmvalid", "remotehbm", "chains", "sweep12"])
+@pytest.mark.parametrize("part", ["gemmvalid", "remotehbm", "chains", "sweep12", "gemmconv"])
 def test_flat_only_parts_refuse_cache_mode(part):
     result = subprocess.run(
         [sys.executable, str(ROOT / "scripts/run_campaign.py"), "cache", str(ROOT / "build/never-created"), "--only", part, "--dry-run"],
@@ -99,3 +100,16 @@ def test_copy_part_measures_copy_with_triad_and_the_sweep_in_one_launch():
     _, names = plan("flat", "copy")
     kinds = {re.search(r"-s0-(\w+)-(?:ddr|hbm)-", n)[1] for n in names}
     assert kinds == {"copy", "copy_nt", "triad", "triad_nt", "sweep"}
+
+
+def test_gemmconv_repeats_the_headline_sweep_with_a_converged_pool():
+    """Review 2026-10-16 C1/R1: M = 1..256 at 16x the on-chip capacity, both BF16 layouts and INT8."""
+
+    _, names = plan("flat", "gemmconv")
+    on_chip = int(112.5 * 2**20) + 56 * 2 * 2**20
+    assert all(f"pool{16 * on_chip}" in n and "N14336" in n and "-k1-" in n for n in names)
+    assert {int(re.search(r"-M(\d+)-", n)[1]) for n in names} == {1, 2, 4, 8, 16, 32, 64, 128, 256}
+    for tier in ("ddr", "hbm"):
+        tiered = [n for n in names if f"-{tier}-" in n]
+        assert sum("bf16" in n and "prepacked" not in n for n in tiered) == 9
+        assert sum("prepacked" in n for n in tiered) == 9 and sum("int8" in n for n in tiered) == 9

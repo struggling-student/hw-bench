@@ -24,6 +24,8 @@ repeat       the headline numbers once, for independent launches (run it three t
 counted      counted against modeled memory traffic: streams, the intensity sweep and GEMM
 copy         copy kernel (one load, one store per element): the ceiling of the
              intensity sweep, with Triad and the sweep at K=1 in the same launch
+gemmconv     (flat) the 14336x4096 GEMM M-sweep (M = 1..256) with a converged weight pool
+             (16x the on-chip capacity): BF16 plain, BF16 prepacked and INT8, HBM and DDR
 smoke        a few seconds of every kernel; proves build and counters, not a result
 
 memory, compute, sweep, memory-sweep, concurrency, all
@@ -68,6 +70,7 @@ NEW_PARTS = [
     "repeat",
     "counted",
     "copy",
+    "gemmconv",
 ]
 
 THREAD_STEPS = [1, 2, 4, 8, 14, 28, 56]
@@ -87,6 +90,9 @@ LLC_BYTES_PER_SOCKET = 112_500_000 + 2**20  # 112.5 MiB L3; rounded up
 ONCHIP_BYTES = int(112.5 * MIB) + 56 * 2 * MIB
 POOL_MULTIPLES = [4, 16, 64]  # of ONCHIP_BYTES
 GEMM_WARM_PASSES = 2
+# The converged M-sweep (part gemmconv): the decode-to-prefill range of the headline roofline.
+GEMMCONV_M = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+GEMMCONV_POOL_MULTIPLE = 16  # counted bandwidth agrees between 16x and 64x to 2.4% (gemmvalid)
 REMOTE_THREADS = [1, 4, 14, 28, 56]
 CACHEFILL_GIB = [24, 32, 40, 48, 56]
 CACHEFILL_TRIAD_GIB = [24, 40, 56]  # Triad already has 16, 32, 48, 64, 96, 128
@@ -847,6 +853,30 @@ def main():
             for n, k in [(14336, 4096), (4096, 4096)]:
                 for m in [1, 16, 256]:
                     gemm(target, "bf16", n, k, m, 4 * ONCHIP_BYTES, "gemm_prepacked", "prepacked")
+
+    # -------------------------------------------------------------- gemmconv
+    # The first GEMM sweep used a pool of about twice the on-chip capacity, which
+    # overstates the weight traffic at small M (gemmvalid).  This part repeats the
+    # headline projection over the decode-to-prefill range with a converged pool, for
+    # both weight layouts of BF16 and for INT8, so the headline roofline and the decode
+    # table no longer need the first sweep below M = 256.  Flat only (SSH, node hbm14).
+    if part == "gemmconv":
+        if args.mode != "flat":
+            raise SystemExit("gemmconv is a Flat-mode part")
+        n, k = 14336, 4096
+        pool = GEMMCONV_POOL_MULTIPLE * ONCHIP_BYTES
+        variants = [("bf16", None), ("bf16", "prepacked")]
+        if int8_gemm_verified():
+            variants.append(("int8", None))
+        for target in targets:
+            for dtype, layout in variants:
+                for m in GEMMCONV_M:
+                    execute(
+                        spec(
+                            0, "gemm", target=target, shape=k, label="gemm_converged", m=m, gemm_n=n,
+                            dtype=dtype, pool=int(pool), layout=layout, warm=GEMM_WARM_PASSES,
+                        )
+                    )
 
     # -------------------------------------------------------------- cachefill
     if part == "cachefill":
