@@ -129,12 +129,11 @@ head = report.headline_gemm_points(ext)
 mem_read = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', access='read'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', access='read')]
 compute = [report.compute_ceiling(ext, p, 'flat', 56) for p in ('fp32', 'amx_bf16', 'amx_int8')] + [report.library_ceiling(gm, 'amx_bf16')]
 pts = report.gemm_workload_points(head[head.dtype == 'bf16'], theory)
-at = {(p.memory_target, int(p.provenance['label'][2:])): p.intensity for p in pts}
 for p in pts:
     # Label HBM points at every fourth M (not M = 4096: its label would overprint the library-line label); DDR points are unlabelled.
     m = int(p.provenance['label'][2:])
     p.provenance['label'] = p.provenance['label'] if p.memory_target == 'hbm' and m in (1, 4, 16, 64, 256, 1024) else ''
-regions = [(at[('hbm', 1)] / 1.3, at[('hbm', 16)] * 1.3, 'decode'), (at[('hbm', 256)] / 1.3, at[('hbm', 4096)] * 1.3, 'prefill')]
+regions = report.llm_phase_regions(ext)
 fig = plotting.roofline_figure(compute, mem_read, pts, title='Roofline · Flat · one socket · BF16 14336×4096 by batch M', regions=regions, point_labels=True)
 figure(fig, 'headline_roofline')
 audit = roofline.audit_points(pts, mem_read, compute)
@@ -824,6 +823,29 @@ say_claims(claims.cache_mode(ext, thesis), ['cache_declines_before_capacity', 'c
     md("""
 Every ridge moves right by the ratio of the two slopes. The 16 GiB line is the case of a model of that size; the 96 GiB line is the Triad-based ceiling of the spilled case. Spilled, the kernels disagree by almost a factor of two and a GEMM streaming weights is faster than the read-only kernel (below): read-only is therefore not a ceiling for a spilled GEMM, and Triad, the fastest kernel measured there, is used.
 
+### Every memory configuration on one plane
+
+The measured compute peaks against the four one-socket ceilings an LLM would stream from: Flat HBM and DDR read-only, Cache read-only with the data resident (16 GiB), and Cache spilled (96 GiB, Triad). The shaded bands are the modeled intensity of the BF16 14336×4096 projection at decode (M = 1 to 16 sequences) and prefill (M = 256 to 4096 tokens) batch sizes. AVX-512 BF16 is left out: its line would overprint FP64.
+"""),
+    code("""
+phases = report.llm_phase_regions(ext, pad=1)
+configs = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', access='read'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', access='read'), resident, spilled]
+peaks = [report.compute_ceiling(ext, p, 'flat', 56) for p in ('fp64', 'fp32', 'vnni_int8', 'amx_bf16', 'amx_int8')]
+fig = plotting.roofline_figure(peaks, configs, title='One socket · measured peaks against every memory configuration', x_range=(0.5, 30000),
+                               regions=report.llm_phase_regions(ext))
+# Both Cache ceilings share the Cache hue; the spilled one is dash-dotted to tell them apart.
+fig.for_each_trace(lambda t: t.update(line_dash='dashdot') if t.name and '@96 GiB' in t.name else None)
+figure(fig, 'atlas_configurations_1s')
+(d_lo, d_hi, _), (p_lo, p_hi, _) = phases
+amx = [roofline.ridge(c.gops, m.gbs) for c in peaks if c.path in ('amx_bf16', 'amx_int8') for m in configs]
+vnni = min(roofline.ridge(c.gops, m.gbs) for c in peaks if c.path == 'vnni_int8' for m in configs)
+vector = {c.path: roofline.ridge(c.gops, configs[0].gbs) for c in peaks if c.path in ('fp64', 'fp32')}
+say(f"**Result.** Decode ({d_lo:.0f}–{d_hi:.0f} op/B) lies at least {min(amx) / d_hi:.0f}× below every AMX ridge ({min(amx):.0f}–{max(amx):.0f} op/B) "
+    f"and {vnni / d_hi:.0f}× below the lowest VNNI ridge ({vnni:.0f} op/B, Flat HBM), so the bandwidth of the memory configuration sets its rate. "
+    f"It is not far from every ridge: on Flat HBM the AVX-512 FP64 and FP32 ridges ({vector['fp64']:.0f} and {vector['fp32']:.0f} op/B) fall inside the decode band. "
+    f"Prefill ({p_lo:.0f}–{p_hi:.0f} op/B) reaches the AMX ridges.")
+"""),
+    md("""
 ## 3. Flat mode, both sockets
 """),
     code("""

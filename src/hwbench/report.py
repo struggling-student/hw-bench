@@ -360,6 +360,23 @@ def headline_gemm_points(ext: pd.DataFrame, shape: str = "14336x4096", pool_x: i
     return out.sort_values(["memory_target", "dtype", "m"]).reset_index(drop=True)
 
 
+def llm_phase_regions(
+    ext: pd.DataFrame, shape: str = "14336x4096", decode=(1, 16), prefill=(256, 4096), pad: float = 1.3
+) -> list[tuple[float, float, str]]:
+    """Decode and prefill intensity intervals for ``plotting.roofline_figure(regions=...)``.
+
+    A decode step runs one token per sequence, so its batch M is the number of sequences; a
+    prefill step runs a whole prompt or chunk.  Each interval spans the modeled intensity of the
+    BF16 headline points at its two batch sizes, widened by ``pad`` so the end points sit inside
+    the band (``pad=1`` gives the bare intensities).  Intensity is not M: it is about M only while
+    M is small next to the matrix, and 14336x4096 saturates near 1800 op/B at M = 4096.
+    """
+
+    head = headline_gemm_points(ext, shape)
+    at = head[head["dtype"].eq("bf16")].groupby("m").intensity.median()
+    return [(at.loc[lo] / pad, at.loc[hi] * pad, label) for (lo, hi), label in ((decode, "decode"), (prefill, "prefill"))]
+
+
 # --------------------------------------------------------------------- span
 def span_table(ext: pd.DataFrame) -> pd.DataFrame:
     """One process over 112 cores: interleaved versus first-touch placement."""
