@@ -7,14 +7,15 @@ Short answer: the node is not different. The unmodified `stream.c` reproduces th
 (678–711 GB/s). The 21% is three properties of how the thesis kernel is measured, none of them a
 property of the hardware: a data pattern that costs about 12%, a loop that is not unrolled (about
 6%), and a median of one-second windows where STREAM reports the best of many short iterations
-(about 9%). The data effect is not specific to Triad: read-only HBM moves by the same kind of amount (E5), and the thesis pattern behaves like random data. The mechanism is not measured.
+(about 9%). The data effect is not specific to Triad: read-only HBM moves by the same kind of amount (E5), and the thesis pattern behaves like random data. E6 measured the mechanism with the privileged counters that became available on 2026-10-19: the package is at its 350 W power limit whatever the data, random data leaves less of it for the uncore (mesh) clock, and HBM bandwidth follows that clock. DDR shows no dependence.
 
 Campaigns `flat-streamgap-20261016T132035Z` (E0–E3), `flat-streamgap_e4-20261016T132755Z` (E4) and `flat-streamgap_e5-20261016T135914Z` (E5),
 both on the Flat node, outside Slurm, idle node, 56 threads on cores 0–55, `numactl --membind=2`,
 three launches of every configuration run in rotation. Code: `benchmarks/streamgap/stream_gap.c`,
 `scripts/streamgap.sh`, `scripts/streamgap_e4.sh`, `scripts/streamgap_e5.sh`, `scripts/streamgap_submit.sh`; tables with
 `python3 scripts/streamgap_summary.py data/raw/streamgap/<campaign>`. This is separate from the
-thesis campaign pipeline: nothing here enters `configs/analysis.json`, the notebooks or the claims.
+thesis campaign pipeline: E0–E5 do not enter `configs/analysis.json`, the notebooks or the claims; E6
+(below) does, as `data_pattern_campaign`, in notebook 06.
 All outputs were verified element by element.
 
 ## What the publications say
@@ -164,5 +165,36 @@ What this does and does not change:
 * Because the effect is on reads as well as writes, it is not a store or a write-allocate
   property; the straightforward reading is a data-dependent limit on the whole memory path.
 * Not tested: other constants and partially random data (how the effect scales with entropy), real
-  model weights, DDR (does it show the same dependence?), HBM-only mode (needs the DIMMs removed),
-  the uncore clock and power during a run (root), the SNC4 mode.
+  model weights, HBM-only mode (needs the DIMMs removed), the SNC4 mode. DDR and the uncore clock and
+  power during a run are covered by E6 below.
+
+## E6 — power and the uncore clock behind the data effect (2026-10-19)
+
+Campaign `flat-streamgap_e6-20261019T212743Z`, script `scripts/streamgap_e6.sh`. The read-only
+kernel of E5 (`stream_gap --kernel read`, 8 GiB, 56 cores, 600 iterations on HBM and 300 on DDR,
+about 10 s each) with the four patterns on HBM and DDR, three rotated repeats. Beside every launch a
+system-wide `sudo perf stat` session (the privileged access granted on 2026-10-19, events of
+`hwbench.uncore.BASE_EVENTS`) read the controllers, RAPL package and DRAM energy, the CHA clock and
+the PCU's power-limit cycles every 100 ms; its workload is a `tail --pid` on the launch, so it ends
+with it. Medians over the read phase of each launch (`hwbench.uncore.kernel_phase`), then over the
+three repeats (`report.data_pattern_counters`, notebook 06):
+
+| Tier | Data | Kernel GB/s | Controller GB/s | Uncore GHz | Package W | Power-limited |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| HBM | zero | 587 | 583 | 1.66 | 350 | 100% |
+| HBM | constants | 572 | 579 | 1.64 | 352 | 100% |
+| HBM | thesis (varied) | 528 | 532 | 1.53 | 353 | 100% |
+| HBM | random | 526 | 531 | 1.53 | 352 | 100% |
+| DDR | all four | 261.2–261.4 | 258.7–258.9 | 1.99–2.02 | 350 | 100% |
+
+* **The mechanism.** All launches hold the package at PL1 (350 W). With random or the thesis data the
+  same power buys a 1.53 GHz uncore; with constants or zeros 1.64–1.66 GHz, and HBM bandwidth moves in
+  proportion: every HBM launch delivers 343–355 GB/s per uncore GHz whatever its data, including the
+  campaign's first launch after idle (565 GB/s at 362 W, the first-window effect of notebook 01). So
+  random-looking data costs more energy per byte (data-dependent switching on the HBM interface and
+  mesh is the likely consumer, not separated here), and under the power limit that lowers the clock
+  that sets HBM bandwidth.
+* **DDR** is at the same power limit but its bandwidth is set by the DIMMs: the pattern changes
+  nothing (0.1%).
+* For the thesis: the read ceiling of 527–543 GB/s is the random-data value under the package power
+  limit. Constants would reach about 575–590 GB/s on this node, as McCalpin's figure does.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import platform
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from hwbench.execution import Guard
+from hwbench.uncore import Session
 
 
 def _frequency_khz() -> float | None:
@@ -49,10 +51,30 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("a command is required after --")
     guard = Guard(check=os.environ.get("HWBENCH_GUARD") == "1")
     guard.start()
+    # Privileged system-wide uncore counters (hwbench.uncore): only the first participant
+    # of a synchronized group owns the session; its windows are the group's windows.
+    event_set = os.environ.get("HWBENCH_UNCORE") or ""
+    session = None
+    environment = os.environ.copy()
+    if event_set and os.environ.get("HWBENCH_PARTICIPANT", "0") == "0":
+        session = Session(event_set, args.output.with_suffix(".perf.csv"))
+        session.start()
+        environment.update(session.environment())
     before = _frequency_khz()
     started_ns = time.monotonic_ns()
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
-    finished_ns = time.monotonic_ns()
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, check=False, env=environment)
+    finally:
+        finished_ns = time.monotonic_ns()
+        uncore = None
+        if session:
+            uncore = session.result(session.stop())
+            # Keep perf's own output as evidence, compressed (minutes of idle intervals).
+            raw = session.log
+            if raw.exists():
+                compressed = raw.with_name(raw.name + ".gz")
+                compressed.write_bytes(gzip.compress(raw.read_bytes(), mtime=0))
+                raw.unlink()
     after = _frequency_khz()
     parsed: dict[str, Any] | None = None
     for line in reversed(completed.stdout.splitlines()):
@@ -103,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
         "stdout": completed.stdout,
         "stderr": completed.stderr,
         "result": parsed,
+        "uncore": uncore,
         **guard.finish(),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

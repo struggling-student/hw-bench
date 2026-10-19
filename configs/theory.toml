@@ -11,6 +11,19 @@ max_turbo_ghz = 3.5   # Intel ARK, max turbo frequency
 smt = false           # one thread per core on CRESCO8 (topology.json: threads_per_core = 1)
 source = "https://www.intel.com/content/www/us/en/products/sku/232592/intel-xeon-cpu-max-9480-processor-112-5m-cache-1-90-ghz/specifications.html"
 
+# Power and uncore-clock limits as configured on the Flat node (cresco8-hbm14), read on
+# 2026-10-19 from /sys/class/powercap/intel-rapl:0 and
+# /sys/devices/system/cpu/intel_uncore_frequency (both sockets the same). Measured
+# configuration, not a vendor statement; 350 W is also the processor's TDP on Intel ARK.
+[power]
+pl1_w = 350             # constraint_0 (long_term) power limit
+pl1_window_s = 0.999    # constraint_0 time window
+pl2_w = 420             # constraint_1 (short_term) power limit
+pl2_window_s = 0.0117   # constraint_1 time window
+uncore_min_ghz = 0.8
+uncore_max_ghz = 2.5
+status = "measured_configuration"
+
 # Peak operations per core per cycle, by execution path.
 # `ops` counts a multiply and an add as two operations.
 [isa.fp64]

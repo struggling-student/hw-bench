@@ -132,3 +132,26 @@ def test_counter_probe_validates_the_events_and_the_write_allocate_inference():
     # Triad reads two of its three arrays whether or not the stores are non-temporal.
     reads = {w: probe[f"{w}/hbm"]["OCR.READS_TO_CORE.DRAM"]["per_expected_line"] for w in ("triad", "triad-nt")}
     assert abs(reads["triad"] - reads["triad-nt"]) < 0.05 and reads["triad"] < 0.7
+
+
+@pytest.fixture(scope="module")
+def uncore_evidence():
+    if not (ROOT / "data/processed/measurements.csv").exists():
+        pytest.skip("no processed data in this checkout")
+    _, _, ext, policy = report.load(ROOT)
+    unc = report.load_uncore(ROOT)
+    if unc.empty:
+        pytest.skip("no uncore campaigns selected")
+    dp = report.data_pattern_counters(policy["data_pattern_campaign"], ROOT) if policy.get("data_pattern_campaign") else None
+    return claims.uncore_claims(unc, ext, Theory.load(), dp)
+
+
+def test_every_uncore_claim_holds(uncore_evidence):
+    failed = [c.id for group in uncore_evidence.values() for c in claims.check(group)]
+    assert not failed, failed
+
+
+def test_uncore_claims_cover_the_review_items(uncore_evidence):
+    ids = {c.id for group in uncore_evidence.values() for c in group}
+    assert {"controller_streams", "clock_drop_power", "first_window_uncore", "remote_duplicate_reads", "gemm_controller_small_m",
+            "loaded_concurrency_counted"} <= ids

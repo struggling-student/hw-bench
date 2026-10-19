@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <immintrin.h>
@@ -71,6 +73,57 @@ std::uint64_t window(int rep, double seconds) {
   (void)seconds;
   return start;
 }
+
+// Optional control of a privileged system-wide `perf stat -D -1 --control` session
+// (src/hwbench/uncore.py). When HWBENCH_PERF_CTL and HWBENCH_PERF_ACK name its FIFOs the
+// counters are enabled once before the warm-up and disabled once after the last sample.
+// Enabling is slow and staggered (perf enables hundreds of uncore events one by one), so
+// nothing is timed around it; disabling takes a few milliseconds, and its clock time is
+// what places perf's intervals on CLOCK_MONOTONIC. In a synchronized group only
+// participant 0 controls the session.
+class PerfControl {
+  int ctl_ = -1, ack_ = -1;
+  void send(const char *command) {
+    if (::write(ctl_, command, std::strlen(command)) < 0)
+      throw std::runtime_error("perf control write failed");
+    char c = 0;
+    do {
+      if (::read(ack_, &c, 1) != 1)
+        throw std::runtime_error("perf control ack failed");
+    } while (c != '\n');
+  }
+
+public:
+  std::uint64_t disable_sent_ns = 0, disable_ack_ns = 0;
+  PerfControl() {
+    const char *ctl = std::getenv("HWBENCH_PERF_CTL"), *ack = std::getenv("HWBENCH_PERF_ACK");
+    const char *participant = std::getenv("HWBENCH_PARTICIPANT");
+    if (!ctl || !ack || !*ctl || (participant && std::string(participant) != "0"))
+      return;
+    ctl_ = ::open(ctl, O_WRONLY);
+    ack_ = ::open(ack, O_RDONLY);
+    if (ctl_ < 0 || ack_ < 0)
+      throw std::runtime_error("cannot open the perf control FIFOs");
+  }
+  bool active() const { return ctl_ >= 0; }
+  void enable() {
+    if (active())
+      send("enable\n");
+  }
+  void disable() {
+    if (!active())
+      return;
+    disable_sent_ns = clock_ns();
+    send("disable\n");
+    disable_ack_ns = clock_ns();
+  }
+  ~PerfControl() {
+    if (ctl_ >= 0)
+      close(ctl_);
+    if (ack_ >= 0)
+      close(ack_);
+  }
+};
 
 
 // ---------------------------------------------------------------------------
@@ -663,6 +716,8 @@ int main(int argc, char **argv) {
               : vbf16  ? 3000000ULL * chains_eff * 64
                        : 3000000ULL * 12 * (fp32 ? 16 : 8) * 2);
     };
+    PerfControl perf;
+    perf.enable();
     if (!latency) {
       work(0);
       work(0);
@@ -748,6 +803,7 @@ int main(int argc, char **argv) {
       }
       std::cout << '}';
     }
+    perf.disable();
     if (stream || sweep || copyk) {
       for (std::size_t i = 0; i < n; i += std::max<std::size_t>(1, n / 1024)) {
         double expected = b[i];
@@ -764,7 +820,11 @@ int main(int argc, char **argv) {
       valid &= cursor >= links && cursor < links + n;
       checksum = cursor - links;
     }
-    std::cout << "],\"checksum\":" << checksum
+    std::cout << ']';
+    if (perf.active())
+      std::cout << ",\"uncore_disable_ns\":[" << perf.disable_sent_ns << ','
+                << perf.disable_ack_ns << ']';
+    std::cout << ",\"checksum\":" << checksum
               << ",\"valid\":" << (valid ? "true" : "false") << "}\n";
     std::free(a);
     std::free(b);

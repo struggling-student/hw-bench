@@ -43,13 +43,13 @@ python3 -m venv .venv
 bash scripts/make_analysis.sh
 ```
 
-Analysis needs Python 3.11 or newer (`tomllib`); the cluster-side scripts run on the system Python 3.9. Raw campaigns must first be present under `data/raw/cache/` and `data/raw/flat/`; the selected campaign IDs are pinned in `configs/analysis.json` (`primary_campaigns`, `benchmark_campaigns`, `supersede` for the October thesis selection; `extended_campaigns` for the later parts). No SSH connection is needed for analysis. Static export requires Kaleido and a compatible Chrome/Chromium.
+Analysis needs Python 3.11 or newer (`tomllib`); the cluster-side scripts run on the system Python 3.9. Raw campaigns must first be present under `data/raw/cache/` and `data/raw/flat/`; the selected campaign IDs are pinned in `configs/analysis.json` (`primary_campaigns`, `benchmark_campaigns`, `supersede` for the October thesis selection; `extended_campaigns` for the later parts, `uncore_campaigns` for the privileged-counter parts and `data_pattern_campaign` for STREAMGAP E6). No SSH connection is needed for analysis. Static export requires Kaleido and a compatible Chrome/Chromium.
 
 ## Evidence and interpretation
 
 Raw measurements remain unchanged. Normalization retains each sample's source, campaign, node, launch method, socket, placement, implementation, shape, timing window, effective clock and acceptance decision. The analysis selects declared campaigns and accepted steady samples; it never silently chooses the best socket or latest run.
 
-Flat DDR/HBM rates use explicit placement. Cache rates describe the effective memory system at a stated working set. Bandwidth and intensity use modeled bytes, not memory-controller counts (uncore counters are not readable without privileges). Theoretical peaks are in [`configs/theory.toml`](configs/theory.toml) with their source and whether they are vendor figures or derivations; measured peaks, theoretical peaks and library-achieved rates are always distinguished by line style.
+Flat DDR/HBM rates use explicit placement. Cache rates describe the effective memory system at a stated working set. Bandwidth and intensity use modeled bytes; on the Flat node a privileged `perf stat` session counts the memory controllers, UPI, power and clocks for the campaigns of notebook 06, where controller bytes agree with the model to 2%. Cache mode has no such counters. Theoretical peaks are in [`configs/theory.toml`](configs/theory.toml) with their source and whether they are vendor figures or derivations; measured peaks, theoretical peaks and library-achieved rates are always distinguished by line style.
 
 ## Documentation
 

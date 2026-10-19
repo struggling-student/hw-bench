@@ -33,11 +33,12 @@ def test_tier_ratios_are_computed_from_the_measured_pairs_not_copied(evidence):
     )
 
 
-def test_literature_claims_hold_and_say_what_was_not_tested(evidence):
+def test_literature_claims_hold_and_name_the_measured_cause(evidence):
     ext, thesis = evidence
     cs = {c.id: c for c in claims.literature(ext, thesis)}
     assert not claims.check(list(cs.values()))
-    assert "was not tested" in cs["literature_agreement"].text
+    # The data-pattern cause was untested until the privileged counters (STREAMGAP E6).
+    assert "data_pattern_power" in cs["literature_agreement"].text
     assert "STREAMGAP" in cs["literature_agreement"].text and "not the node" in cs["literature_agreement"].text
     assert "like-for-like" in cs["literature_two_socket"].text
 

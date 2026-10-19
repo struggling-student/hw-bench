@@ -5,8 +5,10 @@ saying whether the *direction* of the statement is true (``holds``).  Notebooks 
 claims with ``say_claims``; building a notebook, or running the test suite, fails when a
 claim no longer holds, so prose cannot drift away from the data again.
 
-Claims that describe a mechanism say so explicitly ("inferred", "not measured"): the
-counters that would test them are not readable on this system.
+Claims that describe a mechanism say so explicitly ("inferred", "not measured").  Since
+2026-10-19 the Flat node allows a privileged system-wide ``perf stat``; ``uncore_counters``
+holds the claims that its controller, UPI, power and clock counters measure (notebook 06).
+Cache mode stays without them.
 """
 
 from __future__ import annotations
@@ -44,6 +46,13 @@ def check(claims: list[Claim]) -> list[Claim]:
 
 def _pct(x: float, digits: int = 0) -> str:
     return f"{100 * x:.{digits}f}%"
+
+
+def _span(values: pd.Series, digits: int = 2) -> str:
+    """``low–high`` at the given precision, or one value when both round the same."""
+
+    low, high = f"{float(values.min()):.{digits}f}", f"{float(values.max()):.{digits}f}"
+    return low if low == high else f"{low}–{high}"
 
 
 def _socket0_local(bw: pd.DataFrame) -> pd.DataFrame:
@@ -146,7 +155,8 @@ def compute_paths(ext: pd.DataFrame, theory: Theory) -> list[Claim]:
             float(amx.max()) < float(min(avx.min(), vnni)),
             f"The cores ran at about {avx.median():.2f} GHz on AVX-512 FMA/BF16 code, {vnni:.2f} GHz on VNNI and "
             f"{amx.median():.2f} GHz on AMX code, against a {theory.base_ghz:.1f} GHz base clock; AMX ran at the lowest clock. "
-            "A power-related limit is plausible but was not measured.",
+            "The package counters of notebook 06 show these peaks below the 350 W limit and never clipped for power (claim `energy_per_op`), so the "
+            "lower AMX clock is not a power limit; it is the frequency the processor runs AMX code at (inferred).",
         ),
         Claim(
             "avx512_bf16_bound",
@@ -311,7 +321,8 @@ def core_scaling(ext: pd.DataFrame, thesis: pd.DataFrame, root: Path = ROOT) -> 
             clock.loc[56, "flat_hbm"] < clock.loc[56, "flat_ddr"] < clock.loc[1, "flat_hbm"],
             f"While HBM is streamed the effective clock falls from {clock.loc[1, 'flat_hbm']:.2f} GHz (1 core) to "
             f"{clock.loc[28, 'flat_hbm']:.2f} GHz (28 cores) and {clock.loc[56, 'flat_hbm']:.2f} GHz (56 cores); on DDR it falls less, "
-            f"to {clock.loc[56, 'flat_ddr']:.2f} GHz at 56 cores. The cause (power limit or energy-efficient turbo) is not measured. "
+            f"to {clock.loc[56, 'flat_ddr']:.2f} GHz at 56 cores. The cause is the package power limit: at 56 cores the package draws its 350 W PL1 and the frequency is clipped for power "
+            "in nearly every cycle (counters of notebook 06, claim `clock_drop_power`). "
             "Fewer cycles per second also lowers the rate at which cores can issue memory requests.",
         ),
         Claim(
@@ -616,15 +627,16 @@ def placement(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"This repeat (separate campaign, 5 s windows, CV {at56[at56.kernel.eq('read') & at56.memory_target.eq('hbm')].cv_remote.min():.1f}–"
             f"{at56[at56.kernel.eq('read') & at56.memory_target.eq('hbm')].cv_remote.max():.1f}%) confirms the first campaign's "
             f"{hbm_r.remote:.0f} GB/s ({_pct(hbm_r.remote_over_local)}, CV {first_cv.min():.0f}–{first_cv.max():.0f}%) and gives the figure to quote. Link bandwidth alone does not explain it; "
-            "the mechanism is not identified, because the UPI and CHA counters are not readable.",
+            "the uncore counters of notebook 06 show the mechanism: at 56 threads every remote HBM line is read about twice from memory and crosses UPI "
+            "about twice (claim `remote_duplicate_reads`).",
         ),
         Claim(
             "remote_hbm_thread_profile",
             bool(prof.max() > 2 * prof.loc[56] and dprof.loc[56] > 0.95 * dprof.loc[28]),
             f"Remote HBM does not hit a flat ceiling: its read bandwidth rises to {prof.max():.0f} GB/s at {peak_t} threads, is still {prof.loc[28]:.0f} GB/s "
             f"at 28 and then falls to {prof.loc[56]:.1f} GB/s at 56, while remote DDR plateaus at {dprof.loc[28]:.0f} GB/s from 28 threads on. "
-            "More concurrent requesters make remote HBM slower, which is what contention on a shared resource (directory or snoop traffic, link credits) would "
-            "do; which resource is not measured.",
+            "More concurrent requesters make remote HBM slower. The counters of notebook 06 rule out directory traffic and a saturated link and show "
+            "duplicated reads instead: at 56 threads the HBM controllers read about twice the delivered bytes (claim `remote_duplicate_reads`).",
         ),
     ]
 
@@ -853,7 +865,7 @@ def fp64_sweep(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[
             f"Near the ridge the cores run slower: at {h12.loc[64].intensity:.0f} FLOP/B on HBM the effective clock is {h12.loc[64].ghz:.2f} GHz "
             f"against {h12.loc[1024].ghz:.2f} GHz at high intensity, so the sweep sits at {_pct(float(h12.loc[64].fraction_of_peak))} of the peak but "
             f"{_pct(float(h12.loc[64].fraction_at_clock))} of the peak at that clock. The dip around the ridge is mostly the clock drop under HBM streaming "
-            "(cause not measured), not a kernel limit.",
+            "(the package power limit measured for the streams in notebook 06), not a kernel limit.",
         ),
     ]
 
@@ -1156,8 +1168,9 @@ def repeatability(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"On Flat HBM the first one-second window of a 56-core stream is faster than the rest: {_pct(float(at56.median()['hbm']) - 1, 1)} in the "
             f"median over {int(at56.size()['hbm'])} configurations (up to {_pct(float(at56.max()['hbm']) - 1)}), against "
             f"{_pct(float(at56.median()['ddr']) - 1, 1)} on DDR. It appears only with many cores ({_pct(float(hbm_by_threads.loc[14]) - 1, 1)} at 14 "
-            f"threads, {_pct(float(hbm_by_threads.loc[28]) - 1, 1)} at 28), the regime in which the clock falls while HBM streams, so a power or "
-            "frequency transient after an idle gap is the plausible cause (inferred; neither is counted). The five-window median moves by at most "
+            f"threads, {_pct(float(hbm_by_threads.loc[28]) - 1, 1)} at 28), the regime in which the clock falls while HBM streams. The counters of notebook 06 measure the cause: after the idle setup the package "
+            "may run above its 350 W limit for about a second, and in that window the uncore clock, and HBM bandwidth with it, is higher (claim "
+            "`first_window_uncore`). The five-window median moves by at most "
             f"{_pct(float(hbm56.median_shift.abs().max()), 1)}; Table 1 also lists the sustained median without the first window, and the "
             "min–max range of HBM rows is mostly this transient.",
         ),
@@ -1208,8 +1221,9 @@ def literature(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             "its measurement, not the node: the unmodified STREAM `stream.c`, run on the same node (Triad-gap investigation, docs/STREAMGAP.md, data/raw/streamgap), "
             "reaches 678 to 711 GB/s, and the thesis kernel loses to its data pattern (constants are 13% faster), its loop (4 cache lines per iteration are 6% faster) "
             "and its median of one-second windows against the best of many short iterations (9%). The same data effect lowers the read-only ceiling: "
-            "527 GB/s with the thesis pattern or random data, 576 with constants. The publication does not state compiler flags or clock, and why the data "
-            "pattern matters was not tested (RAPL and the uncore clock need root).",
+            "527 GB/s with the thesis pattern or random data, 576 with constants. The publication does not state compiler flags or clock. Why the data pattern "
+            "matters is measured in notebook 06: the package sits at its power limit either way, and random data leaves less power for the uncore clock, "
+            "which HBM bandwidth follows (claim `data_pattern_power`).",
         ),
         Claim(
             "literature_loaded",
@@ -1217,7 +1231,7 @@ def literature(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"The loaded latency agrees with the counter-measured one of the same CPU: McCalpin reports {lt.loc['HBM load latency, all cores streaming'].published:.0f} ns "
             f"average queue occupancy and {lt.loc['HBM outstanding line reads per core, all cores'].published:.1f} outstanding line reads per core with all cores streaming HBM; "
             f"the chase beside 55 streaming cores takes {lt.loc['HBM load latency, all cores streaming'].measured:.0f} ns, and Little's law on this study's rate and latency "
-            f"gives {lt.loc['HBM outstanding line reads per core, all cores'].measured:.1f} lines per core (inferred, no counter read here). With one streaming core the values are "
+            f"gives {lt.loc['HBM outstanding line reads per core, all cores'].measured:.1f} lines per core (the rate in that product is confirmed at the memory controllers to 1% in notebook 06, claim `loaded_concurrency_counted`). With one streaming core the values are "
             f"{lt.loc['HBM load latency, 1 core streaming'].measured:.0f} ns and {lt.loc['HBM outstanding line reads per core, 1 core'].measured:.1f} lines against "
             f"{lt.loc['HBM load latency, 1 core streaming'].published:.0f} ns and {lt.loc['HBM outstanding line reads per core, 1 core'].published:.1f}. "
             "The published reading (McCalpin 2023) is that the concurrency a core sustains falls and the latency rises as cores are added, which is why HBM stays far below its peak; the numbers here are consistent with it, not a test of it.",
@@ -1228,6 +1242,241 @@ def literature(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"The published two-socket HBM Triad ({two.published:.0f} GB/s with standard flags, {lt.loc['HBM Triad with streaming stores, 2 sockets'].published:.0f} "
             f"with streaming stores; Reguly 2023) is for HBM-only mode with SNC4 clustering and hyperthreading on, which this study did not run, so it shows "
             f"what a different configuration can reach, not a like-for-like comparison: Flat mode here reaches {two.measured:.0f} GB/s ({_pct(two.ratio)} of the first).",
+        ),
+    ]
+
+
+def uncore_remote(unc: pd.DataFrame) -> list[Claim]:
+    """What crosses UPI and reaches the controllers for remote memory (review item U2)."""
+
+    rc = report.remote_counter_table(unc).set_index(["memory_target", "kernel", "threads", "placement"])
+    remote = rc.xs("remote", level="placement")
+    hbm56 = remote.loc[("hbm", "read", 56)]
+    clean = remote.drop(index=("hbm", "read", 56))
+    ddr = remote.xs(("ddr", "read"), level=("memory_target", "kernel"))
+    hbm_low = remote.xs(("hbm", "read"), level=("memory_target", "kernel")).drop(index=56)
+    ddr_flits = remote.loc[("ddr", "read")].upi_flits_per_line
+    peak_flits_ddr = float((ddr.gbs * 1e9 / 64 * ddr.upi_flits_per_line).max())
+    hbm56_flits = float(hbm56.gbs * 1e9 / 64 * hbm56.upi_flits_per_line)
+    return [
+        Claim(
+            "upi_flits_per_line",
+            bool(clean.upi_flits_per_line.between(8.8, 9.3).all() and rc.xs("local", level="placement").upi_flits_per_line.max() < 0.01),
+            f"A remote 64-byte line costs {clean.upi_flits_per_line.min():.2f}–{clean.upi_flits_per_line.max():.2f} UPI data flits wherever reads are not "
+            f"duplicated (remote DDR at 14–56 threads, remote HBM at 14 and 28, remote non-temporal Triad), and local runs send none. Remote DDR plateaus at "
+            f"{ddr.gbs.min():.0f}–{ddr.gbs.max():.0f} GB/s, that is {peak_flits_ddr / 1e9:.1f} × 10⁹ data flits per second over the links, the most UPI carried in "
+            "any of these runs.",
+        ),
+        Claim(
+            "remote_duplicate_reads",
+            bool(hbm56.ctrl_over_modeled > 1.5 and hbm56.upi_flits_per_line > 1.5 * ddr_flits.median() and clean.ctrl_over_modeled.between(0.98, 1.03).all()
+                 and rc.dir_updates_per_line.max() < 0.01 and rc[rc.index.get_level_values("kernel") == "read"].ctrl_write_per_read.max() < 0.01
+                 and hbm56_flits < peak_flits_ddr),
+            f"Remote HBM collapses at 56 threads because its lines are fetched about twice: the kernel receives {hbm56.gbs:.0f} GB/s, the HBM controllers "
+            f"of socket 1 read {hbm56.ctrl_over_modeled:.2f}× those bytes and UPI carries {hbm56.upi_flits_per_line:.1f} data flits per delivered line "
+            f"against {ddr_flits.median():.1f} for a clean remote read. At 14 and 28 threads the same remote HBM read is clean "
+            f"({hbm_low.ctrl_over_modeled.min():.2f}–{hbm_low.ctrl_over_modeled.max():.2f}× at the controllers, {hbm_low.gbs.min():.0f}–{hbm_low.gbs.max():.0f} GB/s), "
+            "and so is remote DDR at every thread count. The link is not saturated "
+            f"({hbm56_flits / 1e9:.1f} × 10⁹ flits/s against {peak_flits_ddr / 1e9:.1f} on remote DDR), there are "
+            f"{rc.dir_updates_per_line.max() * 1e3:.2f} directory updates per thousand lines at most, and the read kernels write back at most {_pct(float(rc[rc.index.get_level_values('kernel') == 'read'].ctrl_write_per_read.max()), 1)} "
+            "of what they read, so directory traffic is not the mechanism. Which agent issues the second read (a prefetch, a retried request) is not resolved "
+            "by these events.",
+        ),
+    ]
+
+
+def uncore_gemm(unc: pd.DataFrame) -> list[Claim]:
+    """GEMM traffic at the memory controllers (review item U4)."""
+
+    gc = report.gemm_controller_table(unc)
+    small = gc[gc.m.le(64)]
+    big = gc[gc.m.eq(256)].set_index(["dtype", "memory_target"])
+    bf, i8 = big.xs("bf16", level="dtype"), big.xs("int8", level="dtype")
+    return [
+        Claim(
+            "gemm_controller_small_m",
+            bool(small.ctrl_over_counted.between(0.98, 1.02).all() and small.ctrl_over_modeled.between(0.93, 1.0).all()),
+            f"For decode-sized batches the cores' own counts are the memory traffic: from M = 1 to 64 the controllers see "
+            f"{small.ctrl_over_counted.min():.3f}–{small.ctrl_over_counted.max():.3f}× the bytes the offcore counters of the GEMM's threads counted, and "
+            f"{small.ctrl_over_modeled.min():.2f}–{small.ctrl_over_modeled.max():.2f}× the modeled bytes (BF16 and INT8, HBM and DDR, converged pool), so "
+            f"modeled intensities at M ≤ 64 are at most {_pct(1 / small.ctrl_over_modeled.min() - 1)} low and the M = 1 points are within "
+            f"{_pct(float((1 / gc[gc.m.eq(1)].ctrl_over_modeled - 1).max()))}.",
+        ),
+        Claim(
+            "gemm_controller_m256",
+            bool((bf.ctrl_read_over_modeled > 1.15).all() and (i8.ctrl_over_modeled < 0.9).all() and (bf.counted_write_over_modeled > 2 * bf.ctrl_write_over_modeled).all()),
+            f"At M = 256 the model misses in both directions. Plain-layout BF16 reads {bf.ctrl_read_over_modeled.min():.2f}–{bf.ctrl_read_over_modeled.max():.2f}× the "
+            f"modeled bytes at the controllers, about 1.3 passes over the weights per call, so its controller-level intensity is "
+            f"{bf.intensity_ctrl.min():.0f}–{bf.intensity_ctrl.max():.0f} FLOP/B against {bf.intensity_modeled.iloc[0]:.0f} modeled. INT8 (weights prepacked) reads "
+            f"{_span(i8.ctrl_read_over_modeled)}×, which is the weights and activations once: its int32 output stays on chip, "
+            f"and its intensity is {i8.intensity_ctrl.min():.0f}–{i8.intensity_ctrl.max():.0f} FLOP/B against {i8.intensity_modeled.iloc[0]:.0f} modeled. The cores' "
+            f"write estimate over-counts at M = 256 ({_span(bf.counted_write_over_modeled)}× modeled for BF16 against "
+            f"{bf.ctrl_write_over_modeled.max():.2f}× written at the controllers), so the counted-bytes atlas places that point lower than the controllers would.",
+        ),
+        Claim(
+            "gemm_power_limited",
+            bool(gc.power_limited.min() > 0.85 and gc.pkg_w.sub(350).abs().max() < 10),
+            f"Every GEMM here, M = 1 to 256 on either tier, runs at the package limit ({gc.pkg_w.min():.0f}–{gc.pkg_w.max():.0f} W, clipped for power in "
+            f"{_pct(float(gc.power_limited.min()))} or more of the cycles), with cores at {gc.core_ghz.min():.2f}–{gc.core_ghz.max():.2f} GHz and the uncore at "
+            f"{gc.uncore_ghz.min():.2f}–{gc.uncore_ghz.max():.2f} GHz: a 56-core GEMM, decode or prefill, is power-bound on this node.",
+        ),
+    ]
+
+
+def uncore_loaded(unc: pd.DataFrame, ext: pd.DataFrame) -> list[Claim]:
+    """Loaded latency with the bandwidth the controllers served in the same windows (R3)."""
+
+    lc = report.loaded_concurrency(unc).set_index(["memory_target", "streaming_cores"])
+    before = report.loaded_latency(ext).assign(memory_target=lambda f: f.config.str.replace("flat_", "", regex=False))
+    before = before.set_index(["memory_target", "stream_cores"]).loaded_ns
+    loaded = lc[lc.index.get_level_values("streaming_cores") > 0]
+    agree = (loaded.latency_ns / before.reindex(loaded.index)).dropna()
+    busy = loaded[loaded.index.get_level_values("streaming_cores") >= 4]
+    ctrl_vs_model = busy.tier_gbs / busy.stream_gbs_modeled
+    h, d = lc.loc[("hbm", 55)], lc.loc[("ddr", 55)]
+    hi, di = lc.loc[("hbm", 0)], lc.loc[("ddr", 0)]
+    return [
+        Claim(
+            "loaded_concurrency_counted",
+            bool(len(agree) == 10 and agree.sub(1).abs().max() < 0.02 and ctrl_vs_model.between(0.98, 1.03).all()),
+            f"The concurrency behind the loaded latency now rests on counted bytes: in the same synchronized windows the bound tier's controllers served "
+            f"{_span(ctrl_vs_model, 3)}× the streaming cores' modeled rate (4 to 55 streaming cores), and the chase, rerun with the session, reproduces the "
+            f"earlier loaded latencies to within {_pct(float(agree.sub(1).abs().max()), 1)}. Little's law on the controller rate gives {h.lines_in_flight:.0f} lines in flight on "
+            f"HBM with 55 streaming cores ({h.lines_in_flight / 56:.1f} per core, {h.latency_ns:.0f} ns, {h.tier_gbs:.0f} GB/s) and {d.lines_in_flight:.0f} on DDR "
+            f"({d.lines_in_flight / 56:.1f} per core, {d.latency_ns:.0f} ns, {d.tier_gbs:.0f} GB/s). The latency in that product is still the chasing core's, assumed to be "
+            "what the streams' loads see.",
+        ),
+        Claim(
+            "loaded_uncore_clock",
+            bool(h.uncore_ghz < hi.uncore_ghz - 0.5 and h.pkg_w > 345 and d.uncore_ghz > h.uncore_ghz),
+            f"Under load the mesh slows with the power limit: the uncore clock falls from {hi.uncore_ghz:.2f} GHz with the chase alone to {h.uncore_ghz:.2f} GHz beside "
+            f"55 HBM-streaming cores ({h.pkg_w:.0f} W), and to {d.uncore_ghz:.2f} GHz beside 55 DDR-streaming cores ({di.uncore_ghz:.2f} idle). Part of the HBM latency "
+            "rise may be the slower mesh rather than queueing at the memory (not separated here).",
+        ),
+    ]
+
+
+def data_pattern_claims(dp: pd.DataFrame) -> list[Claim]:
+    """The data-pattern effect on the read ceiling, with power and the uncore clock (STREAMGAP E6)."""
+
+    med = dp.groupby(["memory_target", "init"]).median(numeric_only=True)
+    hbm, ddr = med.loc["hbm"], med.loc["ddr"]
+    low = hbm.loc[["random", "varied"]]
+    high = hbm.loc[["const", "zero"]]
+    h = dp[dp.memory_target.eq("hbm")].assign(per_ghz=lambda f: f.gbs / f.uncore_ghz)
+    first = dp.loc[(dp.memory_target.eq("hbm")) & dp.gbs.sub(low.gbs.median()).gt(20) & dp.init.isin(["random", "varied"])]
+    return [
+        Claim(
+            "data_pattern_power",
+            bool(high.gbs.min() > 1.05 * low.gbs.max() and high.uncore_ghz.min() > 1.04 * low.uncore_ghz.max()
+                 and hbm.pkg_w.sub(350).abs().max() < 5 and hbm.power_limited.min() > 0.95
+                 and h.per_ghz.std() / h.per_ghz.mean() < 0.02 and ddr.gbs.max() / ddr.gbs.min() < 1.005),
+            f"The data pattern moves the HBM read ceiling through the power limit, now measured (STREAMGAP E6): with constant or zero data the 56-core read "
+            f"sustains {_span(high.gbs, 0)} GB/s with the uncore at {_span(high.uncore_ghz)} GHz, with random or the thesis data {_span(low.gbs, 0)} GB/s at "
+            f"{_span(low.uncore_ghz)} GHz, while the package draws {_span(hbm.pkg_w, 0)} W and has its frequency clipped for power in "
+            f"{_span(hbm.power_limited * 100, 0)}% of the PCU cycles in every case. Random-looking data costs more energy per byte (the same power for {_pct(1 - low.gbs.median() / high.gbs.median())} fewer bytes), "
+            "so under the limit the mesh runs slower; per uncore GHz every "
+            f"one of the {len(h)} HBM launches moves {h.per_ghz.min():.0f}–{h.per_ghz.max():.0f} GB/s whatever its data"
+            + (f" (including the campaign's first launch, {first.gbs.iloc[0]:.0f} GB/s at {first.pkg_w.iloc[0]:.0f} W after the idle setup)" if len(first) else "")
+            + f". DDR shows no dependence: {_span(ddr.gbs, 1)} GB/s for all four patterns, uncore {_span(ddr.uncore_ghz)} GHz, at the same power limit. "
+            "The thesis read ceiling is therefore a random-data figure set by the power limit; model weights are not constants, so it is the relevant one "
+            "(real weights were not tested).",
+        ),
+    ]
+
+
+def uncore_streams(unc: pd.DataFrame, theory: Theory, ext: pd.DataFrame | None = None) -> list[Claim]:
+    """Controller traffic, power and clocks of the streams (review item U1)."""
+
+    ct = report.controller_table(unc)
+    pt = report.power_table(unc)
+    fw = report.first_window_counters(unc).set_index(["memory_target", "kernel"])
+    cost = report.counting_cost(unc)
+    many = ct[ct.threads.ge(14)]
+    one = ct[ct.threads.eq(1)]
+    idle_gbs = float((one.ctrl_gbs - one.gbs).median())
+    pl1 = float(theory.power["pl1_w"])
+    streams = pt[pt.memory_target.isin(["ddr", "hbm"])].set_index(["memory_target", "kernel", "threads"])
+    full = streams.xs(56, level="threads")
+    hbm, ddr = full.loc[("hbm", "read")], full.loc[("ddr", "read")]
+    h14 = streams.loc[("hbm", "read", 14)]
+    hf, df_ = fw.loc[("hbm", "read")], fw.loc[("ddr", "read")]
+    hbm_fw = fw.loc["hbm"]
+    ddr_fw = fw.loc["ddr"]
+    compute = pt[pt.memory_target.eq("registers") & pt.threads.eq(56)].set_index("kernel")
+    second = None
+    if ext is not None:
+        second = report.second_window_ratio(ext)
+        second = second[second.memory_target.eq("hbm")]
+    return [
+        Claim(
+            "controller_streams",
+            bool(many.ctrl_over_modeled.between(0.98, 1.02).all() and many.ctrl_over_counted.between(0.98, 1.03).all()),
+            f"At the memory controllers the traffic model holds: from 14 to 56 cores the CAS bytes of every DDR and HBM channel are "
+            f"{many.ctrl_over_modeled.min():.3f}–{many.ctrl_over_modeled.max():.3f} of the modeled bytes for read, Triad and non-temporal copy on both "
+            f"tiers, and {many.ctrl_over_counted.min():.3f}–{many.ctrl_over_counted.max():.3f} of what the cores' offcore counters saw, inside the review's "
+            f"±2% acceptance (U1). On one core the controllers see {one.ctrl_over_modeled.min():.2f}–{one.ctrl_over_modeled.max():.2f}× the model: the idle "
+            f"background of the node (about {idle_gbs:.1f} GB/s) is {_pct(idle_gbs / float(one.gbs.median()))} of a one-core stream.",
+        ),
+        Claim(
+            "controller_tier",
+            bool(many.tier_share.ge(0.99).all()),
+            f"Flat binding holds at the controllers: {_pct(float(many.tier_share.min()), 1)} or more of the CAS bytes land on the bound tier from "
+            "14 cores up (HBM channel controllers for HBM, DDR channels for DDR), and the read kernel writes "
+            f"{_pct(float(many[many.kernel.eq('read')].write_share.max()), 1)} or less of its bytes.",
+        ),
+        Claim(
+            "counting_cost",
+            bool(len(cost) == 6 and cost.with_over_without.sub(1).abs().max() < 0.01),
+            f"Counting costs at most {_pct(float(1 - cost.with_over_without.min()), 1)}: with the system-wide session the 56-core streams sustain "
+            f"{cost.with_over_without.min():.3f}–{cost.with_over_without.max():.3f}× the rate of the same point measured without it in the same launch "
+            f"(windows 3–5, {len(cost)} pairs; DDR {_span(cost[cost.memory_target.eq('ddr')].with_over_without, 3)}). The largest gap, "
+            f"HBM read, is inside that point's window-to-window spread ({cost.cv_with.max():.1f}% with, {cost.cv_without.max():.1f}% without).",
+        ),
+        Claim(
+            "clock_drop_power",
+            bool(abs(hbm.pkg_w / pl1 - 1) < 0.03 and hbm.power_limited > 0.9 and hbm.thermal_limited < 0.01 and hbm.core_ghz < h14.core_ghz - 0.5),
+            f"The clock drops while HBM streams because the package reaches its power limit: at 56 cores the HBM read runs at {hbm.pkg_w:.0f} W "
+            f"(PL1 {pl1:.0f} W), the power-control unit clips the frequency for power in {_pct(hbm.power_limited)} of its cycles and for "
+            f"temperature in {_pct(hbm.thermal_limited)}, and the core clock is {hbm.core_ghz:.2f} GHz with the uncore at {hbm.uncore_ghz:.2f} GHz, against "
+            f"{h14.core_ghz:.2f} and {h14.uncore_ghz:.2f} GHz at 14 cores ({h14.pkg_w:.0f} W, not limited). DDR read at 56 cores is power-limited as well "
+            f"({ddr.pkg_w:.0f} W, {_pct(ddr.power_limited)}) but keeps {ddr.core_ghz:.2f} GHz cores and a {ddr.uncore_ghz:.2f} GHz uncore at its lower bandwidth. "
+            "This replaces the earlier inference with a measurement.",
+        ),
+        Claim(
+            "first_window_uncore",
+            bool(hf.gbs_ratio > 1.03 and (hbm_fw.ctrl_gbs_ratio - hbm_fw.uncore_ghz_ratio).abs().max() < 0.02 and abs(hf.core_ghz_ratio - 1) < 0.02
+                 and hf.pkg_w_first > pl1 and ddr_fw.gbs_ratio.sub(1).abs().max() < 0.01),
+            f"The fast first window on HBM is the uncore clock riding the power budget: the first one-second window of the 56-core HBM read moves "
+            f"{_pct(hf.gbs_ratio - 1)} more than windows 3–5, its controllers serve {_pct(hf.ctrl_gbs_ratio - 1)} more, and the uncore runs "
+            f"{_pct(hf.uncore_ghz_ratio - 1)} faster ({hf.uncore_ghz_first:.2f} against {hf.uncore_ghz_rest:.2f} GHz) while the core clock is unchanged "
+            f"({hf.core_ghz_first:.2f} and {hf.core_ghz_rest:.2f} GHz). The package draws {hf.pkg_w_first:.0f} W in that window and {hf.pkg_w_rest:.0f} W in windows 3–5: "
+            f"after the idle setup the running average over RAPL's {theory.power['pl1_window_s']:.0f}-second window lets it exceed PL1 ({pl1:.0f} W) "
+            f"until the average catches up, which here, after the counting session's longer setup, takes into window 2 ({_span(hbm_fw.pkg_w_second, 0)} W)"
+            + (f"; in the campaigns without the session window 2 is already sustained (within {_pct(float(second.second_ratio.sub(1).abs().median()), 1)} of windows 3–5 "
+               f"in the median, so Table 1's sustained median, which drops only window 1, moves by at most {_pct(float(second.drop1_over_drop2.sub(1).abs().max()), 1)})"
+               if second is not None else "")
+            + f". DDR streams get the same power burst ({df_.pkg_w_first:.0f} W) without moving more "
+            f"(first/rest {df_.gbs_ratio:.3f} for read; {ddr_fw.gbs_ratio.min():.3f}–{ddr_fw.gbs_ratio.max():.3f} over the DDR streams): DDR bandwidth is set by the "
+            f"DIMMs, HBM bandwidth by the mesh clock: over the three HBM streams the first window is {hbm_fw.gbs_ratio.min():.3f}–{hbm_fw.gbs_ratio.max():.3f}× "
+            f"the rest, and the controller ratio follows the uncore-clock ratio to within {(hbm_fw.ctrl_gbs_ratio - hbm_fw.uncore_ghz_ratio).abs().max():.3f}.",
+        ),
+        Claim(
+            "energy_per_byte",
+            bool(hbm.pj_per_byte < ddr.pj_per_byte),
+            f"Per byte at full bandwidth HBM costs less energy than DDR: the computing socket's package plus DRAM power over the bytes the "
+            f"controllers moved is {hbm.pj_per_byte:.0f} pJ/B for the 56-core HBM read ({hbm.pkg_w:.0f} + {hbm.ram_w:.0f} W at {hbm.gbs:.0f} GB/s) and "
+            f"{ddr.pj_per_byte:.0f} pJ/B on DDR ({ddr.pkg_w:.0f} + {ddr.ram_w:.0f} W at {ddr.gbs:.0f} GB/s), {ddr.pj_per_byte / hbm.pj_per_byte:.1f}× more. "
+            "These are whole-socket figures including the idle floor, not the energy of the transfer alone.",
+        ),
+        Claim(
+            "energy_per_op",
+            bool(len(compute) == 6 and compute.power_limited.max() < 0.05 and compute.pj_per_op.idxmin() == "AMX INT8"),
+            "The compute peaks stay below the power limit (at most "
+            f"{compute.pkg_w.max():.0f} W, clipped in {_pct(float(compute.power_limited.max()))} of the cycles), so their clocks are not set by power. "
+            "Package energy per operation at 56 cores: "
+            + "; ".join(f"{k} {r.pj_per_op:.1f} pJ ({r.pkg_w:.0f} W)" for k, r in compute.sort_values("pj_per_op").iterrows())
+            + f". AMX INT8 does an operation for {compute.pj_per_op.max() / compute.pj_per_op.min():.0f}× less energy than AVX-512 FP64.",
         ),
     ]
 
@@ -1256,3 +1505,17 @@ def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Pa
         "counted": counted(ext, thesis),
         "literature": literature(ext, thesis),
     }
+
+
+def uncore_claims(unc: pd.DataFrame, ext: pd.DataFrame, theory: Theory, data_pattern: pd.DataFrame | None = None) -> dict[str, list[Claim]]:
+    """Every claim of notebook 06 (privileged uncore counters, Flat node)."""
+
+    out = {
+        "uncore_streams": uncore_streams(unc, theory, ext),
+        "uncore_remote": uncore_remote(unc),
+        "uncore_gemm": uncore_gemm(unc),
+        "uncore_loaded": uncore_loaded(unc, ext),
+    }
+    if data_pattern is not None and len(data_pattern):
+        out["data_pattern"] = data_pattern_claims(data_pattern)
+    return out

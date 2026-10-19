@@ -1,7 +1,8 @@
 # Status of the analysis
 
 The single place that says what is finished, what is running and what is left. Last updated
-**2026-10-16**, after the review items C10, M3, R2 and R3 and the figure and table simplification.
+**2026-10-19**, after the privileged-counter campaigns (U1, U2, U4, R3 with counters, STREAMGAP E6)
+and notebook 06.
 Item IDs (C1–C10, M1–M3, R1–R3, U1–U4) refer to the [2026-10-16 review](archive/REVIEW_2026-10-16.md); the
 history of the first review is in [archive/STATUS_2026-10-12.md](archive/STATUS_2026-10-12.md) (historical, not
 maintained). The process documents are in [archive/](archive/).
@@ -12,9 +13,9 @@ maintained). The process documents are in [archive/](archive/).
 | --- | --- |
 | Branch | `develop`. Everything is committed; push is yours. `main` still holds only the initial commit; merging is deferred. |
 | Running | Nothing. |
-| Last campaigns | `flat-flatfar-20261016T121759Z` (R2, 8 records) and `flat-loadedlat-20261016T124007Z` (R3, 32 records), all valid, in the analysis. |
-| Tests | 144 pass; all six notebooks execute. |
-| Open | Only what needs administrator access (below) and the decisions that are yours. |
+| Last campaigns | Privileged uncore counters on the Flat node: `flat-ustreams-20261019T205225Z` (U1, 36 records), `flat-uremote-20261019T205814Z` (U2, 14), `flat-ugemm-20261019T210858Z` (U4, 16), `flat-uloaded-20261019T211812Z` (R3 with counters, 22) and `flat-streamgap_e6-20261019T212743Z` (data pattern, 24 launches); all valid, in notebook 06 (`uncore_campaigns`, `data_pattern_campaign` in `configs/analysis.json`). The proof run `flat-usmoke-20261019T204741Z` is not in the analysis. |
+| Tests | 151 pass; all seven notebooks execute. |
+| Open | Cache-mode counters (U3) need privileged access on a Cache node; the decisions that are yours. |
 
 ## If the work is interrupted: how to resume
 
@@ -44,7 +45,8 @@ without a decision. The run recipe of every campaign part is in
 | FP64 intensity sweep | **Done** | 12 chains reach the plateau; audited against the copy ceiling |
 | oneDNN GEMM at Llama-3.1-8B shapes | **Done** | Pool convergence, call floor, prepacked layout; converged M-sweep (R1) for the headline, judged in counted bytes (within 2.9% of the 64× pool), 1.8–3.3% of weights still on chip at small M, so modeled small-M rates are that much high |
 | Decode-relevant summary (M1) | **Done** | Table 5 of notebook 00; HBM beats DDR by 1.43× (BF16) and 1.55× (INT8) for a decode GEMM, not the 2.07× of the read kernel |
-| Controller-level traffic, Cache hit rate, remote-HBM mechanism, clock-drop cause, energy | **Blocked** | Needs privileged uncore and RAPL access (requested from the administrators); see below |
+| Controller-level traffic, clock-drop cause, energy, remote-HBM mechanism (Flat) | **Done** (notebook 06) | Controller bytes 0.987–1.010 of the model from 14 cores (U1); counting costs at most 0.8%; the clock drop is the 350 W package limit; the fast first HBM window is the uncore clock riding the RAPL budget; HBM 679 pJ/B against DDR 1623 at full bandwidth; remote HBM at 56 threads reads every line about twice (U2); GEMM controller bytes equal the cores' counts at M ≤ 64, BF16 M = 256 reads the weights about 1.3 times (U4); loaded concurrency on counted bytes (R3); the HBM data-pattern effect is power-limited uncore clock (E6) |
+| Cache hit rate (U3) | **Blocked** | The privileged session exists on the Flat node only |
 
 ## Items of the 2026-10-16 review
 
@@ -76,13 +78,15 @@ without a decision. The run recipe of every campaign part is in
 
 ## What is left
 
-**Blocked on access (requested from the administrators)**: the privileged session U1–U4 of the
-review (controller CAS bytes for DDR and HBM, M2M/M2HBM tag hit/miss, UPI and CHA, RAPL and
-uncore frequency). Integration plan: an optional system-wide uncore group in `Counters`, per-sample
-columns, `bytes_source="imc_cas"`. It would also turn the two inferences that remain into
-measurements: the HBM-cache hit rate behind the far latency, and the concurrency behind the loaded
-latency.
+**Blocked on access**: U3, the Cache-mode hit rate (M2M near-memory tag events), needs the same
+`sudo perf stat` on a Cache-mode node; the session code (`hwbench.uncore`, parts `u*`) would run there
+unchanged once the events are added. Also open, not blocked: which agent issues the duplicated
+remote-HBM reads (CHA opcode events were not in the session), and real model weights for the
+data-pattern effect.
 
 **Decisions that are yours**: pushing `develop`; merging it into `main`; removing stray cluster
 directories from earlier mistyped submissions; whether to carry the data pattern into the thesis text
-where the HBM read ceiling is quoted (random data 527 GB/s, constants 576, [STREAMGAP.md](STREAMGAP.md)).
+where the HBM read ceiling is quoted (random data 527 GB/s, constants 576, now explained by the power
+limit, [STREAMGAP.md](STREAMGAP.md) E6); removing the partial staging directory
+`hw-bench-thesis-source/flat-ustreams-20261019T205206Z` left by an interrupted submission (nothing ran
+from it).

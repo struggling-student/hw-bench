@@ -89,6 +89,44 @@ class Perf:
 
 PERF = Perf()  # before torch creates its threads
 
+
+class UncoreSession:
+    """Control of a privileged system-wide perf session (src/hwbench/uncore.py).
+
+    When HWBENCH_PERF_CTL and HWBENCH_PERF_ACK name the session's FIFOs, the counters are
+    enabled once before the warm-up (slow and staggered, so nothing is timed around it)
+    and disabled once after the last sample; the clock time of that fast disable places
+    perf's intervals on CLOCK_MONOTONIC.  Participant 0 only.
+    """
+
+    def __init__(self):
+        ctl, ack = os.environ.get("HWBENCH_PERF_CTL"), os.environ.get("HWBENCH_PERF_ACK")
+        self.active = bool(ctl and ack) and os.environ.get("HWBENCH_PARTICIPANT", "0") == "0"
+        self.disable_ns = None
+        if self.active:
+            self.ctl = os.open(ctl, os.O_WRONLY)
+            self.ack = os.open(ack, os.O_RDONLY)
+
+    def _send(self, command):
+        os.write(self.ctl, command.encode() + b"\n")
+        reply = b""
+        while not reply.endswith(b"\n"):
+            chunk = os.read(self.ack, 1)
+            if not chunk:
+                raise RuntimeError("perf control ack failed")
+            reply += chunk
+
+    def enable(self):
+        if self.active:
+            self._send("enable")
+
+    def disable(self):
+        if self.active:
+            sent = time.monotonic_ns()
+            self._send("disable")
+            self.disable_ns = [sent, time.monotonic_ns()]
+
+
 import torch  # noqa: E402
 
 ELEMENT_BYTES = {"bf16": 2, "int8": 1}
@@ -420,6 +458,8 @@ def main():
     # Only the verification warm-up prints primitive execution evidence.
     with torch.backends.mkldnn.verbose(torch.backends.mkldnn.VERBOSE_ON):
         result = multiply(pool[0], 0)
+    uncore = UncoreSession()
+    uncore.enable()
     for i in range(args.warmups):
         result = multiply(pool[i % len(pool)], i % len(pool))
     for _ in range(args.warm_passes):
@@ -456,6 +496,7 @@ def main():
         if "cycles" in counted:
             sample.update(counted, counter_threads=torch.get_num_threads())
         samples.append(sample)
+    uncore.disable()
     valid = True
     if dtype == "bf16":
         valid = bool(torch.isfinite(result).all())
@@ -486,6 +527,7 @@ def main():
                 warm_passes=args.warm_passes,
                 torch_version=torch.__version__,
                 samples=samples,
+                **({"uncore_disable_ns": uncore.disable_ns} if uncore.active else {}),
                 valid=valid,
                 checksum=float(result[0, 0]) + float(result[-1, -1]),
                 source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

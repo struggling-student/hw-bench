@@ -47,6 +47,7 @@ class Theory:
         self.sockets = int(platform["sockets"])
         self.base_ghz = float(platform["base_ghz"])
         self.max_turbo_ghz = float(platform["max_turbo_ghz"])
+        self.power = dict(data.get("power", {}))
 
     @classmethod
     def load(cls, path: Path | str = DEFAULT_PATH) -> Theory:

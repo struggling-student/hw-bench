@@ -11,7 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from hwbench import disasm
+from hwbench import disasm, uncore
 
 FIELDS = [
     "timestamp",
@@ -81,6 +81,27 @@ FIELDS = [
     "dram_read_lines",
     "dram_write_lines",
     "counted_bytes",
+    # Privileged system-wide uncore counters (hwbench.uncore), Flat node only.
+    "ctrl_bytes",
+    "ctrl_bandwidth_gbs",
+    "ctrl_bytes_memory_socket",
+    "ctrl_ddr_read_bytes",
+    "ctrl_ddr_write_bytes",
+    "ctrl_hbm_read_bytes",
+    "ctrl_hbm_write_bytes",
+    "energy_pkg_j",
+    "energy_ram_j",
+    "pkg_power_w",
+    "ram_power_w",
+    "system_power_w",
+    "uncore_ghz",
+    "pcu_power_limit_frac",
+    "pcu_thermal_limit_frac",
+    "upi_tx_data_flits",
+    "upi_rx_data_flits",
+    "m2m_directory_updates",
+    "uncore_intervals",
+    "uncore_coverage",
 ]
 
 
@@ -326,6 +347,7 @@ def rows_from_record(
                 elapsed_seconds=r.get("elapsed_seconds"), operations=r.get("operations")
             )
         ]
+    uncore_windows = uncore.windows(record.get("uncore"), r) if "samples" in r else [None] * len(samples)
     rows = []
     for i, sample in enumerate(samples):
         row = dict(
@@ -352,6 +374,7 @@ def rows_from_record(
             )
             row.update(_clock_fields(row, row.get("counter_threads") or row.get("threads")))
             row.update(_counted_fields(row))
+            row.update(uncore.sample_fields(uncore_windows[i], elapsed, socket, ms))
             if r.get("benchmark") == "pointer_chase" and loads <= 0:
                 errors.append("invalid_load_count")
             if (

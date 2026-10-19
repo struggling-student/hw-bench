@@ -62,6 +62,26 @@ def select_earlier(df: pd.DataFrame, policy: dict) -> pd.DataFrame:
     return df[df.phase.eq("steady") & df.accepted & df.campaign_id.isin(ids)].copy()
 
 
+def uncore_ids(policy: dict) -> dict[str, list[str]]:
+    """Campaigns measured with the privileged uncore session (hwbench.uncore).
+
+    Kept apart from the extended campaigns: a counting session runs beside them, so they
+    answer the counter questions and are not pooled with the rates measured without it.
+    """
+
+    return {mode: list(ids) for mode, ids in policy.get("uncore_campaigns", {}).items()}
+
+
+def select_uncore(df: pd.DataFrame, policy: dict, include_rejected: bool = False) -> pd.DataFrame:
+    """Steady, accepted rows of the uncore campaigns."""
+
+    ids = {c for campaigns in uncore_ids(policy).values() for c in campaigns}
+    selected = df[df.phase.eq("steady") & df.campaign_id.isin(ids)]
+    if not include_rejected:
+        selected = selected[selected.accepted]
+    return selected.copy()
+
+
 def select_extended(df: pd.DataFrame, policy: dict, include_rejected: bool = False):
     """Steady, accepted rows of the listed extended campaigns."""
 
@@ -140,7 +160,7 @@ def check_extended(
     errors: list[str] = []
     warnings: list[str] = []
     theory = theory or Theory.load()
-    for mode, campaigns in [*extended_ids(policy).items(), *earlier_ids(policy).items()]:
+    for mode, campaigns in [*extended_ids(policy).items(), *earlier_ids(policy).items(), *uncore_ids(policy).items()]:
         resumed = _resumed(mode, campaigns, raw_roots)
         for campaign in campaigns:
             found = campaign_context_errors(mode, campaign, raw_roots)
@@ -148,8 +168,10 @@ def check_extended(
                 # An interrupted campaign stands only if a completed one finished it.
                 found = [e for e in found if "not complete" not in e]
             errors += found
-    chosen = select_extended(all_rows, policy)
-    attempted = select_extended(all_rows, policy, include_rejected=True)
+    chosen = pd.concat([select_extended(all_rows, policy), select_uncore(all_rows, policy)])
+    attempted = pd.concat(
+        [select_extended(all_rows, policy, include_rejected=True), select_uncore(all_rows, policy, include_rejected=True)]
+    )
     for campaign, part in attempted.groupby("campaign_id"):
         rejected = part[~part.accepted]
         if len(rejected):

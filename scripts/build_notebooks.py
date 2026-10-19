@@ -958,6 +958,111 @@ The DDR GEMM exceptions of the first sweep were cache reuse in a pool that was t
 """),
 ]
 
+# --------------------------------------------------------------------------- 06
+NOTEBOOKS["06_uncore_power_and_clocks"] = [
+    md("""
+# 06 — Memory controllers, power and clocks (privileged counters)
+
+**Question.** What do the memory controllers, the UPI links, the power-control unit and the package energy counters say about the results the other notebooks could only infer: is the traffic model right at the controllers, why does the clock drop while HBM streams, what makes the first HBM window fast, what crosses UPI for remote memory, how much does a GEMM really fetch, and how many misses are in flight under load?
+
+**How it was measured.** Since 2026-10-19 the Flat node (`cresco8-hbm14`) allows `sudo perf stat` without a password; the benchmark itself still cannot open uncore events (`perf_event_paranoid` = 2). Each record runs one system-wide `perf stat -a --per-socket -I 100` beside the benchmark (`hwbench.uncore`): the counters are enabled once before the warm-up, read every 100 ms, and disabled once after the last sample. Perf enables its counters one at a time (about 110 ms, socket 0 first), so the counters run continuously and each one-second sample takes the intervals that lie entirely inside it (eight or nine of ten); the disable, which takes 5 ms, places perf's intervals on the benchmark's clock. Events: DDR CAS (`uncore_imc`, 64 B), HBM CAS (`uncore_type_14`, the 32 HBM channel controllers per socket, 32 B, identified with a read stream of known size), UPI data flits, M2M directory updates, package and DRAM energy (RAPL), the CHA clock (uncore frequency) and the PCU's power- and thermal-limit cycles. The probes behind these choices are in `data/probes/uncore-20261019/`.
+
+Cache mode has no such access, so the HBM-cache hit rate (review item U3) stays unmeasured. These campaigns are kept apart from the rates of the other notebooks (`uncore_campaigns` in `configs/analysis.json`).
+"""),
+    code(setup("06_uncore_power_and_clocks") + "\nunc = report.load_uncore()\nU1 = claims.uncore_streams(unc, theory, ext)\nDATA_PATTERN_CAMPAIGN = ctx.policy['data_pattern_campaign']"),
+    md("""
+## 1. Controller traffic against the traffic model (U1)
+
+**Conditions.** Flat mode, socket 0, 8 GiB on DDR or HBM, read, Triad and non-temporal copy at 1, 14, 28 and 56 cores, five one-second samples each. Filled markers divide the controller bytes (every channel of both sockets) by the modeled bytes, open markers by the bytes the cores' own offcore counters saw.
+"""),
+    code("""
+ct = report.controller_table(unc)
+figure(plotting.controller_ratio_figure(ct), 'controller_vs_modeled')
+table(ct.drop(columns=['campaign']), 3)
+say_claims(U1, ['controller_streams', 'controller_tier', 'counting_cost'])
+table(report.counting_cost(unc), 3)
+"""),
+    md("""
+## 2. Power and the clock drop
+
+The same records, read for package power, DRAM power, the core clock (cycles of the benchmark's threads), the uncore clock (CHA cycles) and the share of PCU cycles in which the frequency was clipped for power. RAPL on this node: PL1 350 W averaged over 1 s, PL2 420 W over 12 ms; uncore 0.8–2.5 GHz (`configs/theory.toml`, `[power]`).
+"""),
+    code("""
+pt = report.power_table(unc)
+figure(plotting.power_clock_figure(pt), 'power_and_clocks')
+table(pt[pt.memory_target.ne('registers')].drop(columns=['gops', 'pj_per_op', 'other_pkg_w']), 2)
+say_claims(U1, ['clock_drop_power'])
+"""),
+    md("""
+## 3. The fast first window on HBM
+
+Notebook 01 found the first one-second window of a 56-core HBM stream 4–12% faster than the rest, with no effect on DDR. Per window (first against windows 3–5) and per 100 ms interval:
+"""),
+    code("""
+fw = report.first_window_counters(unc)
+table(fw, 3)
+series = report.uncore_series(unc, 'u1_read', 'hbm')
+figure(plotting.uncore_timeline_figure(series, 'hbm', 'One 56-core HBM read record, 100 ms intervals · the five timed windows alternately shaded'), 'hbm_read_timeline')
+say_claims(U1, ['first_window_uncore'])
+"""),
+    md("""
+## 4. Energy
+
+Whole-socket energy (package plus DRAM of the computing socket, idle floor included) per byte the controllers moved, and per operation for the compute peaks at 56 cores.
+"""),
+    code("""
+table(pt[pt.memory_target.eq('registers')][['kernel', 'threads', 'gops', 'core_ghz', 'uncore_ghz', 'pkg_w', 'power_limited', 'pj_per_op']], 2)
+say_claims(U1, ['energy_per_byte', 'energy_per_op'])
+"""),
+    md("""
+## 5. The data pattern on the HBM read ceiling (STREAMGAP E6)
+
+The Triad-gap investigation ([STREAMGAP.md](../docs/STREAMGAP.md)) found the read-only HBM ceiling 9–12% higher with constant or zero data than with random or the thesis data, and could not observe power or the uncore clock. E6 repeats its read kernel with the four patterns on HBM and DDR (three rotated repeats, 56 cores, 8 GiB, about 10 s per launch) with a system-wide session beside each launch; rates are medians over the read phase.
+"""),
+    code("""
+dp = report.data_pattern_counters(DATA_PATTERN_CAMPAIGN)
+summary = dp.groupby(['memory_target', 'init']).median(numeric_only=True).drop(columns=['repeat', 'wrong']).reset_index()
+table(summary, 2)
+say_claims(claims.data_pattern_claims(dp), None)
+"""),
+    md("""
+## 6. Remote memory (U2)
+
+**Conditions.** Socket 0's cores read 8 GiB bound to socket 0 (local) or socket 1 (remote), HBM and DDR at 14, 28 and 56 cores, and non-temporal Triad on HBM at 56 cores; 5 s windows. UPI flits are data flits over every link of both sockets, halved (each flit is sent by one socket and received by the other) and divided by the 64-byte lines the kernel moved.
+"""),
+    code("""
+rc = report.remote_counter_table(unc)
+table(rc, 3)
+say_claims(claims.uncore_remote(unc), None)
+"""),
+    md("""
+## 7. GEMM at the controllers (U4)
+
+**Conditions.** The 14336×4096 GEMM of notebook 04 at M = 1, 16, 64 and 256, BF16 and INT8, weights on HBM or DDR, a pool of 16× the on-chip capacity (the converged pool of review item R1), 56 cores of socket 0.
+"""),
+    code("""
+gc = report.gemm_controller_table(unc)
+table(gc, 3)
+say_claims(claims.uncore_gemm(unc), None)
+"""),
+    md("""
+## 8. Loaded latency with the controllers' bandwidth (R3)
+
+The pairs of notebook 02 again: one core chasing pointers in 1 GiB beside N cores streaming the same tier, one synchronized 5 s window. The controllers' bandwidth on the bound tier replaces the streaming cores' modeled rate in Little's law.
+"""),
+    code("""
+lc = report.loaded_concurrency(unc)
+table(lc, 2)
+say_claims(claims.uncore_loaded(unc, ext), None)
+"""),
+    md("""
+## 9. Still not measured
+
+* **Cache mode (U3).** No Cache-mode node has the privileged access, so the HBM-cache hit rate, the conflict-miss explanation of the Cache curve and the ordering of the spilled kernels stay inferred.
+* **Latency at the caching agents.** The CHA's TOR occupancy over inserts, filtered to the chasing core, gives about 31 ns where the chase measures 141 ns (`data/probes/uncore-20261019/`); it is not a latency here and is not used.
+"""),
+]
+
 
 
 def main() -> None:

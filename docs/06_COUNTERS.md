@@ -1,7 +1,8 @@
 # Hardware counters
 
 What the benchmarks can count at `kernel.perf_event_paranoid=2` (the setting on the hbm
-nodes), what needs a privileged session, and how counted bytes enter the analysis.
+nodes), what the privileged session on the Flat node adds, and how counted bytes enter the
+analysis.
 
 ## Available now, without privileges
 
@@ -44,25 +45,50 @@ Regular Triad and non-temporal Triad read the same lines, so the destination is 
 before it is written: a counter-based confirmation of the rate-based inference (claim
 `write_allocate_counted`). It was one thread on 1 GiB arrays.
 
-## Not available without privileges
+## Privileged uncore session (Flat node, since 2026-10-19)
 
-`uncore_imc`, `uncore_cha`, `uncore_m2m`, `uncore_upi` and `power` exist on the node
-(`/sys/bus/event_source/devices`) but system-wide uncore events need `CAP_PERFMON` or
-`paranoid ≤ 0`. They would give DDR and HBM bytes separately and the Cache-mode hit rate,
-the remote-HBM mechanism and the clock-drop cause.
+The administrators allow `sudo -n /usr/bin/perf stat*` (and `turbostat`, `ipmitool sensor`)
+without a password on `cresco8-hbm14` only. `perf_event_paranoid` stays 2 and the plain shell
+has no capabilities, so the benchmarks still cannot open uncore events themselves; a plain
+`perf stat` reports them as not supported. `src/hwbench/uncore.py` runs one system-wide
+session per record (campaign parts `ustreams`, `uremote`, `ugemm`, `uloaded`, `usmoke`):
 
-### Draft request for the cluster administrators
+```
+sudo -n perf stat -a --per-socket -D -1 -I 100 -x, --control fifo:CTL,ACK -e <events> \
+    -- tail -s 0.1 --pid=<holder> -f /dev/null
+```
 
-> A few minutes of root or `CAP_PERFMON` access on `cresco8-hbm14` (Flat) and one Cache-mode
-> node, while I run an existing 30-minute benchmark job, to read hardware counters only:
-> `uncore_imc` CAS counts (DDR and HBM controller traffic), `uncore_m2m` near-memory tag
-> hit/miss events (Cache-mode hit rate), `uncore_upi` and `uncore_cha` traffic (remote
-> access), and `power/energy-pkg/` with `turbostat` (why the clock drops while HBM streams).
-> Either a session where I run `perf stat -a` myself, or you run the wrapper script I will
-> provide. No configuration changes; read-only; nothing runs on other users' cores.
+* **Window.** The benchmark (`hardware.cpp`, `torch_gemm.py`) enables the counters once
+  before its warm-up and disables them once after its last sample, through the control FIFOs
+  (`HWBENCH_PERF_CTL`, `HWBENCH_PERF_ACK`). Perf enables about 200 uncore counters one after
+  another in about 110 ms, socket 0 first, so a toggle per sample would count the time around
+  it; the counters run continuously and each sample takes the 100 ms intervals that lie
+  entirely inside it (eight or nine per one-second sample). Disabling takes 5 ms; the tail
+  interval's run time puts the disable on perf's clock and the benchmark records when it sent
+  it, which places every interval on `CLOCK_MONOTONIC` to a few milliseconds.
+* **Ending the session.** The root process cannot be signalled by the user; its workload is a
+  `tail --pid` on a holder process the record owns, so the session ends when the holder is
+  killed.
+* **Evidence.** Each record keeps the parsed intervals of its enabled period in the JSON
+  (`uncore`) and perf's whole output as `<record>.perf.csv.gz`.
 
-Event names should be checked against Intel's perfmon tables for Sapphire Rapids before
-the session (the memory-controller CAS read/write events and the M2M tag events).
+| Measurement column | Event | Notes |
+| --- | --- | --- |
+| `ctrl_ddr_read_bytes`, `ctrl_ddr_write_bytes` | `uncore_imc` event 0x05, umask 0xcf / 0xf0 | 64 B per CAS, 8 channels per socket |
+| `ctrl_hbm_read_bytes`, `ctrl_hbm_write_bytes` | `uncore_type_14` event 0x05, umask 0xcf / 0xf0 | the HBM channel controllers (32 per socket, unnamed by the 5.14 driver); 32 B per CAS, identified with a read stream of known size |
+| `ctrl_bytes`, `ctrl_bandwidth_gbs` | sum of the four | every channel of both sockets |
+| `energy_pkg_j`, `energy_ram_j`, `pkg_power_w`, `ram_power_w` | `power/energy-pkg/`, `power/energy-ram/` | RAPL; power columns are the computing socket's |
+| `uncore_ghz` | `uncore_cha_0` event 0x01 | CHA (mesh) clock of the computing socket |
+| `pcu_power_limit_frac`, `pcu_thermal_limit_frac` | `unc_p_freq_max_power_cycles`, `unc_p_freq_max_limit_thermal_cycles` over `unc_p_clockticks` | share of PCU cycles with the frequency clipped |
+| `upi_tx_data_flits`, `upi_rx_data_flits` | `unc_upi_txl_flits.all_data`, `unc_upi_rxl_flits.all_data` | all links, both sockets |
+| `m2m_directory_updates` | `unc_m2m_directory_update.any` | all mesh-to-memory agents |
+
+The probes that fixed these choices are in `data/probes/uncore-20261019/`. One method did not
+hold and is not used: the CHA TOR occupancy over inserts of demand-read misses, filtered to the
+chasing core, gives about 31 ns where the chase measures 141 ns.
+
+**Still unavailable.** Cache mode: no Cache-mode node has the access, so the HBM-cache (M2M
+near-memory tag) hit rate (review item U3) is not measured.
 
 ## In the analysis
 
@@ -82,3 +108,9 @@ the session (the memory-controller CAS read/write events and the M2M tag events)
 The campaigns of 2026-10-12 and later (from the smoke and `counted` parts on) carry the counters
 and are committed; the October-11 campaigns and the first GEMM sweep ran before the counters were
 added, so their columns are empty.
+
+The privileged campaigns (`uncore_campaigns`) add the controller, power and clock columns of the
+table above to every sample; `report.controller_table`, `power_table`, `first_window_counters`,
+`remote_counter_table`, `gemm_controller_table` and `loaded_concurrency` summarise them, and the
+claims `uncore_*` (notebook 06) state the results. They are not pooled with the other campaigns:
+a counting session runs beside them, and they answer the counter questions only.

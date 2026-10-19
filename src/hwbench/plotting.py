@@ -763,3 +763,96 @@ def loaded_latency_figure(loaded: pd.DataFrame):
     fig.update_yaxes(rangemode="tozero")
     fig.update_xaxes(rangemode="tozero")
     return fig
+
+
+# ------------------------------------------------- privileged uncore counters (U1-U4, R3)
+KERNEL_SYMBOLS = {"read": "circle", "triad": "square", "copy_nt": "diamond"}
+KERNEL_NAMES = {"read": "read", "triad": "Triad", "copy_nt": "copy, non-temporal"}
+
+
+def controller_ratio_figure(ct: pd.DataFrame):
+    """Controller bytes over modeled bytes (filled) and over per-core counted bytes (open).
+
+    ``ct`` is ``report.controller_table``; one row of markers per stream and tier, against
+    the core count.  The band is the ±2% acceptance of the review.
+    """
+
+    fig = go.Figure()
+    fig.add_hrect(y0=0.98, y1=1.02, fillcolor=GRID, opacity=0.6, line_width=0, layer="below")
+    fig.add_hline(y=1.0, line=dict(color=MUTED, width=1.5))
+    for tier in ("ddr", "hbm"):
+        color = CONFIG_COLORS[f"flat_{tier}"]
+        for kernel, symbol in KERNEL_SYMBOLS.items():
+            part = ct[ct.memory_target.eq(tier) & ct.kernel.eq(kernel)].sort_values("threads")
+            if part.empty:
+                continue
+            label = f"{tier.upper()} {KERNEL_NAMES[kernel]}"
+            fig.add_scatter(
+                x=part.threads, y=part.ctrl_over_modeled, mode="lines+markers", name=f"{label} · ÷ modeled", legendgroup=label,
+                line=dict(color=color, width=1.5), marker=dict(size=10, symbol=symbol, color=color, line=dict(color=SURFACE, width=1.5)),
+            )
+            fig.add_scatter(
+                x=part.threads, y=part.ctrl_over_counted, mode="markers", name=f"{label} · ÷ counted by the cores", legendgroup=label,
+                marker=dict(size=10, symbol=f"{symbol}-open", color=color, line=dict(color=color, width=2)),
+            )
+    style(fig, "Memory-controller bytes against the traffic model and the cores' own counts · Flat, socket 0, 8 GiB", "Cores", "Controller ÷ other bytes", 600)
+    fig.update_xaxes(type="log", tickmode="array", tickvals=[1, 14, 28, 56], ticktext=["1", "14", "28", "56"])
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.22, font=dict(size=12)), margin=dict(b=190))
+    return fig
+
+
+def power_clock_figure(pt: pd.DataFrame):
+    """Package power (left) and core and uncore clocks (right) against cores, per stream and tier.
+
+    ``pt`` is ``report.power_table`` (stream rows).  On the right, solid lines are the core
+    clock and dotted lines the uncore (CHA) clock; markers with a white centre mark windows
+    in which the PCU clipped the frequency for power more than half the time.
+    """
+
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("Package power, computing socket", "Clocks"), horizontal_spacing=0.1)
+    data = pt[pt.memory_target.isin(["ddr", "hbm"])]
+    for tier in ("ddr", "hbm"):
+        color = CONFIG_COLORS[f"flat_{tier}"]
+        for kernel, symbol in KERNEL_SYMBOLS.items():
+            part = data[data.memory_target.eq(tier) & data.kernel.eq(kernel)].sort_values("threads")
+            if part.empty:
+                continue
+            label = f"{tier.upper()} {KERNEL_NAMES[kernel]}"
+            limited = part.power_limited.gt(0.5)
+            marker = dict(size=9, symbol=symbol, color=[SURFACE if x else color for x in limited], line=dict(color=color, width=2))
+            fig.add_scatter(x=part.threads, y=part.pkg_w, mode="lines+markers", name=label, legendgroup=label,
+                            line=dict(color=color, width=1.5), marker=marker, row=1, col=1)
+            fig.add_scatter(x=part.threads, y=part.core_ghz, mode="lines+markers", name=label, legendgroup=label, showlegend=False,
+                            line=dict(color=color, width=1.5), marker=marker, row=1, col=2)
+            fig.add_scatter(x=part.threads, y=part.uncore_ghz, mode="lines+markers", name=f"{label} · uncore", legendgroup=label, showlegend=False,
+                            line=dict(color=color, width=1.5, dash="dot"), marker=dict(size=7, symbol=symbol, color=color), row=1, col=2)
+    style(fig, "Power and clocks of the streams · Flat, socket 0 · open markers: power-limited more than half the time", "", "", 560)
+    for col in (1, 2):
+        fig.update_xaxes(title_text="Cores", type="log", tickmode="array", tickvals=[1, 14, 28, 56], ticktext=["1", "14", "28", "56"], row=1, col=col)
+    fig.update_yaxes(title_text="W", row=1, col=1)
+    fig.update_yaxes(title_text="GHz (solid core, dotted uncore)", row=1, col=2)
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.25, font=dict(size=12)))
+    return fig
+
+
+def uncore_timeline_figure(series: pd.DataFrame, tier: str, title: str):
+    """Controller bandwidth, package power and uncore clock per 100 ms interval of one record.
+
+    Shaded bands are the five timed windows; what lies before the first is the warm-up.
+    """
+
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
+                        subplot_titles=(f"{tier.upper()} controller bandwidth, socket 0", "Package power, socket 0", "Uncore clock, socket 0"))
+    color = CONFIG_COLORS[f"flat_{tier}"]
+    for row, column, unit in ((1, f"{tier}_gbs_s0", "GB/s"), (2, "pkg_w_s0", "W"), (3, "uncore_ghz_s0", "GHz")):
+        fig.add_scatter(x=series.t_s, y=series[column], mode="lines+markers", showlegend=False,
+                        line=dict(color=color, width=2, shape="hv"), marker=dict(size=4, color=color), row=row, col=1)
+        fig.update_yaxes(title_text=unit, row=row, col=1)
+    for i, (start, end) in enumerate(series.attrs.get("windows", [])):
+        if i % 2 == 0:
+            fig.add_vrect(x0=start, x1=end, fillcolor=GRID, opacity=0.6, line_width=0, layer="below")
+        fig.add_annotation(x=(start + end) / 2, y=0.02, xref="x3", yref="y3 domain", yanchor="bottom", text=f"window {i + 1}",
+                           showarrow=False, font=dict(size=12, color=INK_2))
+    style(fig, title, "", "", 720)
+    fig.update_xaxes(title_text="Seconds after the first timed window starts", row=3, col=1)
+    return fig

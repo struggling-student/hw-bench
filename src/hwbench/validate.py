@@ -15,7 +15,7 @@ from hwbench.analysis import (
     scaling_table,
     select_measurements,
 )
-from hwbench.extended import check_extended, select_extended
+from hwbench.extended import check_extended, select_extended, select_uncore
 
 
 def validate(df, raw_roots, policy=None):
@@ -221,12 +221,13 @@ def validate(df, raw_roots, policy=None):
             errors.append(f"Expected 11 scaling groups, found {len(scaling)}")
     except ValueError as e:
         errors.append(str(e))
-    extended_samples = 0
+    extended_samples = uncore_samples = 0
     if policy.get("extended_campaigns"):
         extended_errors, extended_warnings = check_extended(df, policy, raw_roots)
         errors += extended_errors
         warnings += extended_warnings
         extended_samples = len(select_extended(df, policy))
+        uncore_samples = len(select_uncore(df, policy))
         from hwbench.report import xcheck_table
 
         for r in xcheck_table(select_extended(df, policy), data).itertuples():
@@ -239,6 +240,7 @@ def validate(df, raw_roots, policy=None):
         status="failed" if errors else "passed",
         selected_samples=len(data),
         extended_samples=extended_samples,
+        uncore_samples=uncore_samples,
         all_samples=len(df),
         excluded_samples=int((~df.accepted).sum()),
         errors=sorted(set(errors)),

@@ -30,6 +30,16 @@ flatfar      (flat) idle latency of a one-core chase at 16-128 GiB on DDR and 16
              the translation control for the Cache-mode far latency (review item R2)
 loadedlat    (flat) loaded latency: one chasing core beside N cores streaming the same tier,
              in one synchronized window (review item R3)
+ustreams     (flat, privileged uncore) controller bytes, power and clocks of read, Triad and
+             copy_nt at 1-56 cores on both tiers, each 56-core point also without the
+             session, and the six compute peaks (review item U1)
+uremote      (flat, privileged uncore) local against remote read at 14-56 cores on both
+             tiers, with UPI data flits and directory updates (U2)
+ugemm        (flat, privileged uncore) controller-level traffic of the 14336x4096 GEMM at
+             M = 1-256, BF16 and INT8, both tiers, converged pool (U4)
+uloaded      (flat, privileged uncore) the loaded-latency pairs again, with the bandwidth
+             the controllers serve, for the concurrency behind the loaded latency (R3)
+usmoke       (flat, privileged uncore) a few seconds of each uncore part; proves the session
 smoke        a few seconds of every kernel; proves build and counters, not a result
 
 memory, compute, sweep, memory-sweep, concurrency, all
@@ -77,7 +87,13 @@ NEW_PARTS = [
     "gemmconv",
     "flatfar",
     "loadedlat",
+    "ustreams",
+    "uremote",
+    "ugemm",
+    "uloaded",
+    "usmoke",
 ]
+UNCORE_PARTS = ["ustreams", "uremote", "ugemm", "uloaded", "usmoke"]
 
 THREAD_STEPS = [1, 2, 4, 8, 14, 28, 56]
 ISA_THREAD_STEPS = [1, 2, 4, 8, 14, 28, 55, 56]
@@ -106,6 +122,9 @@ LATENCY_FAR_GIB = [16, 32, 64, 96, 128]
 FLATFAR_HBM_GIB = [16, 32, 48]  # HBM holds 64 GiB per socket
 LOADED_STREAM_CORES = [1, 4, 14, 28, 55]  # cores streaming beside the chasing core (core 0)
 LOADED_CHASE_BYTES = GIB  # the October idle-latency working set
+UNCORE_THREADS = [1, 14, 28, 56]
+UNCORE_REMOTE_THREADS = [14, 28, 56]
+UNCORE_GEMM_M = [1, 16, 64, 256]
 SWEEP_K = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
 
 
@@ -344,6 +363,7 @@ def main():
             OMP_PLACES="cores",
             HWBENCH_CAMPAIGN_ID=args.output.name,
             HWBENCH_GUARD=guard,
+            HWBENCH_UNCORE=s.get("uncore", ""),
         )
         if group:
             env.update(
@@ -994,6 +1014,57 @@ def main():
                     execute(
                         spec(0, "gemm", target=target, shape=4096, label="counted_gemm", m=m, gemm_n=14336, dtype=dtype, pool=pool, warm=GEMM_WARM_PASSES)
                     )
+
+    # ----------------------------------------------------------- privileged uncore
+    # System-wide controller (DDR and HBM CAS), UPI, directory, power and clock counters
+    # through the privileged perf session (hwbench.uncore), counted over exactly each
+    # timed window.  The access is granted on the Flat node only, so Cache mode (U3,
+    # the HBM-cache hit rate) stays unmeasured.
+    if part in UNCORE_PARTS and args.mode != "flat":
+        raise SystemExit(f"{part} needs the privileged uncore session of the Flat node")
+    if part == "usmoke":
+        execute(dict(spec(0, "read", 56, "hbm", gib=8, label="usmoke", uncore="base"), seconds=0.5))
+        execute(dict(spec(0, "bf16", 4, label="usmoke", uncore="base"), seconds=0.5))
+        execute(dict(spec(0, "read", 14, "hbm", memory_socket=1, gib=2, label="usmoke_remote", uncore="base"), seconds=0.5))
+        chase = spec(0, "latency", 1, "hbm", bytes=LOADED_CHASE_BYTES, scope="concurrent_tier_component", label="usmoke_chase", uncore="base")
+        load = spec(0, "read", 14, "hbm", gib=2, scope="concurrent_tier_component", label="usmoke_load")
+        load["cpus"] = sockets[0]["logical_cpus"][1:15]
+        pair([dict(chase, seconds=1), dict(load, seconds=1)], "usmoke-pair")
+        execute(spec(0, "gemm", target="hbm", shape=4096, label="usmoke_gemm", m=16, gemm_n=14336, dtype="bf16", pool=int(4 * ONCHIP_BYTES), warm=1, uncore="base"))
+    if part == "ustreams":
+        for target in targets:
+            for kind in ["read", "triad", "copy_nt"]:
+                for t in UNCORE_THREADS:
+                    execute(spec(0, kind, t, target, gib=8, label=f"u1_{kind}", uncore="base"))
+                # The same 56-core point without the session: what counting costs.
+                execute(spec(0, kind, 56, target, gib=8, label=f"u1_{kind}_control"))
+        for kind in ISA_KINDS + ISA_REFERENCE_KINDS:
+            execute(spec(0, kind, label="u1_isa", uncore="base"))
+    if part == "uremote":
+        for target, kind in [("hbm", "read"), ("ddr", "read"), ("hbm", "triad_nt")]:
+            for t in UNCORE_REMOTE_THREADS if kind == "read" else [56]:
+                for ms, label in [(0, "u2_local"), (1, "u2_remote")]:
+                    execute(dict(spec(0, kind, t, target, memory_socket=ms, gib=8, label=label, uncore="base"), seconds=5))
+    if part == "ugemm":
+        n, k = 14336, 4096
+        variants = ["bf16"] + (["int8"] if int8_gemm_verified() else [])
+        for target in targets:
+            for dtype in variants:
+                for m in UNCORE_GEMM_M:
+                    execute(
+                        spec(
+                            0, "gemm", target=target, shape=k, label="u4_gemm", m=m, gemm_n=n, dtype=dtype,
+                            pool=int(GEMMCONV_POOL_MULTIPLE * ONCHIP_BYTES), warm=GEMM_WARM_PASSES, uncore="base",
+                        )
+                    )
+    if part == "uloaded":
+        for target in targets:
+            execute(spec(0, "latency", 1, target, bytes=LOADED_CHASE_BYTES, label="u_loaded_latency_idle", uncore="base"))
+            for n in LOADED_STREAM_CORES:
+                chase = spec(0, "latency", 1, target, bytes=LOADED_CHASE_BYTES, scope="concurrent_tier_component", label=f"u_loaded_latency_n{n}", uncore="base")
+                load = spec(0, "read", n, target, gib=8, scope="concurrent_tier_component", label=f"u_loaded_stream_n{n}")
+                load["cpus"] = sockets[0]["logical_cpus"][1 : 1 + n]
+                pair([chase, load], f"uloaded-{target}-n{n}")
 
     # ------------------------------------------------------------------- copy
     # The intensity sweep at K=1 loads one array and stores another, a pattern none of

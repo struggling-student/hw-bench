@@ -15,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from hwbench.analysis import ROOT, load_measurements, select_measurements
-from hwbench.extended import select_extended
+from hwbench.extended import select_extended, select_uncore
 from hwbench.plotting import config_key
 from hwbench.roofline import BANDWIDTH_KERNELS
 from hwbench.theory import KERNEL_PATHS, Theory
@@ -29,6 +29,13 @@ def load(root: Path = ROOT):
     policy = json.loads((root / "configs/analysis.json").read_text())
     df = load_measurements(root / "data/processed/measurements.csv")
     return df, select_measurements(df, policy), select_extended(df, policy), policy
+
+
+def load_uncore(root: Path = ROOT) -> pd.DataFrame:
+    """Rows of the campaigns measured with the privileged uncore session."""
+
+    policy = json.loads((root / "configs/analysis.json").read_text())
+    return select_uncore(load_measurements(root / "data/processed/measurements.csv"), policy)
 
 
 def _cv(series: pd.Series) -> float:
@@ -1002,13 +1009,12 @@ def unmeasured_table() -> pd.DataFrame:
 
     return pd.DataFrame(
         [
-            ("Memory-controller traffic (uncore_imc CAS counts)", "needs CAP_PERFMON or paranoid ≤ 0", "per-core DRAM line counts exist for the follow-up campaigns (counted against modeled in notebook 02); the October data and the first GEMM sweep have none, and DDR and HBM bytes cannot be told apart"),
-            ("Cache-mode hit rate", "memory-side-cache tag events are uncore (M2M)", "conflict misses are inferred from bandwidth"),
-            ("Why remote HBM collapses", "UPI and CHA counters are uncore", "mechanism unidentified; magnitude confirmed by a repeat with 5 s windows and a thread sweep"),
-            ("Why Cache-mode spilled streams order read-only < GEMM ≤ Triad", "memory-side-cache (M2M) tag counters are uncore", "ordering reported, not explained"),
+            ("Memory-controller traffic in Cache mode and in the earlier campaigns", "privileged perf is allowed on the Flat node only (since 2026-10-19)", "Flat controller bytes agree with the model to 2% (notebook 06); Cache-mode and October rates rest on modeled bytes and per-core line counts"),
+            ("Cache-mode hit rate", "memory-side-cache tag events (M2M) need the privileged session, which no Cache node has", "conflict misses are inferred from bandwidth"),
+            ("Why Cache-mode spilled streams order read-only < GEMM ≤ Triad", "the same", "ordering reported, not explained"),
+            ("Which agent issues the duplicated remote-HBM reads at 56 threads", "the CHA opcode-level events were not part of the session", "the duplication itself is counted (notebook 06); prefetch or retry is not resolved"),
             ("Address-translation share of far latency", "no TLB-miss counter is readable", "the Flat DDR chase to 128 GiB bounds it (a few ns per doubling), so Cache-mode far latency is mostly the memory-side cache"),
-            ("Why the clock falls while HBM streams", "power and turbostat counters need privileges", "cause unidentified"),
-            ("Energy", "RAPL needs privileges", "no energy figures"),
+            ("Energy and clocks in Cache mode", "RAPL and the uncore clock need the privileged session", "power, clock-drop and energy figures are Flat only (notebook 06)"),
             ("HBM device capability beyond 56 cores", "SNC4 / HBM-only modes are not available on the node", "HBM ceiling is a 56-core figure"),
         ],
         columns=["not measured", "what blocks it", "consequence here"],
@@ -1554,3 +1560,319 @@ def gemm_pool_points(ext: pd.DataFrame, pool_x: int = 64, shape: str = "14336x40
         )
         for (tier, dtype, m), r in rows.iterrows()
     ]
+
+
+# ------------------------------------------------- privileged uncore counters (U1-U4, R3)
+#: Labels of the uncore campaign parts (scripts/run_campaign.py).
+U1_STREAMS = {"u1_read": "read", "u1_triad": "triad", "u1_copy_nt": "copy_nt"}
+
+
+def _sample_ratios(d: pd.DataFrame) -> pd.DataFrame:
+    d = d.copy()
+    d["ctrl_over_modeled"] = d.ctrl_bytes / d.modeled_bytes
+    d["ctrl_over_counted"] = d.ctrl_bytes / d.counted_bytes
+    hbm = d.ctrl_hbm_read_bytes + d.ctrl_hbm_write_bytes
+    d["hbm_share"] = hbm / d.ctrl_bytes
+    d["tier_share"] = d.hbm_share.where(d.memory_target.eq("hbm"), 1 - d.hbm_share)
+    d["write_share"] = (d.ctrl_ddr_write_bytes + d.ctrl_hbm_write_bytes) / d.ctrl_bytes
+    # Socket 1 is idle in every single-socket record: its power is the reference.
+    d["other_pkg_w"] = d.energy_pkg_j / d.elapsed_seconds - d.pkg_power_w
+    d["other_ram_w"] = d.energy_ram_j / d.elapsed_seconds - d.ram_power_w
+    d["core_ghz"] = d.ghz_effective
+    return d
+
+
+def controller_table(unc: pd.DataFrame) -> pd.DataFrame:
+    """Memory-controller bytes against modeled and per-core counted bytes (U1).
+
+    One row per stream, tier and core count, medians over the five samples.
+    ``ctrl_over_modeled`` divides the CAS bytes of every DDR and HBM channel of both
+    sockets by the kernel's traffic convention; ``ctrl_over_counted`` divides them by the
+    offcore-response lines of the benchmark's own threads.  ``tier_share`` is the share of
+    the controller bytes that landed on the bound tier, ``write_share`` the share written.
+    """
+
+    d = unc[unc.notes.isin(U1_STREAMS) & unc.ctrl_bytes.notna() & unc.modeled_bytes.gt(0)]
+    if d.empty:
+        return pd.DataFrame()
+    d = _sample_ratios(d).assign(kernel=lambda f: f.notes.map(U1_STREAMS))
+    out = d.groupby(["memory_target", "kernel", "threads"]).agg(
+        gbs=("bandwidth_gbs", "median"),
+        ctrl_gbs=("ctrl_bandwidth_gbs", "median"),
+        ctrl_over_modeled=("ctrl_over_modeled", "median"),
+        ctrl_over_counted=("ctrl_over_counted", "median"),
+        tier_share=("tier_share", "median"),
+        write_share=("write_share", "median"),
+        intervals=("uncore_intervals", "median"),
+        n_samples=("ctrl_bytes", "size"),
+        campaign=("campaign_id", _ids),
+    ).reset_index()
+    return out
+
+
+def counting_cost(unc: pd.DataFrame) -> pd.DataFrame:
+    """The 56-core streams with the uncore session against the same point without it.
+
+    Windows 3-5 only: the power burst after the idle setup lifts the first one or two
+    one-second windows on HBM, and lasts longer with the session (``first_window_counters``).
+    """
+
+    unc = unc[unc.iteration.ge(2)]
+    rows = []
+    for label, kernel in U1_STREAMS.items():
+        for tier in ("ddr", "hbm"):
+            on = unc[unc.notes.eq(label) & unc.threads.eq(56) & unc.memory_target.eq(tier)]
+            off = unc[unc.notes.eq(f"{label}_control") & unc.memory_target.eq(tier)]
+            if on.empty or off.empty:
+                continue
+            rows.append(dict(kernel=kernel, memory_target=tier, with_session=on.bandwidth_gbs.median(),
+                             without=off.bandwidth_gbs.median(), cv_with=_cv(on.bandwidth_gbs), cv_without=_cv(off.bandwidth_gbs)))
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out["with_over_without"] = out.with_session / out.without
+    return out
+
+
+def power_table(unc: pd.DataFrame) -> pd.DataFrame:
+    """Package and DRAM power, core and uncore clocks and the PCU limit, per configuration (U1).
+
+    Power is that of the socket that computes; ``other_pkg_w`` is the idle socket in the
+    same window.  ``pj_per_byte`` is the computing socket's package plus DRAM energy per
+    byte the controllers moved; ``pj_per_op`` its package energy per operation.
+    """
+
+    d = unc[(unc.notes.isin(U1_STREAMS) | unc.notes.eq("u1_isa")) & unc.pkg_power_w.notna()]
+    if d.empty:
+        return pd.DataFrame()
+    d = _sample_ratios(d)
+    from hwbench.plotting import PATH_LABELS
+
+    paths = [PATH_LABELS.get(KERNEL_PATHS.get((b, t), ""), b) for b, t in zip(d.benchmark, d["dtype"])]
+    d["kernel"] = d.notes.map(U1_STREAMS).fillna(pd.Series(paths, index=d.index))
+    d["memory_target"] = d.memory_target.where(d.notes.ne("u1_isa"), "registers")
+    streams = d.memory_target.ne("registers")
+    d["pj_per_byte"] = ((d.pkg_power_w + d.ram_power_w) / (d.ctrl_bandwidth_gbs * 1e9) * 1e12).where(streams)
+    d["pj_per_op"] = (d.pkg_power_w / (d.performance_gops * 1e9) * 1e12).where(~streams)
+    out = d.groupby(["memory_target", "kernel", "threads"]).agg(
+        gbs=("bandwidth_gbs", "median"),
+        gops=("performance_gops", "median"),
+        core_ghz=("core_ghz", "median"),
+        uncore_ghz=("uncore_ghz", "median"),
+        pkg_w=("pkg_power_w", "median"),
+        ram_w=("ram_power_w", "median"),
+        other_pkg_w=("other_pkg_w", "median"),
+        power_limited=("pcu_power_limit_frac", "median"),
+        thermal_limited=("pcu_thermal_limit_frac", "median"),
+        pj_per_byte=("pj_per_byte", "median"),
+        pj_per_op=("pj_per_op", "median"),
+        n_samples=("pkg_power_w", "size"),
+    ).reset_index()
+    return out
+
+
+def first_window_counters(unc: pd.DataFrame) -> pd.DataFrame:
+    """The first one-second window against windows 3-5, with power and clocks (C4).
+
+    One row per 56-core stream and tier: the ratio first/rest of the kernel bandwidth, the
+    controller bandwidth, the core and uncore clocks and the package power, the share of
+    PCU cycles clipped by the power limit, and the second window's package power and
+    bandwidth ratio.  "Rest" is windows 3-5: after the longer idle a counting session adds,
+    the power burst reaches into window 2.
+    """
+
+    d = unc[unc.notes.isin(U1_STREAMS) & unc.threads.eq(56) & unc.pkg_power_w.notna()].copy()
+    if d.empty:
+        return pd.DataFrame()
+    d["kernel"] = d.notes.map(U1_STREAMS)
+    rows = []
+    for (tier, kernel), g in d.groupby(["memory_target", "kernel"]):
+        g = g.sort_values("iteration")
+        first, second, rest = g.iloc[0], g.iloc[1], g.iloc[2:]
+        row = dict(memory_target=tier, kernel=kernel)
+        for column, name in [("bandwidth_gbs", "gbs"), ("ctrl_bandwidth_gbs", "ctrl_gbs"), ("ghz_effective", "core_ghz"),
+                             ("uncore_ghz", "uncore_ghz"), ("pkg_power_w", "pkg_w")]:
+            row[f"{name}_first"] = first[column]
+            row[f"{name}_rest"] = rest[column].median()
+            row[f"{name}_ratio"] = first[column] / rest[column].median()
+        row["power_limited_first"] = first.pcu_power_limit_frac
+        row["power_limited_rest"] = rest.pcu_power_limit_frac.median()
+        row["pkg_w_second"] = second.pkg_power_w
+        row["gbs_second_ratio"] = second.bandwidth_gbs / rest.bandwidth_gbs.median()
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def remote_counter_table(unc: pd.DataFrame) -> pd.DataFrame:
+    """Local against remote read with UPI and directory traffic per line moved (U2).
+
+    ``upi_flits_per_line`` is the data flits sent over every UPI link (both sockets) per
+    64-byte line the kernel read; ``dir_updates_per_line`` the directory updates per line;
+    ``ctrl_write_per_read`` the controller write bytes per controller read byte, which a
+    read-only kernel only causes through directory writes back to memory.
+    """
+
+    d = unc[unc.notes.isin(["u2_local", "u2_remote"]) & unc.ctrl_bytes.notna()]
+    if d.empty:
+        return pd.DataFrame()
+    d = _sample_ratios(d)
+    lines = d.modeled_bytes / CACHE_LINE_BYTES
+    d["upi_flits_per_line"] = (d.upi_tx_data_flits + d.upi_rx_data_flits) / 2 / lines
+    d["dir_updates_per_line"] = d.m2m_directory_updates / lines
+    writes = d.ctrl_ddr_write_bytes + d.ctrl_hbm_write_bytes
+    d["ctrl_write_per_read"] = writes / (d.ctrl_bytes - writes)
+    d["placement"] = d.notes.str.replace("u2_", "", regex=False)
+    d["kernel"] = d.benchmark.str.replace("stream_", "", regex=False)
+    out = d.groupby(["memory_target", "kernel", "threads", "placement"]).agg(
+        gbs=("bandwidth_gbs", "median"),
+        ctrl_over_modeled=("ctrl_over_modeled", "median"),
+        upi_flits_per_line=("upi_flits_per_line", "median"),
+        dir_updates_per_line=("dir_updates_per_line", "median"),
+        ctrl_write_per_read=("ctrl_write_per_read", "median"),
+        core_ghz=("core_ghz", "median"),
+        uncore_ghz=("uncore_ghz", "median"),
+        pkg_w=("pkg_power_w", "median"),
+        power_limited=("pcu_power_limit_frac", "median"),
+        n_samples=("ctrl_bytes", "size"),
+    ).reset_index()
+    return out
+
+
+CACHE_LINE_BYTES = 64
+
+
+def gemm_controller_table(unc: pd.DataFrame) -> pd.DataFrame:
+    """GEMM traffic at the controllers against modeled and per-core counted bytes (U4).
+
+    ``intensity_ctrl`` places the GEMM on a roofline with the bytes the memory controllers
+    served; ``ctrl_over_counted`` near 1 means the cores' own offcore counts already gave
+    the memory traffic.
+    """
+
+    d = unc[unc.notes.eq("u4_gemm") & unc.ctrl_bytes.notna()]
+    if d.empty:
+        return pd.DataFrame()
+    d = _sample_ratios(d)
+    d["intensity_ctrl"] = d.operations / d.ctrl_bytes
+    d["ctrl_read_over_modeled"] = (d.ctrl_ddr_read_bytes + d.ctrl_hbm_read_bytes) / d.modeled_bytes
+    d["ctrl_write_over_modeled"] = (d.ctrl_ddr_write_bytes + d.ctrl_hbm_write_bytes) / d.modeled_bytes
+    d["counted_write_over_modeled"] = d.dram_write_lines * CACHE_LINE_BYTES / d.modeled_bytes
+    out = d.groupby(["memory_target", "dtype", "m"]).agg(
+        gops=("performance_gops", "median"),
+        gbs_modeled=("bandwidth_gbs", "median"),
+        ctrl_gbs=("ctrl_bandwidth_gbs", "median"),
+        ctrl_over_modeled=("ctrl_over_modeled", "median"),
+        ctrl_over_counted=("ctrl_over_counted", "median"),
+        ctrl_read_over_modeled=("ctrl_read_over_modeled", "median"),
+        ctrl_write_over_modeled=("ctrl_write_over_modeled", "median"),
+        counted_write_over_modeled=("counted_write_over_modeled", "median"),
+        intensity_modeled=("arithmetic_intensity", "median"),
+        intensity_ctrl=("intensity_ctrl", "median"),
+        tier_share=("tier_share", "median"),
+        core_ghz=("core_ghz", "median"),
+        uncore_ghz=("uncore_ghz", "median"),
+        pkg_w=("pkg_power_w", "median"),
+        power_limited=("pcu_power_limit_frac", "median"),
+        n_samples=("ctrl_bytes", "size"),
+    ).reset_index()
+    return out
+
+
+def loaded_concurrency(unc: pd.DataFrame) -> pd.DataFrame:
+    """Loaded latency with the bandwidth the controllers served in the same windows (R3).
+
+    ``lines_in_flight`` is Little's law on the bound tier: controller bandwidth times the
+    chase's latency over 64 bytes, a measured lower bound on the misses outstanding;
+    ``lines_in_flight_modeled`` uses the streaming cores' modeled bandwidth instead.
+    """
+
+    chase = unc[unc.notes.str.match(r"u_loaded_latency_(idle|n\d+)$") & unc.latency_ns.notna()].copy()
+    if chase.empty:
+        return pd.DataFrame()
+    chase["streaming_cores"] = chase.notes.str.extract(r"_n(\d+)$")[0].astype(float).fillna(0).astype(int)
+    hbm = chase.ctrl_hbm_read_bytes + chase.ctrl_hbm_write_bytes
+    ddr = chase.ctrl_ddr_read_bytes + chase.ctrl_ddr_write_bytes
+    chase["tier_gbs"] = hbm.where(chase.memory_target.eq("hbm"), ddr) / chase.elapsed_seconds / 1e9
+    load = unc[unc.notes.str.match(r"u_loaded_stream_n\d+$") & unc.bandwidth_gbs.notna()].copy()
+    load["streaming_cores"] = load.notes.str.extract(r"_n(\d+)$")[0].astype(int)
+    modeled = load.groupby(["memory_target", "streaming_cores"]).bandwidth_gbs.median().rename("stream_gbs_modeled")
+    out = chase.groupby(["memory_target", "streaming_cores"]).agg(
+        latency_ns=("latency_ns", "median"),
+        tier_gbs=("tier_gbs", "median"),
+        uncore_ghz=("uncore_ghz", "median"),
+        pkg_w=("pkg_power_w", "median"),
+        n_samples=("latency_ns", "size"),
+    ).join(modeled).reset_index()
+    out["lines_in_flight"] = out.tier_gbs * out.latency_ns / CACHE_LINE_BYTES
+    out["lines_in_flight_modeled"] = out.stream_gbs_modeled * out.latency_ns / CACHE_LINE_BYTES
+    return out
+
+
+def uncore_series(unc: pd.DataFrame, notes: str, tier: str, threads: int = 56) -> pd.DataFrame:
+    """Per-interval controller bandwidth, package power and uncore clock of one record."""
+
+    from hwbench import uncore as uncore_counters
+
+    rows = unc[unc.notes.eq(notes) & unc.memory_target.eq(tier) & unc.threads.eq(threads)]
+    if rows.empty:
+        return pd.DataFrame()
+    source = Path(rows.source_file.iloc[0])
+    path = source if source.is_absolute() else ROOT / "data/raw" / source
+    record = json.loads(path.read_text())
+    out = pd.DataFrame(uncore_counters.series(record.get("uncore"), record.get("result") or {}))
+    if not out.empty:
+        samples = (record.get("result") or {}).get("samples") or []
+        origin = samples[0]["start_ns"] if samples else 0
+        out.attrs["windows"] = [((s["start_ns"] - origin) / 1e9, (s["end_ns"] - origin) / 1e9) for s in samples]
+    return out
+
+
+def data_pattern_counters(campaign: str, root: Path = ROOT) -> pd.DataFrame:
+    """The read-only kernel with four data patterns on HBM and DDR, with counters (E6).
+
+    One row per launch: the kernel's median iteration rate after the first (``gbs``) and,
+    over the read phase of the system-wide session (``uncore.kernel_phase``), the bound
+    tier's controller bandwidth, socket 0's package and DRAM power, uncore clock and the
+    share of PCU cycles clipped for power.  ``docs/STREAMGAP.md`` describes E0-E5.
+    """
+
+    import gzip
+    import re
+    import statistics
+
+    from hwbench import uncore as uncore_counters
+
+    base = root / "data/raw/streamgap" / campaign / "records"
+    rows = []
+    for path in sorted(base.glob("e6_*.json")):
+        text = path.read_text().strip()
+        perf = path.with_name(path.stem + ".perf.csv.gz")
+        if not text or not perf.exists():
+            continue
+        d = json.loads(text)
+        match = re.match(r"e6_read_(hbm|ddr)_(\w+)_r(\d+)$", d["label"])
+        tier, init, rep = match.group(1), match.group(2), int(match.group(3))
+        rate = [d["bytes_per_iter"] / 1e9 / t for t in d["times_s"]]
+        parsed = uncore_counters.parse(gzip.decompress(perf.read_bytes()).decode(), uncore_counters.BASE_EVENTS, started=True)
+        rows.append(dict(memory_target=tier, init=init, repeat=rep, gbs=statistics.median(rate[1:]), wrong=d.get("wrong"),
+                         **uncore_counters.kernel_phase(parsed, tier)))
+    return pd.DataFrame(rows)
+
+
+def second_window_ratio(ext: pd.DataFrame) -> pd.DataFrame:
+    """Window 2 against windows 3-5 for the 56-core local Flat streams of the extended campaigns.
+
+    ``drop1_over_drop2`` is the sustained median Table 1 uses (windows 2-5) over the median of
+    windows 3-5: how much of the power burst the sustained figure still holds.
+    """
+
+    d = ext[ext.benchmark.str.startswith("stream") & ext.memory_mode.eq("flat") & ext.threads.eq(56) & ext.locality.eq("local")
+            & ext.socket_scope.eq("single") & ext.working_set_bytes.ge(2**30) & ext.iteration.notna()]
+    keys = ["campaign_id", "memory_target", "benchmark", "working_set_bytes", "socket", "notes"]
+    rows = []
+    for key, g in d.groupby(keys):
+        g = g.set_index("iteration").bandwidth_gbs
+        if not {0, 1, 2, 3, 4} <= set(g.index):
+            continue
+        late = g.loc[[2, 3, 4]].median()
+        rows.append(dict(zip(keys, key), second_ratio=g.loc[1] / late, drop1_over_drop2=g.loc[[1, 2, 3, 4]].median() / late))
+    return pd.DataFrame(rows)

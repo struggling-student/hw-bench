@@ -12,7 +12,7 @@ campaigns={(mode,c) for mode,c in policy['primary_campaigns'].items()}
 for mode,overrides in policy.get('benchmark_campaigns',{}).items():
     campaigns.update((mode,c) for c in overrides.values())
 campaigns.update((mode,c) for mode,c in policy.get('supersede',{}).items())
-for key in ('extended_campaigns','earlier_kernel_campaigns'):
+for key in ('extended_campaigns','earlier_kernel_campaigns','uncore_campaigns'):
     for mode,ids in policy.get(key,{}).items():
         campaigns.update((mode,c) for c in ids)
 for mode,campaign in sorted(campaigns):
