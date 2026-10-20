@@ -1078,7 +1078,9 @@ def main():
         for target in targets:
             for gib in [8] if flat else [8, 96]:
                 for kind in ["read", "triad", "copy_nt"]:
-                    for t in UNCORE_THREADS:
+                    # Spilled, one core needs seconds per pass and its read checksum sums 1e10
+                    # doubles, beyond the kernel's 1e-9 tolerance: start at 14 cores there.
+                    for t in UNCORE_THREADS if gib <= 64 else UNCORE_THREADS[1:]:
                         execute(spec(0, kind, t, target, gib=gib, label=f"u1_{kind}", **counted_by))
                     # The same 56-core point without the session: what counting costs.
                     execute(spec(0, kind, 56, target, gib=gib, label=f"u1_{kind}_control"))

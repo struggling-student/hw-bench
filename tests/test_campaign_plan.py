@@ -42,7 +42,7 @@ def test_dry_run_writes_nothing():
         ("flat", "loadedlat", 32),
         ("flat", "usmoke", 7),
         ("cache", "usmoke", 7),
-        ("cache", "ustreams", 36),
+        ("cache", "ustreams", 33),
         ("cache", "uremote", 6),
         ("cache", "uloaded", 11),
         ("flat", "ugemmconv", 78),
