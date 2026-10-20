@@ -11,7 +11,7 @@ maintained). The process documents are in [archive/](archive/).
 
 | | |
 | --- | --- |
-| Branch | `develop`, pushed on 2026-10-20. `main` still holds only the initial commit; merging is deferred. |
+| Branch | `main` and `develop` point at the same commit (develop fast-forwarded into main on 2026-10-20); both pushed. |
 | Running | Nothing. |
 | Last campaigns | Privileged uncore counters on the Flat node: `flat-ustreams-20261019T205225Z` (U1, 36 records), `flat-uremote-20261019T205814Z` (U2, 14), `flat-ugemm-20261019T210858Z` (U4, 16), `flat-uloaded-20261019T211812Z` (R3 with counters, 22) and `flat-streamgap_e6-20261019T212743Z` (data pattern, 24 launches); all valid, in notebook 06 (`uncore_campaigns`, `data_pattern_campaign` in `configs/analysis.json`). The proof run `flat-usmoke-20261019T204741Z` is not in the analysis. |
 | Tests | 151 pass; all seven notebooks execute. |
@@ -84,7 +84,7 @@ unchanged once the events are added. Also open, not blocked: which agent issues 
 remote-HBM reads (CHA opcode events were not in the session), and real model weights for the
 data-pattern effect.
 
-**Decisions that are yours**: pushing `develop`; merging it into `main`; removing stray cluster
+**Decisions that are yours**: removing stray cluster
 directories from earlier mistyped submissions; whether to carry the data pattern into the thesis text
 where the HBM read ceiling is quoted (random data 527 GB/s, constants 576, now explained by the power
 limit, [STREAMGAP.md](STREAMGAP.md) E6).
