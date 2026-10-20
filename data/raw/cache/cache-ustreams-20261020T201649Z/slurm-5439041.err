@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/lpor1/store_0/usr/user/hw-bench-thesis-source/cache-ustreams-20261020T201649Z/scripts/run_campaign.py", line 1396, in <module>
+    main()
+  File "/lpor1/store_0/usr/user/hw-bench-thesis-source/cache-ustreams-20261020T201649Z/scripts/run_campaign.py", line 1082, in main
+    execute(spec(0, kind, t, target, gib=gib, label=f"u1_{kind}", **counted_by))
+  File "/lpor1/store_0/usr/user/hw-bench-thesis-source/cache-ustreams-20261020T201649Z/scripts/run_campaign.py", line 506, in execute
+    subprocess.run(argv + ["--"] + command, env=env, check=True)
+  File "/usr/lib64/python3.9/subprocess.py", line 528, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['python3', '-m', 'hwbench.record', '--output', '/lpor1/store_0/usr/user/hw-bench-thesis-results/cache-ustreams-20261020T201649Z/records/u1_read-single-s0-read-effective_cache-m0-t1-g96-n0-k1.json', '--memory-mode', 'cache', '--memory-target', 'effective_cache', '--socket-scope', 'single', '--cpu-bind', '0', '--mem-bind', '0', '--threads', '1', '--notes', 'u1_read', '--socket', '0', '--memory-socket', '0', '--working-set-bytes', '103079215104', '--', 'numactl', '--physcpubind=0', '--membind=0', '/lpor1/store_0/usr/user/hw-bench-thesis-results/cache-ustreams-20261020T201649Z/build/hardware', '--kind', 'read', '--seconds', '1', '--repetitions', '5', '--k', '1', '--bytes', '103079215104']' returned non-zero exit status 1.

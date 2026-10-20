@@ -1,0 +1,1991 @@
+{
+  "campaign_id": "cache-ucapacity-20261020T201654Z",
+  "campaign_repetition": null,
+  "command": [
+    "numactl",
+    "--physcpubind=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55",
+    "--membind=0",
+    "/lpor1/store_0/usr/user/hw-bench-thesis-results/cache-ucapacity-20261020T201654Z/build/hardware",
+    "--kind",
+    "triad",
+    "--seconds",
+    "1",
+    "--repetitions",
+    "5",
+    "--k",
+    "1",
+    "--bytes",
+    "17179869184"
+  ],
+  "cpu_bind": "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55",
+  "cpu_frequency_khz_after": 804464.2857142857,
+  "cpu_frequency_khz_before": 800000.0,
+  "environment": {
+    "HWBENCH_PARTICIPANT": null,
+    "HWBENCH_PARTICIPANTS": null,
+    "HWBENCH_SYNC_DIR": null,
+    "KMP_AFFINITY": null,
+    "OMP_NUM_THREADS": "56",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "close"
+  },
+  "hostname": "cresco8-hbm13.portici.enea.it",
+  "launch_method": "slurm_exclusive",
+  "mem_bind": "0",
+  "memory_mode": "cache",
+  "memory_socket": 0,
+  "memory_target": "effective_cache",
+  "notes": "u3_triad_capacity",
+  "pair_id": null,
+  "physical_cores": 56,
+  "process_end_ns": 728646634814558,
+  "process_start_ns": 728641293003980,
+  "result": {
+    "benchmark": "stream_triad",
+    "chains": 0,
+    "checksum": 7164.77499999999,
+    "counters": true,
+    "dtype": "",
+    "hugepages": 0,
+    "implementation": "native_avx512",
+    "k": 1,
+    "kernel": "triad",
+    "per_thread_bytes": 0,
+    "samples": [
+      {
+        "amx_busy_cycles": 0,
+        "counter_scale": 1,
+        "counter_threads": 56,
+        "cycles": 102931408108,
+        "dram_read_lines": 5699935601,
+        "dram_write_lines": 2863349087,
+        "elapsed_seconds": 1.008072627,
+        "end_ns": 728642532453220,
+        "instructions": 34693424469,
+        "loads": 0,
+        "modeled_bytes": 549755781120,
+        "operations": 45812981760,
+        "planned_start_ns": 728641522927445,
+        "ref_cycles": 105842978292,
+        "start_ns": 728641524380593
+      },
+      {
+        "amx_busy_cycles": 0,
+        "counter_scale": 1,
+        "counter_threads": 56,
+        "cycles": 101985671361,
+        "dram_read_lines": 5699424232,
+        "dram_write_lines": 2863347306,
+        "elapsed_seconds": 1.005696583,
+        "end_ns": 728643542730703,
+        "instructions": 34684084426,
+        "loads": 0,
+        "modeled_bytes": 549755781120,
+        "operations": 45812981760,
+        "planned_start_ns": 728642535565220,
+        "ref_cycles": 105621884108,
+        "start_ns": 728642537034120
+      },
+      {
+        "amx_busy_cycles": 0,
+        "counter_scale": 1,
+        "counter_threads": 56,
+        "cycles": 90381342113,
+        "dram_read_lines": 5342518787,
+        "dram_write_lines": 2684390001,
+        "elapsed_seconds": 1.017965379,
+        "end_ns": 728644564735586,
+        "instructions": 32521074872,
+        "loads": 0,
+        "modeled_bytes": 515396044800,
+        "operations": 42949670400,
+        "planned_start_ns": 728643545322008,
+        "ref_cycles": 106811823632,
+        "start_ns": 728643546770207
+      },
+      {
+        "amx_busy_cycles": 0,
+        "counter_scale": 1,
+        "counter_threads": 56,
+        "cycles": 86537171790,
+        "dram_read_lines": 5342756198,
+        "dram_write_lines": 2684389092,
+        "elapsed_seconds": 0.998458749,
+        "end_ns": 728645567608445,
+        "instructions": 32514689893,
+        "loads": 0,
+        "modeled_bytes": 515396044800,
+        "operations": 42949670400,
+        "planned_start_ns": 728644567501481,
+        "ref_cycles": 104802321236,
+        "start_ns": 728644569149696
+      },
+      {
+        "amx_busy_cycles": 0,
+        "counter_scale": 1,
+        "counter_threads": 56,
+        "cycles": 88915854504,
+        "dram_read_lines": 5342883104,
+        "dram_write_lines": 2684386860,
+        "elapsed_seconds": 1.009279078,
+        "end_ns": 728646581295075,
+        "instructions": 32640503705,
+        "loads": 0,
+        "modeled_bytes": 515396044800,
+        "operations": 42949670400,
+        "planned_start_ns": 728645570385894,
+        "ref_cycles": 105626686852,
+        "start_ns": 728645572015997
+      }
+    ],
+    "seed": 7,
+    "threads": 56,
+    "valid": true,
+    "working_set_bytes": 17179868160
+  },
+  "returncode": 0,
+  "schema_version": "2.0",
+  "socket": 0,
+  "socket_scope": "single",
+  "stderr": "",
+  "stdout": "{\"benchmark\":\"stream_triad\",\"kernel\":\"triad\",\"dtype\":\"\",\"implementation\":\"native_avx512\",\"threads\":56,\"working_set_bytes\":17179868160,\"per_thread_bytes\":0,\"hugepages\":0,\"k\":1,\"chains\":0,\"counters\":true,\"seed\":7,\"samples\":[{\"elapsed_seconds\":1.008072627,\"start_ns\":728641524380593,\"end_ns\":728642532453220,\"planned_start_ns\":728641522927445,\"operations\":45812981760,\"modeled_bytes\":549755781120,\"loads\":0,\"cycles\":102931408108,\"amx_busy_cycles\":0,\"counter_scale\":1,\"counter_threads\":56,\"instructions\":34693424469,\"ref_cycles\":105842978292,\"dram_read_lines\":5699935601,\"dram_write_lines\":2863349087},{\"elapsed_seconds\":1.005696583,\"start_ns\":728642537034120,\"end_ns\":728643542730703,\"planned_start_ns\":728642535565220,\"operations\":45812981760,\"modeled_bytes\":549755781120,\"loads\":0,\"cycles\":101985671361,\"amx_busy_cycles\":0,\"counter_scale\":1,\"counter_threads\":56,\"instructions\":34684084426,\"ref_cycles\":105621884108,\"dram_read_lines\":5699424232,\"dram_write_lines\":2863347306},{\"elapsed_seconds\":1.017965379,\"start_ns\":728643546770207,\"end_ns\":728644564735586,\"planned_start_ns\":728643545322008,\"operations\":42949670400,\"modeled_bytes\":515396044800,\"loads\":0,\"cycles\":90381342113,\"amx_busy_cycles\":0,\"counter_scale\":1,\"counter_threads\":56,\"instructions\":32521074872,\"ref_cycles\":106811823632,\"dram_read_lines\":5342518787,\"dram_write_lines\":2684390001},{\"elapsed_seconds\":0.998458749,\"start_ns\":728644569149696,\"end_ns\":728645567608445,\"planned_start_ns\":728644567501481,\"operations\":42949670400,\"modeled_bytes\":515396044800,\"loads\":0,\"cycles\":86537171790,\"amx_busy_cycles\":0,\"counter_scale\":1,\"counter_threads\":56,\"instructions\":32514689893,\"ref_cycles\":104802321236,\"dram_read_lines\":5342756198,\"dram_write_lines\":2684389092},{\"elapsed_seconds\":1.009279078,\"start_ns\":728645572015997,\"end_ns\":728646581295075,\"planned_start_ns\":728645570385894,\"operations\":42949670400,\"modeled_bytes\":515396044800,\"loads\":0,\"cycles\":88915854504,\"amx_busy_cycles\":0,\"counter_scale\":1,\"counter_threads\":56,\"instructions\":32640503705,\"ref_cycles\":105626686852,\"dram_read_lines\":5342883104,\"dram_write_lines\":2684386860}],\"checksum\":7164.77499999999,\"valid\":true}\n",
+  "synchronized": false,
+  "threads": 56,
+  "timestamp": "2026-10-20T20:22:22.764046+00:00",
+  "turbostat": {
+    "chunk": 50,
+    "command": [
+      "sudo",
+      "-n",
+      "/usr/bin/turbostat",
+      "--quiet",
+      "-c",
+      "0,56",
+      "--interval",
+      "0.1",
+      "--num_iterations",
+      "50",
+      "--show",
+      "Time_Of_Day_Seconds,Package,CPU,Bzy_MHz,PkgWatt,RAMWatt,UncMHz,PkgTmp"
+    ],
+    "error": null,
+    "interval_s": 0.1,
+    "offset_ns": 1791799091471443235,
+    "rows": [
+      {
+        "bzy_mhz": 803.0,
+        "package": 0,
+        "pkg_c": 44.0,
+        "pkg_w": 161.23,
+        "ram_w": 21.8,
+        "t_end": 1792527732.661168,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 2258.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 133.61,
+        "ram_w": 20.84,
+        "t_end": 1792527732.661242,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 1216.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.53,
+        "ram_w": 21.92,
+        "t_end": 1792527732.7908,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 955.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.41,
+        "ram_w": 20.93,
+        "t_end": 1792527732.790887,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 1474.0,
+        "package": 0,
+        "pkg_c": 49.0,
+        "pkg_w": 250.91,
+        "ram_w": 22.91,
+        "t_end": 1792527732.891827,
+        "uncore_mhz": 1700.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 141.71,
+        "ram_w": 20.69,
+        "t_end": 1792527732.891891,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 2389.0,
+        "package": 0,
+        "pkg_c": 55.0,
+        "pkg_w": 380.53,
+        "ram_w": 23.68,
+        "t_end": 1792527732.992148,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 166.17,
+        "ram_w": 20.71,
+        "t_end": 1792527732.992209,
+        "uncore_mhz": 1700.0
+      },
+      {
+        "bzy_mhz": 1967.0,
+        "package": 0,
+        "pkg_c": 57.0,
+        "pkg_w": 372.91,
+        "ram_w": 23.22,
+        "t_end": 1792527733.093004,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 162.4,
+        "ram_w": 21.01,
+        "t_end": 1792527733.093068,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1806.0,
+        "package": 0,
+        "pkg_c": 59.0,
+        "pkg_w": 376.91,
+        "ram_w": 23.57,
+        "t_end": 1792527733.19338,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 156.91,
+        "ram_w": 20.82,
+        "t_end": 1792527733.19345,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1827.0,
+        "package": 0,
+        "pkg_c": 59.0,
+        "pkg_w": 379.99,
+        "ram_w": 23.68,
+        "t_end": 1792527733.294203,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 156.46,
+        "ram_w": 20.8,
+        "t_end": 1792527733.294269,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1838.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 379.3,
+        "ram_w": 23.59,
+        "t_end": 1792527733.394511,
+        "uncore_mhz": 1700.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 160.63,
+        "ram_w": 20.89,
+        "t_end": 1792527733.394575,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 1958.0,
+        "package": 0,
+        "pkg_c": 59.0,
+        "pkg_w": 373.56,
+        "ram_w": 23.36,
+        "t_end": 1792527733.49536,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 160.68,
+        "ram_w": 20.79,
+        "t_end": 1792527733.495454,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1818.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 373.58,
+        "ram_w": 23.55,
+        "t_end": 1792527733.597413,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 159.78,
+        "ram_w": 20.86,
+        "t_end": 1792527733.597477,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 1854.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 379.14,
+        "ram_w": 23.42,
+        "t_end": 1792527733.698214,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 159.18,
+        "ram_w": 20.89,
+        "t_end": 1792527733.698277,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1838.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 376.69,
+        "ram_w": 23.41,
+        "t_end": 1792527733.798562,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 157.16,
+        "ram_w": 20.8,
+        "t_end": 1792527733.798624,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1793.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 379.91,
+        "ram_w": 23.63,
+        "t_end": 1792527733.899371,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 155.63,
+        "ram_w": 20.74,
+        "t_end": 1792527733.899441,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1808.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 372.34,
+        "ram_w": 23.19,
+        "t_end": 1792527733.999707,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 160.76,
+        "ram_w": 20.96,
+        "t_end": 1792527733.999769,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 2047.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 380.55,
+        "ram_w": 23.63,
+        "t_end": 1792527734.100543,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 158.44,
+        "ram_w": 21.06,
+        "t_end": 1792527734.100609,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1810.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 375.88,
+        "ram_w": 23.47,
+        "t_end": 1792527734.200856,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 158.28,
+        "ram_w": 20.96,
+        "t_end": 1792527734.200919,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1824.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 374.15,
+        "ram_w": 23.29,
+        "t_end": 1792527734.301674,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 156.67,
+        "ram_w": 20.7,
+        "t_end": 1792527734.301736,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1796.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 377.5,
+        "ram_w": 23.84,
+        "t_end": 1792527734.402063,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 161.18,
+        "ram_w": 20.92,
+        "t_end": 1792527734.402129,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 1926.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 378.0,
+        "ram_w": 23.51,
+        "t_end": 1792527734.502922,
+        "uncore_mhz": 1700.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 159.04,
+        "ram_w": 20.78,
+        "t_end": 1792527734.502986,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 1794.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 375.3,
+        "ram_w": 23.5,
+        "t_end": 1792527734.603428,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 159.84,
+        "ram_w": 20.92,
+        "t_end": 1792527734.603492,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1847.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 378.02,
+        "ram_w": 23.75,
+        "t_end": 1792527734.704249,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 158.84,
+        "ram_w": 20.85,
+        "t_end": 1792527734.704325,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 1782.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 374.42,
+        "ram_w": 23.4,
+        "t_end": 1792527734.804595,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 156.67,
+        "ram_w": 20.86,
+        "t_end": 1792527734.804663,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1793.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 377.13,
+        "ram_w": 23.52,
+        "t_end": 1792527734.905412,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 157.47,
+        "ram_w": 20.99,
+        "t_end": 1792527734.905473,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1763.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 378.91,
+        "ram_w": 23.7,
+        "t_end": 1792527735.005733,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 157.26,
+        "ram_w": 20.86,
+        "t_end": 1792527735.005794,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 2046.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 376.74,
+        "ram_w": 23.6,
+        "t_end": 1792527735.106518,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 158.95,
+        "ram_w": 20.87,
+        "t_end": 1792527735.106594,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 1492.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 345.21,
+        "ram_w": 23.22,
+        "t_end": 1792527735.20692,
+        "uncore_mhz": 1200.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 159.01,
+        "ram_w": 20.74,
+        "t_end": 1792527735.207005,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1356.0,
+        "package": 0,
+        "pkg_c": 59.0,
+        "pkg_w": 309.43,
+        "ram_w": 23.15,
+        "t_end": 1792527735.307741,
+        "uncore_mhz": 1300.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 151.97,
+        "ram_w": 20.86,
+        "t_end": 1792527735.30781,
+        "uncore_mhz": 1200.0
+      },
+      {
+        "bzy_mhz": 1693.0,
+        "package": 0,
+        "pkg_c": 59.0,
+        "pkg_w": 341.35,
+        "ram_w": 23.43,
+        "t_end": 1792527735.408057,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 145.22,
+        "ram_w": 21.17,
+        "t_end": 1792527735.40812,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1742.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 362.9,
+        "ram_w": 23.48,
+        "t_end": 1792527735.508877,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 154.96,
+        "ram_w": 20.74,
+        "t_end": 1792527735.508941,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1556.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 345.72,
+        "ram_w": 23.22,
+        "t_end": 1792527735.609372,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 157.35,
+        "ram_w": 20.95,
+        "t_end": 1792527735.609452,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1600.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 347.23,
+        "ram_w": 23.56,
+        "t_end": 1792527735.710168,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 154.81,
+        "ram_w": 21.11,
+        "t_end": 1792527735.710232,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1573.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 351.84,
+        "ram_w": 23.41,
+        "t_end": 1792527735.810511,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 152.41,
+        "ram_w": 20.79,
+        "t_end": 1792527735.810575,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1519.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 345.39,
+        "ram_w": 23.27,
+        "t_end": 1792527735.911289,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 153.49,
+        "ram_w": 21.03,
+        "t_end": 1792527735.911354,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1547.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 347.89,
+        "ram_w": 23.46,
+        "t_end": 1792527736.011635,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 152.44,
+        "ram_w": 20.74,
+        "t_end": 1792527736.0117,
+        "uncore_mhz": 1300.0
+      },
+      {
+        "bzy_mhz": 1672.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 353.31,
+        "ram_w": 23.29,
+        "t_end": 1792527736.112441,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 152.31,
+        "ram_w": 20.78,
+        "t_end": 1792527736.112509,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1608.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 351.8,
+        "ram_w": 23.62,
+        "t_end": 1792527736.212752,
+        "uncore_mhz": 1300.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 153.83,
+        "ram_w": 20.93,
+        "t_end": 1792527736.212818,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1535.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 350.83,
+        "ram_w": 23.46,
+        "t_end": 1792527736.313585,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 154.4,
+        "ram_w": 20.89,
+        "t_end": 1792527736.313648,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1564.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 342.5,
+        "ram_w": 23.51,
+        "t_end": 1792527736.413888,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 151.86,
+        "ram_w": 20.64,
+        "t_end": 1792527736.413953,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1628.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 351.57,
+        "ram_w": 23.4,
+        "t_end": 1792527736.514732,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 153.53,
+        "ram_w": 20.99,
+        "t_end": 1792527736.514799,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1547.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 347.57,
+        "ram_w": 23.35,
+        "t_end": 1792527736.615243,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 153.05,
+        "ram_w": 20.7,
+        "t_end": 1792527736.61531,
+        "uncore_mhz": 1300.0
+      },
+      {
+        "bzy_mhz": 1571.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 349.27,
+        "ram_w": 23.32,
+        "t_end": 1792527736.716082,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 151.32,
+        "ram_w": 20.71,
+        "t_end": 1792527736.716144,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1516.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 350.58,
+        "ram_w": 23.52,
+        "t_end": 1792527736.816417,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 154.7,
+        "ram_w": 21.01,
+        "t_end": 1792527736.816481,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1515.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 351.21,
+        "ram_w": 23.65,
+        "t_end": 1792527736.917227,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 152.67,
+        "ram_w": 20.69,
+        "t_end": 1792527736.917292,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1564.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 346.06,
+        "ram_w": 23.35,
+        "t_end": 1792527737.017523,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 154.19,
+        "ram_w": 20.87,
+        "t_end": 1792527737.017584,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1645.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 350.46,
+        "ram_w": 23.63,
+        "t_end": 1792527737.118357,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 154.86,
+        "ram_w": 20.94,
+        "t_end": 1792527737.118427,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1555.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 353.53,
+        "ram_w": 23.25,
+        "t_end": 1792527737.218672,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 154.84,
+        "ram_w": 20.72,
+        "t_end": 1792527737.218735,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1538.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 344.89,
+        "ram_w": 23.66,
+        "t_end": 1792527737.319492,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 152.39,
+        "ram_w": 20.92,
+        "t_end": 1792527737.319558,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1590.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 347.95,
+        "ram_w": 23.37,
+        "t_end": 1792527737.41983,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 150.48,
+        "ram_w": 20.64,
+        "t_end": 1792527737.419904,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1620.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 350.28,
+        "ram_w": 23.36,
+        "t_end": 1792527737.520693,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 153.26,
+        "ram_w": 20.94,
+        "t_end": 1792527737.520759,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1565.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 351.17,
+        "ram_w": 23.53,
+        "t_end": 1792527737.621188,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 151.41,
+        "ram_w": 20.66,
+        "t_end": 1792527737.621256,
+        "uncore_mhz": 1300.0
+      },
+      {
+        "bzy_mhz": 1681.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 352.57,
+        "ram_w": 23.58,
+        "t_end": 1792527737.770986,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 1189.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 151.83,
+        "ram_w": 20.72,
+        "t_end": 1792527737.77106,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1694.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 350.05,
+        "ram_w": 23.38,
+        "t_end": 1792527737.871739,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 949.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 152.81,
+        "ram_w": 20.84,
+        "t_end": 1792527737.871811,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 1538.0,
+        "package": 0,
+        "pkg_c": 61.0,
+        "pkg_w": 350.03,
+        "ram_w": 23.45,
+        "t_end": 1792527737.972551,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 875.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 153.57,
+        "ram_w": 20.95,
+        "t_end": 1792527737.97262,
+        "uncore_mhz": 1300.0
+      },
+      {
+        "bzy_mhz": 1621.0,
+        "package": 0,
+        "pkg_c": 60.0,
+        "pkg_w": 315.15,
+        "ram_w": 23.46,
+        "t_end": 1792527738.072977,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 150.16,
+        "ram_w": 21.09,
+        "t_end": 1792527738.073039,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 2472.0,
+        "package": 0,
+        "pkg_c": 49.0,
+        "pkg_w": 183.29,
+        "ram_w": 22.19,
+        "t_end": 1792527738.173787,
+        "uncore_mhz": 1800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 162.27,
+        "ram_w": 20.73,
+        "t_end": 1792527738.173847,
+        "uncore_mhz": 1700.0
+      },
+      {
+        "bzy_mhz": 1009.0,
+        "package": 0,
+        "pkg_c": 47.0,
+        "pkg_w": 183.87,
+        "ram_w": 21.83,
+        "t_end": 1792527738.274088,
+        "uncore_mhz": 1800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 165.52,
+        "ram_w": 20.81,
+        "t_end": 1792527738.274141,
+        "uncore_mhz": 1700.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 47.0,
+        "pkg_w": 176.57,
+        "ram_w": 21.66,
+        "t_end": 1792527738.374818,
+        "uncore_mhz": 1700.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 166.66,
+        "ram_w": 20.95,
+        "t_end": 1792527738.374874,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 47.0,
+        "pkg_w": 174.34,
+        "ram_w": 21.82,
+        "t_end": 1792527738.475096,
+        "uncore_mhz": 1700.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 160.35,
+        "ram_w": 20.59,
+        "t_end": 1792527738.475148,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 171.34,
+        "ram_w": 21.89,
+        "t_end": 1792527738.575918,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 160.82,
+        "ram_w": 20.76,
+        "t_end": 1792527738.575972,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 170.38,
+        "ram_w": 21.89,
+        "t_end": 1792527738.676426,
+        "uncore_mhz": 1600.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 156.5,
+        "ram_w": 20.56,
+        "t_end": 1792527738.676483,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 168.4,
+        "ram_w": 21.86,
+        "t_end": 1792527738.77724,
+        "uncore_mhz": 1500.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 155.12,
+        "ram_w": 20.68,
+        "t_end": 1792527738.777296,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 799.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 164.98,
+        "ram_w": 21.79,
+        "t_end": 1792527738.877529,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 152.54,
+        "ram_w": 20.83,
+        "t_end": 1792527738.877584,
+        "uncore_mhz": 1300.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 164.46,
+        "ram_w": 22.12,
+        "t_end": 1792527738.978306,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 146.46,
+        "ram_w": 20.92,
+        "t_end": 1792527738.978365,
+        "uncore_mhz": 1100.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 160.27,
+        "ram_w": 21.56,
+        "t_end": 1792527739.078611,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 139.75,
+        "ram_w": 20.76,
+        "t_end": 1792527739.078672,
+        "uncore_mhz": 900.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 164.08,
+        "ram_w": 22.01,
+        "t_end": 1792527739.179405,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 40.0,
+        "pkg_w": 132.89,
+        "ram_w": 20.58,
+        "t_end": 1792527739.179468,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 160.71,
+        "ram_w": 21.61,
+        "t_end": 1792527739.279707,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 135.13,
+        "ram_w": 21.04,
+        "t_end": 1792527739.27977,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 163.82,
+        "ram_w": 21.99,
+        "t_end": 1792527739.380521,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 132.01,
+        "ram_w": 20.64,
+        "t_end": 1792527739.380586,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.29,
+        "ram_w": 21.89,
+        "t_end": 1792527739.4808,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.0,
+        "ram_w": 20.74,
+        "t_end": 1792527739.48086,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 161.05,
+        "ram_w": 21.6,
+        "t_end": 1792527739.581632,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 132.95,
+        "ram_w": 20.72,
+        "t_end": 1792527739.581696,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 164.2,
+        "ram_w": 22.12,
+        "t_end": 1792527739.681915,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.83,
+        "ram_w": 21.08,
+        "t_end": 1792527739.681979,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 160.31,
+        "ram_w": 21.52,
+        "t_end": 1792527739.782781,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 131.93,
+        "ram_w": 20.63,
+        "t_end": 1792527739.782845,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 164.26,
+        "ram_w": 22.02,
+        "t_end": 1792527739.883056,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.23,
+        "ram_w": 21.08,
+        "t_end": 1792527739.883118,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 161.1,
+        "ram_w": 21.7,
+        "t_end": 1792527739.983889,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.09,
+        "ram_w": 21.05,
+        "t_end": 1792527739.983951,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 162.42,
+        "ram_w": 21.84,
+        "t_end": 1792527740.084167,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 132.3,
+        "ram_w": 20.69,
+        "t_end": 1792527740.084228,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 161.67,
+        "ram_w": 21.78,
+        "t_end": 1792527740.184998,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.16,
+        "ram_w": 21.01,
+        "t_end": 1792527740.185062,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 162.09,
+        "ram_w": 21.83,
+        "t_end": 1792527740.285273,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.01,
+        "ram_w": 20.92,
+        "t_end": 1792527740.285334,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 163.33,
+        "ram_w": 21.99,
+        "t_end": 1792527740.386074,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 133.08,
+        "ram_w": 20.72,
+        "t_end": 1792527740.386138,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 161.55,
+        "ram_w": 21.71,
+        "t_end": 1792527740.486383,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 132.37,
+        "ram_w": 20.58,
+        "t_end": 1792527740.48646,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 46.0,
+        "pkg_w": 163.41,
+        "ram_w": 22.12,
+        "t_end": 1792527740.58721,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 133.82,
+        "ram_w": 20.77,
+        "t_end": 1792527740.587273,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 161.39,
+        "ram_w": 21.74,
+        "t_end": 1792527740.687486,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.15,
+        "ram_w": 20.85,
+        "t_end": 1792527740.68755,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.53,
+        "ram_w": 22.06,
+        "t_end": 1792527740.788306,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 132.52,
+        "ram_w": 20.61,
+        "t_end": 1792527740.788414,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.89,
+        "ram_w": 21.92,
+        "t_end": 1792527740.888651,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.35,
+        "ram_w": 20.95,
+        "t_end": 1792527740.888714,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.31,
+        "ram_w": 21.82,
+        "t_end": 1792527740.989485,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 133.19,
+        "ram_w": 20.68,
+        "t_end": 1792527740.989549,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.77,
+        "ram_w": 21.86,
+        "t_end": 1792527741.089789,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 133.22,
+        "ram_w": 20.67,
+        "t_end": 1792527741.089851,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.21,
+        "ram_w": 21.71,
+        "t_end": 1792527741.190593,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.52,
+        "ram_w": 20.78,
+        "t_end": 1792527741.190656,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 161.54,
+        "ram_w": 21.67,
+        "t_end": 1792527741.290893,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 132.95,
+        "ram_w": 20.65,
+        "t_end": 1792527741.290954,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 161.34,
+        "ram_w": 21.83,
+        "t_end": 1792527741.391701,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 133.34,
+        "ram_w": 20.74,
+        "t_end": 1792527741.391765,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 163.48,
+        "ram_w": 21.93,
+        "t_end": 1792527741.491973,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.36,
+        "ram_w": 20.79,
+        "t_end": 1792527741.492036,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.3,
+        "ram_w": 21.85,
+        "t_end": 1792527741.592827,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 132.1,
+        "ram_w": 20.92,
+        "t_end": 1792527741.59289,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.75,
+        "ram_w": 21.85,
+        "t_end": 1792527741.693142,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 133.71,
+        "ram_w": 20.82,
+        "t_end": 1792527741.693203,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.62,
+        "ram_w": 21.89,
+        "t_end": 1792527741.793993,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.7,
+        "ram_w": 20.92,
+        "t_end": 1792527741.794056,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 161.03,
+        "ram_w": 21.69,
+        "t_end": 1792527741.894291,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 132.59,
+        "ram_w": 20.8,
+        "t_end": 1792527741.894352,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.9,
+        "ram_w": 21.95,
+        "t_end": 1792527741.995127,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 132.85,
+        "ram_w": 20.76,
+        "t_end": 1792527741.995189,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.22,
+        "ram_w": 21.8,
+        "t_end": 1792527742.095414,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.22,
+        "ram_w": 20.92,
+        "t_end": 1792527742.095475,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 161.53,
+        "ram_w": 21.71,
+        "t_end": 1792527742.196199,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 133.47,
+        "ram_w": 20.79,
+        "t_end": 1792527742.196261,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.12,
+        "ram_w": 21.82,
+        "t_end": 1792527742.296496,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 133.81,
+        "ram_w": 20.71,
+        "t_end": 1792527742.296557,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 163.02,
+        "ram_w": 22.03,
+        "t_end": 1792527742.397304,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 133.36,
+        "ram_w": 20.76,
+        "t_end": 1792527742.397368,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 163.2,
+        "ram_w": 21.96,
+        "t_end": 1792527742.497643,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 132.35,
+        "ram_w": 20.62,
+        "t_end": 1792527742.497705,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 160.53,
+        "ram_w": 21.77,
+        "t_end": 1792527742.598456,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 134.67,
+        "ram_w": 20.97,
+        "t_end": 1792527742.59852,
+        "uncore_mhz": 800.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 0,
+        "pkg_c": 45.0,
+        "pkg_w": 162.69,
+        "ram_w": 21.86,
+        "t_end": 1792527742.698747,
+        "uncore_mhz": 1400.0
+      },
+      {
+        "bzy_mhz": 800.0,
+        "package": 1,
+        "pkg_c": 39.0,
+        "pkg_w": 133.43,
+        "ram_w": 20.7,
+        "t_end": 1792527742.698809,
+        "uncore_mhz": 800.0
+      }
+    ],
+    "runs": [
+      {
+        "end_ns": 728646154204369,
+        "returncode": 0,
+        "start_ns": 728641042729631
+      },
+      {
+        "end_ns": 728651231738033,
+        "returncode": 0,
+        "start_ns": 728646154223179
+      }
+    ]
+  },
+  "uncore": null,
+  "working_set_bytes": 17179869184
+}
