@@ -87,8 +87,45 @@ The probes that fixed these choices are in `data/probes/uncore-20261019/`. One m
 hold and is not used: the CHA TOR occupancy over inserts of demand-read misses, filtered to the
 chasing core, gives about 31 ns where the chase measures 141 ns.
 
-**Still unavailable.** Cache mode: no Cache-mode node has the access, so the HBM-cache (M2M
-near-memory tag) hit rate (review item U3) is not measured.
+## turbostat session (both nodes, since 2026-10-20)
+
+The same sudoers rule exists on the Cache node `cresco8-hbm13` (`perf stat*`, `turbostat`,
+`ipmitool sensor`), but **`/usr/bin/perf` is not installed there** (the probe job of
+2026-10-20 failed with `sudo: /usr/bin/perf: command not found`; hbm14 has
+`perf-5.14.0-427.13.1.el9_4`). `turbostat` (2023.11.07) runs on both nodes, so
+`src/hwbench/turbostat.py` gives every record the power and clock half of the perf session:
+
+```
+sudo -n turbostat --quiet -c 0,56 --interval 0.1 --num_iterations 50 \
+    --show Time_Of_Day_Seconds,Package,CPU,Bzy_MHz,PkgWatt,RAMWatt,UncMHz,PkgTmp
+```
+
+* **Runs.** Back-to-back runs of 50 intervals of 100 ms, one row per package and interval
+  (the first CPU of each package carries the package columns). Root processes cannot be
+  signalled, so each run ends by itself; stopping waits for the current run (at most 5 s).
+  No benchmark ever runs under turbostat (no command argument).
+* **Clock.** Rows carry the time of day at the end of each interval; the sampler records
+  CLOCK_REALTIME minus CLOCK_MONOTONIC when it starts, which places every interval on the
+  benchmark's clock. Each sample takes the intervals entirely inside it (four of five in a
+  0.5 s sample, nine of ten in a one-second one).
+* **Columns.** `ts_pkg_power_w`, `ts_ram_power_w`, `ts_energy_pkg_j`, `ts_energy_ram_j`,
+  `ts_system_power_w`, `ts_uncore_ghz`, `ts_pkg_temp_c`, `ts_intervals`, `ts_coverage`.
+  Where no perf session ran, `process.py` copies them into `pkg_power_w`, `ram_power_w`,
+  `energy_*`, `system_power_w` and `uncore_ghz` and sets `power_source = "turbostat"`
+  (`"perf"` otherwise), so the power tables read both modes alike.
+* **Validation.** The Flat smoke campaign `flat-usmoke-20261020T201307Z` ran both sessions in
+  the same records: package power 0.997–1.002× perf's RAPL in samples of one second or more,
+  0.997–1.018× over every record, DRAM 0.998–1.016×, uncore clock within 35 MHz of the CHA
+  clockticks (claim `turbostat_matches_perf`, notebook 06 section 9). `UncMHz` is the ratio at
+  the end of each interval, not an average.
+* **Not covered.** turbostat counts no traffic: in Cache mode the measured bytes are the
+  cores' DRAM line counts (`pmu_ocr`) until perf is installed; then the perf session with the
+  memory-side-cache tag events (`unc_m2m_tag_hit.nm_rd_hit_clean|dirty`, `unc_m2m_tag_miss`,
+  `unc_m_tagchk.*`; encodings in `perf list --details` on the nodes) takes over, after the
+  identification probe staged for hbm13 (`data/probes/uncore-cache-20261020/README.md`).
+
+**Still unavailable.** The HBM-cache (M2M near-memory tag) hit rate (review item U3) and the
+controller traffic in Cache mode: both need perf on the Cache node.
 
 ## In the analysis
 

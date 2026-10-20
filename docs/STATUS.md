@@ -1,8 +1,8 @@
 # Status of the analysis
 
 The single place that says what is finished, what is running and what is left. Last updated
-**2026-10-19**, after the privileged-counter campaigns (U1, U2, U4, R3 with counters, STREAMGAP E6)
-and notebook 06.
+**2026-10-21**, after the counted re-runs on both nodes (measured-intensity roofline) and the
+first Cache-mode campaigns with privileged access (turbostat, hbm13).
 Item IDs (C1–C10, M1–M3, R1–R3, U1–U4) refer to the [2026-10-16 review](archive/REVIEW_2026-10-16.md); the
 history of the first review is in [archive/STATUS_2026-10-12.md](archive/STATUS_2026-10-12.md) (historical, not
 maintained). The process documents are in [archive/](archive/).
@@ -11,11 +11,12 @@ maintained). The process documents are in [archive/](archive/).
 
 | | |
 | --- | --- |
-| Branch | `main` and `develop` point at the same commit (develop fast-forwarded into main on 2026-10-20); both pushed. |
+| Branch | `develop` is ahead of `main` by the counted re-runs (code, data, analysis; not pushed). |
 | Running | Nothing. |
+| Counted re-runs (2026-10-20) | Flat (hbm14, perf): `flat-ugemmconv-20261020T201733Z` (78 records), `flat-uatlas-20261020T204045Z` (64), `flat-usweep-20261020T210357Z` (30). Cache (hbm13, turbostat; traffic from the cores' DRAM lines): `cache-ustreams-20261020T201649Z` + its resume `cache-ustreams-20261020T202516Z`, `cache-ucapacity-20261020T201654Z`, `cache-ugemmconv-20261020T201700Z`, `cache-uatlas-20261020T201706Z`, `cache-usweep-20261020T201711Z`. turbostat against perf: `flat-usmoke-20261020T201307Z`. All in `uncore_campaigns`. |
 | Last campaigns | Privileged uncore counters on the Flat node: `flat-ustreams-20261019T205225Z` (U1, 36 records), `flat-uremote-20261019T205814Z` (U2, 14), `flat-ugemm-20261019T210858Z` (U4, 16), `flat-uloaded-20261019T211812Z` (R3 with counters, 22) and `flat-streamgap_e6-20261019T212743Z` (data pattern, 24 launches); all valid, in notebook 06 (`uncore_campaigns`, `data_pattern_campaign` in `configs/analysis.json`). The proof run `flat-usmoke-20261019T204741Z` is not in the analysis. |
 | Tests | 151 pass; all seven notebooks execute. |
-| Open | Cache-mode counters (U3) need privileged access on a Cache node; the decisions that are yours. |
+| Open | **perf is not installed on the Cache node hbm13** (the sudoers rule is there): the hit rate (U3) and Cache controller traffic wait for it; the decisions that are yours. |
 
 ## If the work is interrupted: how to resume
 
@@ -46,7 +47,9 @@ without a decision. The run recipe of every campaign part is in
 | oneDNN GEMM at Llama-3.1-8B shapes | **Done** | Pool convergence, call floor, prepacked layout; converged M-sweep (R1) for the headline, judged in counted bytes (within 2.9% of the 64× pool), 1.8–3.3% of weights still on chip at small M, so modeled small-M rates are that much high |
 | Decode-relevant summary (M1) | **Done** | Table 5 of notebook 00; HBM beats DDR by 1.43× (BF16) and 1.55× (INT8) for a decode GEMM, not the 2.07× of the read kernel |
 | Controller-level traffic, clock-drop cause, energy, remote-HBM mechanism (Flat) | **Done** (notebook 06) | Controller bytes 0.987–1.010 of the model from 14 cores (U1); counting costs at most 0.8%; the clock drop is the 350 W package limit; the fast first HBM window is the uncore clock riding the RAPL budget; HBM 679 pJ/B against DDR 1623 at full bandwidth; remote HBM at 56 threads reads every line about twice (U2); GEMM controller bytes equal the cores' counts at M ≤ 64, BF16 M = 256 reads the weights about 1.3 times (U4); loaded concurrency on counted bytes (R3); the HBM data-pattern effect is power-limited uncore clock (E6) |
-| Cache hit rate (U3) | **Blocked** | The privileged session exists on the Flat node only |
+| Measured intensity (roofline, bands, decode table) | **Done** (Flat: controller bytes; Cache: the cores' DRAM lines) | Notebooks 00 and 05 place every achieved point at measured intensity with a hollow modeled twin; at M ≤ 64 the controllers see 0.94–0.99× the modeled bytes, from M = 128 plain BF16 re-reads the weights (1.2–3.7×), so prefill spans 181–486 op/B measured against 237–1792 modeled (claim `measured_intensity_gemm`); Table 5 in measured GB/s with energy per token (`decode_energy`) |
+| Cache-mode power and clocks | **Done** (turbostat, hbm13) | turbostat matches perf's RAPL to 0.3% (`turbostat_matches_perf`); resident Cache costs the energy per byte of Flat HBM, spilled 2.1–3.3× Flat DDR; DRAM power shows DDR traffic from 32 GiB (`cache_*`, notebook 06 section 10) |
+| Cache hit rate (U3) | **Blocked** | perf is not installed on hbm13; the identification probe is staged (`data/probes/uncore-cache-20261020/`) |
 
 ## Items of the 2026-10-16 review
 
@@ -78,9 +81,13 @@ without a decision. The run recipe of every campaign part is in
 
 ## What is left
 
-**Blocked on access**: U3, the Cache-mode hit rate (M2M near-memory tag events), needs the same
-`sudo perf stat` on a Cache-mode node; the session code (`hwbench.uncore`, parts `u*`) would run there
-unchanged once the events are added. Also open, not blocked: which agent issues the duplicated
+**Blocked on the admins installing perf on hbm13** (`perf-5.14.0-427.13.1.el9_4`, the package of
+the Flat node): U3, the Cache-mode hit rate (M2M near-memory tag events) and Cache controller
+traffic. Then: run `data/probes/uncore-cache-20261020/probe.sh` under `srun -w cresco8-hbm13`, add
+the confirmed tag events as `EVENT_SETS["cache"]` with served/far/hit-rate fields in
+`hwbench.uncore`, and submit the Cache parts with `HW_BENCH_CACHE_UNCORE=cache`
+(`ucapacity`, `ucachelat`, `ucacherep` ×3, `ugemm`, `uremote`, `uloaded`); the measured-axis code
+already prefers served bytes over the cores' line counts. Also open, not blocked: which agent issues the duplicated
 remote-HBM reads (CHA opcode events were not in the session), and real model weights for the
 data-pattern effect.
 
