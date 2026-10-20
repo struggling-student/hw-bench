@@ -40,6 +40,20 @@ def test_dry_run_writes_nothing():
         ("flat", "gemmconv", 54),
         ("flat", "flatfar", 8),
         ("flat", "loadedlat", 32),
+        ("flat", "usmoke", 7),
+        ("cache", "usmoke", 7),
+        ("cache", "ustreams", 36),
+        ("cache", "uremote", 6),
+        ("cache", "uloaded", 11),
+        ("flat", "ugemmconv", 78),
+        ("cache", "ugemmconv", 47),
+        ("flat", "uatlas", 64),
+        ("cache", "uatlas", 64),
+        ("flat", "usweep", 30),
+        ("cache", "usweep", 30),
+        ("cache", "ucapacity", 30),
+        ("cache", "ucachelat", 5),
+        ("cache", "ucacherep", 6),
     ],
 )
 def test_part_sizes_and_unique_record_names(mode, part, count):
@@ -123,3 +137,20 @@ def test_loadedlat_pairs_one_chasing_core_with_streaming_cores_on_other_cores():
     load = [n for n in names if n.split()[-1].startswith("loaded_stream_n")]
     assert len(chase) == len(load) == 10 and all("-t1-" in n for n in chase)
     assert sum("loaded_latency_idle" in n for n in names) == 2  # one idle control per tier
+
+
+@pytest.mark.parametrize("part", ["ucapacity", "ucachelat", "ucacherep"])
+def test_cache_counter_parts_refuse_flat_mode(part):
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/run_campaign.py"), "flat", str(ROOT / "build/never-created"), "--only", part, "--dry-run"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0 and "Cache-mode part" in (result.stderr + result.stdout)
+
+
+def test_counted_gemm_sweep_reaches_prefill_and_spills_in_cache():
+    _, flat = plan("flat", "ugemmconv")
+    assert sum("-M4096-N14336-" in n for n in flat) == 6  # three variants on two tiers
+    _, cache = plan("cache", "ugemmconv")
+    spilled = [n for n in cache if f"pool{96 * 2**30}" in n]
+    assert len(spilled) == 8 and not any("prepacked" in n for n in spilled)

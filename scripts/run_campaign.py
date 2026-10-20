@@ -30,16 +30,33 @@ flatfar      (flat) idle latency of a one-core chase at 16-128 GiB on DDR and 16
              the translation control for the Cache-mode far latency (review item R2)
 loadedlat    (flat) loaded latency: one chasing core beside N cores streaming the same tier,
              in one synchronized window (review item R3)
-ustreams     (flat, privileged uncore) controller bytes, power and clocks of read, Triad and
-             copy_nt at 1-56 cores on both tiers, each 56-core point also without the
-             session, and the six compute peaks (review item U1)
-uremote      (flat, privileged uncore) local against remote read at 14-56 cores on both
-             tiers, with UPI data flits and directory updates (U2)
-ugemm        (flat, privileged uncore) controller-level traffic of the 14336x4096 GEMM at
-             M = 1-256, BF16 and INT8, both tiers, converged pool (U4)
-uloaded      (flat, privileged uncore) the loaded-latency pairs again, with the bandwidth
-             the controllers serve, for the concurrency behind the loaded latency (R3)
-usmoke       (flat, privileged uncore) a few seconds of each uncore part; proves the session
+ustreams     (privileged counters) controller bytes, power and clocks of read, Triad and
+             copy_nt at 1-56 cores (Flat both tiers at 8 GiB, Cache at 8 and 96 GiB), each
+             56-core point also without the session, and the six compute peaks (U1)
+uremote      (privileged counters) local against remote read at 14-56 cores, with UPI data
+             flits and directory updates (U2)
+ugemm        (privileged counters) traffic of the 14336x4096 GEMM at M = 1-256, BF16 and
+             INT8 (Flat both tiers, converged pool; Cache 16 and 96 GiB pools) (U4)
+uloaded      (privileged counters) the loaded-latency pairs again, with the bandwidth the
+             controllers serve, for the concurrency behind the loaded latency (R3)
+usmoke       (privileged counters) a few seconds of each counter part; proves the sessions
+ucapacity    (cache, privileged counters) read, Triad and NT Triad at 56 cores over 8-128 GiB:
+             memory-side-cache hit rate, near and far bytes, power and clock (U3)
+ucachelat    (cache, privileged counters) the far-latency chase at 16-128 GiB, counted
+ucacherep    (cache, privileged counters) read and Triad at 8, 32 and 56 GiB; submit three
+             times for the launch-to-launch spread against the hit rate
+ugemmconv    (privileged counters) the 14336x4096 GEMM M-sweep (M = 1-4096), BF16 plain and
+             prepacked and INT8, counted: the headline points, decode and prefill bands and
+             the decode table at measured intensity
+uatlas       (privileged counters) the four Llama shapes at M = 1, 16, 256, 4096, counted:
+             the atlas GEMM points at measured intensity
+usweep       (privileged counters) the FP64 intensity sweep (12 chains) and the copy
+             ceiling, counted
+
+Privileged counters: on the Flat node the perf session of ``hwbench.uncore`` (event set
+``base``); on the Cache node, where perf is not installed, ``hwbench.turbostat`` (power,
+uncore clock, temperature) and, once perf is there, the perf session with the event set
+named by ``HW_BENCH_CACHE_UNCORE`` (``cache``: memory-side-cache tag events).
 smoke        a few seconds of every kernel; proves build and counters, not a result
 
 memory, compute, sweep, memory-sweep, concurrency, all
@@ -92,8 +109,15 @@ NEW_PARTS = [
     "ugemm",
     "uloaded",
     "usmoke",
+    "ucapacity",
+    "ucachelat",
+    "ucacherep",
+    "ugemmconv",
+    "uatlas",
+    "usweep",
 ]
-UNCORE_PARTS = ["ustreams", "uremote", "ugemm", "uloaded", "usmoke"]
+UNCORE_PARTS = ["ustreams", "uremote", "ugemm", "uloaded", "usmoke", "ucapacity", "ucachelat", "ucacherep", "ugemmconv", "uatlas", "usweep"]
+CACHE_ONLY_UNCORE_PARTS = ["ucapacity", "ucachelat", "ucacherep"]
 
 THREAD_STEPS = [1, 2, 4, 8, 14, 28, 56]
 ISA_THREAD_STEPS = [1, 2, 4, 8, 14, 28, 55, 56]
@@ -125,6 +149,12 @@ LOADED_CHASE_BYTES = GIB  # the October idle-latency working set
 UNCORE_THREADS = [1, 14, 28, 56]
 UNCORE_REMOTE_THREADS = [14, 28, 56]
 UNCORE_GEMM_M = [1, 16, 64, 256]
+# Counted re-runs behind the measured-intensity roofline.
+UNCORE_CONV_M = GEMMCONV_M + [512, 1024, 2048, 4096]
+UNCORE_ATLAS_M = [1, 16, 256, 4096]
+# Cache working sets with counters: the bandwidth2 capacity points and the cachefill sizes.
+UNCORE_CAPACITY_GIB = [8, 16, 24, 32, 40, 48, 56, 64, 96, 128]
+UNCORE_CACHEREP_GIB = [8, 32, 56]
 SWEEP_K = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
 
 
@@ -364,6 +394,7 @@ def main():
             HWBENCH_CAMPAIGN_ID=args.output.name,
             HWBENCH_GUARD=guard,
             HWBENCH_UNCORE=s.get("uncore", ""),
+            HWBENCH_TURBOSTAT="1" if s.get("turbostat") else "",
         )
         if group:
             env.update(
@@ -1015,56 +1046,106 @@ def main():
                         spec(0, "gemm", target=target, shape=4096, label="counted_gemm", m=m, gemm_n=14336, dtype=dtype, pool=pool, warm=GEMM_WARM_PASSES)
                     )
 
-    # ----------------------------------------------------------- privileged uncore
-    # System-wide controller (DDR and HBM CAS), UPI, directory, power and clock counters
-    # through the privileged perf session (hwbench.uncore), counted over exactly each
-    # timed window.  The access is granted on the Flat node only, so Cache mode (U3,
-    # the HBM-cache hit rate) stays unmeasured.
-    if part in UNCORE_PARTS and args.mode != "flat":
-        raise SystemExit(f"{part} needs the privileged uncore session of the Flat node")
+    # ----------------------------------------------------------- privileged counters
+    # Flat: the system-wide perf session (hwbench.uncore: DDR and HBM CAS, UPI, directory,
+    # power and clock counters) over exactly each timed window.  Cache: turbostat
+    # (hwbench.turbostat: package power, uncore clock) always, since perf is not installed
+    # on the Cache node, plus the perf session with the memory-side-cache event set named
+    # by HW_BENCH_CACHE_UNCORE once it is.
+    flat = args.mode == "flat"
+    if flat:
+        counted_by = dict(uncore="base")
+    else:
+        counted_by = dict(uncore=os.environ.get("HW_BENCH_CACHE_UNCORE", ""), turbostat=True)
+    if part in CACHE_ONLY_UNCORE_PARTS and flat:
+        raise SystemExit(f"{part} is a Cache-mode part")
     if part == "usmoke":
-        execute(dict(spec(0, "read", 56, "hbm", gib=8, label="usmoke", uncore="base"), seconds=0.5))
-        execute(dict(spec(0, "bf16", 4, label="usmoke", uncore="base"), seconds=0.5))
-        execute(dict(spec(0, "read", 14, "hbm", memory_socket=1, gib=2, label="usmoke_remote", uncore="base"), seconds=0.5))
-        chase = spec(0, "latency", 1, "hbm", bytes=LOADED_CHASE_BYTES, scope="concurrent_tier_component", label="usmoke_chase", uncore="base")
-        load = spec(0, "read", 14, "hbm", gib=2, scope="concurrent_tier_component", label="usmoke_load")
+        # On the Flat node turbostat runs beside perf in the smoke records: both read RAPL,
+        # which validates the turbostat session against the perf one.
+        smoke = dict(counted_by, turbostat=True)
+        target = targets[-1]
+        execute(dict(spec(0, "read", 56, target, gib=8, label="usmoke", **smoke), seconds=0.5))
+        execute(dict(spec(0, "read", 56, target, gib=8, label="usmoke_ts", **smoke), seconds=2))
+        execute(dict(spec(0, "bf16", 4, label="usmoke", **smoke), seconds=0.5))
+        execute(dict(spec(0, "read", 14, target, memory_socket=1, gib=2, label="usmoke_remote", **smoke), seconds=0.5))
+        chase = spec(0, "latency", 1, target, bytes=LOADED_CHASE_BYTES, scope="concurrent_tier_component", label="usmoke_chase", **smoke)
+        load = spec(0, "read", 14, target, gib=2, scope="concurrent_tier_component", label="usmoke_load")
         load["cpus"] = sockets[0]["logical_cpus"][1:15]
         pair([dict(chase, seconds=1), dict(load, seconds=1)], "usmoke-pair")
-        execute(spec(0, "gemm", target="hbm", shape=4096, label="usmoke_gemm", m=16, gemm_n=14336, dtype="bf16", pool=int(4 * ONCHIP_BYTES), warm=1, uncore="base"))
+        pool = int(4 * ONCHIP_BYTES) if flat else 16 * GIB
+        execute(spec(0, "gemm", target=target, shape=4096, label="usmoke_gemm", m=16, gemm_n=14336, dtype="bf16", pool=pool, warm=1, **smoke))
     if part == "ustreams":
         for target in targets:
-            for kind in ["read", "triad", "copy_nt"]:
-                for t in UNCORE_THREADS:
-                    execute(spec(0, kind, t, target, gib=8, label=f"u1_{kind}", uncore="base"))
-                # The same 56-core point without the session: what counting costs.
-                execute(spec(0, kind, 56, target, gib=8, label=f"u1_{kind}_control"))
+            for gib in [8] if flat else [8, 96]:
+                for kind in ["read", "triad", "copy_nt"]:
+                    for t in UNCORE_THREADS:
+                        execute(spec(0, kind, t, target, gib=gib, label=f"u1_{kind}", **counted_by))
+                    # The same 56-core point without the session: what counting costs.
+                    execute(spec(0, kind, 56, target, gib=gib, label=f"u1_{kind}_control"))
         for kind in ISA_KINDS + ISA_REFERENCE_KINDS:
-            execute(spec(0, kind, label="u1_isa", uncore="base"))
+            execute(spec(0, kind, label="u1_isa", **counted_by))
     if part == "uremote":
-        for target, kind in [("hbm", "read"), ("ddr", "read"), ("hbm", "triad_nt")]:
+        cases = [("hbm", "read"), ("ddr", "read"), ("hbm", "triad_nt")] if flat else [("effective_cache", "read")]
+        for target, kind in cases:
             for t in UNCORE_REMOTE_THREADS if kind == "read" else [56]:
                 for ms, label in [(0, "u2_local"), (1, "u2_remote")]:
-                    execute(dict(spec(0, kind, t, target, memory_socket=ms, gib=8, label=label, uncore="base"), seconds=5))
+                    execute(dict(spec(0, kind, t, target, memory_socket=ms, gib=8, label=label, **counted_by), seconds=5))
+    gemm_variants = ["bf16"] + (["int8"] if part in ("ugemm", "ugemmconv", "uatlas") and int8_gemm_verified() else [])
+    # Converged pool on Flat (16x the on-chip capacity); the resident and spilled pools of
+    # the Cache gemm part.
+    gemm_pools = [(t, int(GEMMCONV_POOL_MULTIPLE * ONCHIP_BYTES)) for t in targets] if flat else [("effective_cache", 16 * GIB), ("effective_cache", 96 * GIB)]
     if part == "ugemm":
         n, k = 14336, 4096
-        variants = ["bf16"] + (["int8"] if int8_gemm_verified() else [])
-        for target in targets:
-            for dtype in variants:
+        for target, pool in gemm_pools:
+            for dtype in gemm_variants:
                 for m in UNCORE_GEMM_M:
-                    execute(
-                        spec(
-                            0, "gemm", target=target, shape=k, label="u4_gemm", m=m, gemm_n=n, dtype=dtype,
-                            pool=int(GEMMCONV_POOL_MULTIPLE * ONCHIP_BYTES), warm=GEMM_WARM_PASSES, uncore="base",
-                        )
-                    )
+                    execute(spec(0, "gemm", target=target, shape=k, label="u4_gemm", m=m, gemm_n=n, dtype=dtype,
+                                 pool=pool, warm=GEMM_WARM_PASSES, **counted_by))
+    if part == "ugemmconv":
+        n, k = 14336, 4096
+        variants = [("bf16", None), ("bf16", "prepacked")] + ([("int8", None)] if "int8" in gemm_variants else [])
+        for target, pool in gemm_pools:
+            spilled = pool > 64 * GIB
+            for dtype, layout in variants:
+                # A spilled pool takes minutes to initialise: its four batch sizes, plain layouts.
+                if spilled and layout:
+                    continue
+                for m in GEMM_M_SPILL if spilled else UNCORE_CONV_M:
+                    execute(spec(0, "gemm", target=target, shape=k, label="u_gemm_conv", m=m, gemm_n=n, dtype=dtype,
+                                 pool=pool, layout=layout, warm=GEMM_WARM_PASSES, **counted_by))
+    if part == "uatlas":
+        for target, pool in gemm_pools:
+            for dtype in gemm_variants:
+                for n, k in GEMM_SHAPES:
+                    for m in UNCORE_ATLAS_M:
+                        execute(spec(0, "gemm", target=target, shape=k, label="u_gemm_atlas", m=m, gemm_n=n, dtype=dtype,
+                                     pool=pool, warm=GEMM_WARM_PASSES, **counted_by))
+    if part == "usweep":
+        cases = [(t, 8) for t in targets] if flat else [("effective_cache", 16), ("effective_cache", 96)]
+        for target, gib in cases:
+            for k in SWEEP_K:
+                execute(spec(0, "sweep", target=target, gib=gib, k=k, label="u_sweep_c12", chains=12, **counted_by))
+            for kind in ["copy", "copy_nt", "triad", "read"]:
+                execute(spec(0, kind, target=target, gib=gib, label="u_copy_ceiling", **counted_by))
     if part == "uloaded":
         for target in targets:
-            execute(spec(0, "latency", 1, target, bytes=LOADED_CHASE_BYTES, label="u_loaded_latency_idle", uncore="base"))
+            execute(spec(0, "latency", 1, target, bytes=LOADED_CHASE_BYTES, label="u_loaded_latency_idle", **counted_by))
             for n in LOADED_STREAM_CORES:
-                chase = spec(0, "latency", 1, target, bytes=LOADED_CHASE_BYTES, scope="concurrent_tier_component", label=f"u_loaded_latency_n{n}", uncore="base")
+                chase = spec(0, "latency", 1, target, bytes=LOADED_CHASE_BYTES, scope="concurrent_tier_component", label=f"u_loaded_latency_n{n}", **counted_by)
                 load = spec(0, "read", n, target, gib=8, scope="concurrent_tier_component", label=f"u_loaded_stream_n{n}")
                 load["cpus"] = sockets[0]["logical_cpus"][1 : 1 + n]
                 pair([chase, load], f"uloaded-{target}-n{n}")
+    if part == "ucapacity":
+        for gib in UNCORE_CAPACITY_GIB:
+            for kind in ["read", "triad_nt", "triad"]:
+                execute(spec(0, kind, target="effective_cache", gib=gib, label=f"u3_{kind}_capacity", **counted_by))
+    if part == "ucachelat":
+        for gib in LATENCY_FAR_GIB:
+            execute(spec(0, "latency", 1, "effective_cache", gib=gib, label="u3_latency_far", **counted_by))
+    if part == "ucacherep":
+        for gib in UNCORE_CACHEREP_GIB:
+            for kind in ["read", "triad"]:
+                execute(spec(0, kind, target="effective_cache", gib=gib, label=f"u3_rep_{kind}", **counted_by))
 
     # ------------------------------------------------------------------- copy
     # The intensity sweep at K=1 loads one array and stores another, a pattern none of

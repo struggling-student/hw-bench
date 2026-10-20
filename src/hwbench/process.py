@@ -11,7 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from hwbench import disasm, uncore
+from hwbench import disasm, turbostat, uncore
 
 FIELDS = [
     "timestamp",
@@ -81,7 +81,8 @@ FIELDS = [
     "dram_read_lines",
     "dram_write_lines",
     "counted_bytes",
-    # Privileged system-wide uncore counters (hwbench.uncore), Flat node only.
+    # Privileged system-wide uncore counters (hwbench.uncore; needs perf, which only the
+    # Flat node has installed).
     "ctrl_bytes",
     "ctrl_bandwidth_gbs",
     "ctrl_bytes_memory_socket",
@@ -102,7 +103,36 @@ FIELDS = [
     "m2m_directory_updates",
     "uncore_intervals",
     "uncore_coverage",
+    # Privileged turbostat (hwbench.turbostat), both modes; fills the power and clock
+    # columns above where no perf session ran, and says which source they came from.
+    *turbostat.FIELDS,
+    "power_source",
 ]
+
+
+#: Power and clock columns of the perf session and their turbostat counterparts.
+TURBOSTAT_FALLBACK = {
+    "energy_pkg_j": "ts_energy_pkg_j",
+    "energy_ram_j": "ts_energy_ram_j",
+    "system_power_w": "ts_system_power_w",
+    "pkg_power_w": "ts_pkg_power_w",
+    "ram_power_w": "ts_ram_power_w",
+    "uncore_ghz": "ts_uncore_ghz",
+}
+
+
+def _power_source(row: dict[str, Any]) -> dict[str, Any]:
+    """Fill the power and clock columns from turbostat where no perf session counted them.
+
+    Both read the same RAPL energy counters; the uncore clock differs in kind (perf: CHA
+    clockticks over the sample, turbostat: the ratio at each interval's end).
+    """
+
+    if row.get("pkg_power_w") is not None:
+        return dict(power_source="perf")
+    if row.get("ts_pkg_power_w") is None:
+        return {}
+    return dict({k: row.get(v) for k, v in TURBOSTAT_FALLBACK.items()}, power_source="turbostat")
 
 
 def _legacy(record: dict[str, Any]) -> bool:
@@ -348,6 +378,7 @@ def rows_from_record(
             )
         ]
     uncore_windows = uncore.windows(record.get("uncore"), r) if "samples" in r else [None] * len(samples)
+    turbo_windows = turbostat.windows(record.get("turbostat"), r) if "samples" in r else [None] * len(samples)
     rows = []
     for i, sample in enumerate(samples):
         row = dict(
@@ -375,6 +406,8 @@ def rows_from_record(
             row.update(_clock_fields(row, row.get("counter_threads") or row.get("threads")))
             row.update(_counted_fields(row))
             row.update(uncore.sample_fields(uncore_windows[i], elapsed, socket, ms))
+            row.update(turbostat.sample_fields(turbo_windows[i], elapsed, socket))
+            row.update(_power_source(row))
             if r.get("benchmark") == "pointer_chase" and loads <= 0:
                 errors.append("invalid_load_count")
             if (

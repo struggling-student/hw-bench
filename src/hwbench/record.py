@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from hwbench.execution import Guard
+from hwbench.turbostat import Sampler
 from hwbench.uncore import Session
 
 
@@ -60,6 +61,11 @@ def main(argv: list[str] | None = None) -> int:
         session = Session(event_set, args.output.with_suffix(".perf.csv"))
         session.start()
         environment.update(session.environment())
+    # Privileged turbostat (hwbench.turbostat): package power, uncore clock, temperature.
+    sampler = None
+    if os.environ.get("HWBENCH_TURBOSTAT") == "1" and os.environ.get("HWBENCH_PARTICIPANT", "0") == "0":
+        sampler = Sampler(args.output.with_suffix(".turbostat.txt"))
+        sampler.start()
     before = _frequency_khz()
     started_ns = time.monotonic_ns()
     try:
@@ -74,6 +80,13 @@ def main(argv: list[str] | None = None) -> int:
             if raw.exists():
                 compressed = raw.with_name(raw.name + ".gz")
                 compressed.write_bytes(gzip.compress(raw.read_bytes(), mtime=0))
+                raw.unlink()
+        turbo = None
+        if sampler:
+            turbo = sampler.result(sampler.stop())
+            raw = sampler.log
+            if raw.exists():
+                raw.with_name(raw.name + ".gz").write_bytes(gzip.compress(raw.read_bytes(), mtime=0))
                 raw.unlink()
     after = _frequency_khz()
     parsed: dict[str, Any] | None = None
@@ -126,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         "stderr": completed.stderr,
         "result": parsed,
         "uncore": uncore,
+        "turbostat": turbo,
         **guard.finish(),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
