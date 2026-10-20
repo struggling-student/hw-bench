@@ -60,12 +60,14 @@ This notebook carries the findings in six figures and five tables; the supportin
 
 Two sockets × 56 cores, SMT off, 64 GiB HBM2e and 8-channel DDR5-4800 per socket. *Flat* mode exposes HBM and DDR as separate NUMA nodes; *Cache* mode makes HBM a memory-side cache in front of DDR. Flat results were taken on one dedicated node outside Slurm (the October runs went through an exclusive Slurm allocation on the same node and are labelled as such); Cache results come from Slurm allocations on other nodes.
 
-**Table 1 — headline ceilings of socket 0** (the reference socket for every number here). *Median* [*min*–*max*] are the five samples of one run. *Total* is the uncertainty to quote: half the min–max range plus the largest of three further ranges, a conservative sum. The three are the range of three back-to-back launches on one node, the range of every selected campaign that measured the quantity on its reference node on different days, and the largest deviation of the cross-check (SSH against the October Slurm runs, or a second Cache node). The decomposition of each total, the number of campaigns behind it and the HBM first-window effect are in [notebook 01](01_platform_and_methodology.ipynb), section 3.
+**Table 1 — headline ceilings of socket 0** (the reference socket for every number here). *Median* [*min*–*max*] are the five samples of one run. *Total* is the uncertainty to quote: half the min–max range plus the largest of three further ranges, a conservative sum. The three are the range of three back-to-back launches on one node, the range of every selected campaign that measured the quantity on its reference node on different days, and the largest deviation of the cross-check (SSH against the October Slurm runs, or a second Cache node). The decomposition of each total, the number of campaigns behind it and the HBM first-window effect are in [notebook 01](01_platform_and_methodology.ipynb), section 3. *Measured* is the bandwidth in bytes counted by the hardware in a counted run of the same configuration (Flat: every DDR and HBM controller channel; Cache: the bytes the memory-side cache served, or the DRAM lines the cores counted while the Cache node has no `perf`, see *bytes*); the median and its uncertainty are in the kernel's modeled bytes, which only the repeated launches have, and *measured/modeled* is the ratio within the counted run.
 """),
     code("""
-t1 = report.headline_table(ext, thesis, theory)
+unc = report.load_uncore()
+t1 = report.headline_table(ext, thesis, theory, unc)
 t1v = t1.assign(**{'median [min–max]': [f'{m:.4g} [{lo:.4g}–{hi:.4g}]' for m, lo, hi in zip(t1['median'], t1.low, t1.high)], 'uncertainty': [f'±{t:.1f}%' for t in t1.total]})
-table(t1v[['quantity', 'unit', 'median [min–max]', 'uncertainty']])
+cols = ['quantity', 'unit', 'median [min–max]', 'uncertainty'] + [c for c in ('measured', 'measured_over_modeled', 'bytes_source') if c in t1v]
+table(t1v[cols].rename(columns={'measured_over_modeled': 'measured/modeled', 'bytes_source': 'bytes'}))
 say('*Basis of the cross-run term:* ' + '; '.join(f'{b} ({", ".join(g.quantity)})' for b, g in t1.groupby('basis')) + '.')
 say_claims(claims.headline_uncertainty(ext, thesis, theory))
 say_claims(claims.xcheck(ext, thesis), ['campaign_spread'])
@@ -119,22 +121,34 @@ say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_f
     md("""
 ## 4. The headline roofline: one socket, Flat mode
 
-Memory slopes are the read-only ceilings, because GEMM weights are only read. The dotted line is the best rate PyTorch `nn.Linear` achieved through oneDNN with plain (not prepacked) weights (not a hardware limit; prepacked weights are up to 20% faster, see notebook 04). Points are the BF16 14336×4096 projection for batch sizes M = 1 to 4096, on HBM and on DDR; intensity is modeled. From M = 1 to 256 the points come from the converged sweep (a weight pool of 16× the on-chip capacity, part `gemmconv`; convergence is judged in counted bytes, and 2–3% of the weights are still served on chip at small M, so those modeled rates are that much high); above M = 256 they come from the first sweep, whose small pool no longer matters at those batch sizes. Every point is audited against its ceiling. The shaded bands are decode (small M) and prefill (large M).
+Memory slopes are the read-only ceilings, because GEMM weights are only read. The dotted line is the best rate PyTorch `nn.Linear` achieved through oneDNN with plain (not prepacked) weights (not a hardware limit; prepacked weights are up to 20% faster, see notebook 04). Points are the BF16 14336×4096 projection for batch sizes M = 1 to 4096, on HBM and on DDR, from the counted re-run (part `ugemmconv`, a weight pool of 16× the on-chip capacity, with the privileged controller counters of notebook 06). **Intensity is measured**: operations over the bytes every DDR and HBM channel moved during the same windows (filled markers); the hollow marker beside each is the same point at its modeled intensity (weight, input and output tensor sizes), so the horizontal gap is what the model gets wrong. The memory slopes are the read-only kernel's controller bytes per second, the same bytes as the points. Every filled point is audited against its ceiling. The shaded bands are decode (M = 1 to 16) and prefill (M = 256 to 4096), at measured intensity.
 
 **Table 2 — ridge points** (operations per byte at which each path stops being memory-bound), against the read-only ceiling of each tier, the same ceiling as the roofline above and the decode bound; Cache mode is read at 16 GiB.
 """),
     code("""
 gm = report.gemm_points(ext)
 head = report.headline_gemm_points(ext)
-mem_read = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', access='read'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', access='read')]
+counted = report.counted_gemm_frame(unc, shape='14336x4096')
+measured = len(counted) > 0 and counted.memory_mode.eq('flat').any()
 compute = [report.compute_ceiling(ext, p, 'flat', 56) for p in ('fp32', 'amx_bf16', 'amx_int8')] + [report.library_ceiling(gm, 'amx_bf16')]
-pts = report.gemm_workload_points(head[head.dtype == 'bf16'], theory)
+if measured:
+    # Counted re-run: filled at measured intensity, hollow twins at modeled intensity; ceilings in the same bytes.
+    mem_read = [report.ceiling_or_modeled(unc, ext, thesis, 'flat', t) for t in ('hbm', 'ddr')]
+    sel = counted[(counted.memory_mode == 'flat') & (counted.dtype == 'bf16') & (counted.layout == 'plain')]
+    pts = report.measured_workload_points(sel, series=lambda r: 'BF16 14336×4096')
+    regions = report.measured_phase_regions(counted) or report.llm_phase_regions(ext)
+    axis = dict(x_title='Operations per byte at the memory controllers (measured)', open_label='hollow: the same point at modeled intensity')
+else:
+    mem_read = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', access='read'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', access='read')]
+    pts = report.gemm_workload_points(head[head.dtype == 'bf16'], theory)
+    regions = report.llm_phase_regions(ext)
+    axis = {}
 for p in pts:
     # Label HBM points at every fourth M (not M = 4096: its label would overprint the library-line label); DDR points are unlabelled.
-    m = int(p.provenance['label'][2:])
-    p.provenance['label'] = p.provenance['label'] if p.memory_target == 'hbm' and m in (1, 4, 16, 64, 256, 1024) else ''
-regions = report.llm_phase_regions(ext)
-fig = plotting.roofline_figure(compute, mem_read, pts, title='Roofline · Flat · one socket · BF16 14336×4096 by batch M', regions=regions, point_labels=True)
+    if p.provenance.get('label'):
+        m = int(p.provenance['label'][2:])
+        p.provenance['label'] = p.provenance['label'] if p.memory_target == 'hbm' and m in (1, 4, 16, 64, 256, 1024) else ''
+fig = plotting.roofline_figure(compute, mem_read, pts, title='Roofline · Flat · one socket · BF16 14336×4096 by batch M', regions=regions, point_labels=True, **axis)
 figure(fig, 'headline_roofline')
 audit = roofline.audit_points(pts, mem_read, compute)
 filled = audit[~audit.unconverged]
@@ -145,8 +159,10 @@ say(f"**Result.** {int(filled.exceeds.sum())} of the {len(filled)} {'filled ' if
     + f"; the full audit is in the [atlas](05_roofline_atlas.ipynb). "
     f"The best library rate is {compute[-1].gops/1000:.0f} TOP/s, {compute[-1].gops/compute[1].gops:.0%} of the measured AMX BF16 peak.")
 say_claims(claims.gemm(ext, thesis, theory, ROOT), ['gemm_converged_sweep', 'first_sweep_small_m_bias', 'pool_insensitive_large_m'])
+if measured:
+    say_claims(claims.measured_intensity(unc))
 say_claims(claims.ridges(ext, thesis, theory), ['ridge_points'])
-table(report.ridge_table(ext, thesis), 1)
+table(report.ridge_table(ext, thesis, unc), 1)
 """),
     md("""
 **What the roofline says about decoding.** The weights of a decoder-only model are read once per generated token, so the read ceiling gives a bound on single-sequence decode that does not depend on the compute path.
@@ -155,12 +171,14 @@ table(report.ridge_table(ext, thesis), 1)
 say_claims(claims.decode_bound(ext, thesis, theory), ['decode_bound', 'decode_far_below_ridge'])
 """),
     md("""
-**Table 5 — what a decode step streams.** The 14336×4096 projection at M = 1 against the read ceiling of its tier. Flat rows come from converged pools, with counted bytes beside modeled: plain BF16 and INT8 from the 64× pool sweep, prepacked BF16 from the converged M-sweep (16×); Cache rows come from the first sweep, whose 16 and 96 GiB pools are far beyond the on-chip capacity. *Tokens/s* is the Llama-3.1-8B bound if every weight streamed at this rate (8.03 billion weights, 2 bytes in BF16, 1 in INT8; read-only rows use BF16). It is optimistic for the whole model: the 4096×4096 projections stream slower.
+**Table 5 — what a decode step streams, in measured bytes.** The 14336×4096 projection at M = 1 against the read ceiling of its tier, both from counted runs. *GB/s* is the measured traffic (*bytes*: `uncore_cas` = every controller channel on Flat, the served bytes of the memory-side cache in Cache mode; `pmu_ocr` = the cores' DRAM line counts, used in Cache mode while its node has no `perf`); *modeled GB/s* is the tensor-size convention beside it. Flat rows use a pool of 16× the on-chip capacity; Cache rows the 16 GiB (resident) and 96 GiB (spilled) pools. *Tokens/s* is the Llama-3.1-8B bound if every weight streamed at this rate (8.03 billion weights, 2 bytes in BF16, 1 in INT8; read-only rows use BF16); it is optimistic for the whole model, since the 4096×4096 projections stream slower. *J/token* is the computing socket's package and DRAM energy per token at that rate (RAPL; turbostat on the Cache node).
 """),
     code("""
-dt = report.decode_table(ext, thesis, theory)
-table(dt.rename(columns={'gbs': 'GB/s', 'counted_gbs': 'counted GB/s', 'read_gbs': 'read ceiling GB/s', 'of_read_ceiling': 'of read ceiling', 'tokens_per_s': 'tokens/s bound'}), 2)
+dt = report.decode_table_measured(ext, thesis, theory, unc)
+table(dt.rename(columns={'gbs': 'GB/s', 'modeled_gbs': 'modeled GB/s', 'counted_gbs': 'counted GB/s', 'bytes_source': 'bytes', 'power_w': 'W', 'read_gbs': 'read ceiling GB/s',
+                         'of_read_ceiling': 'of read ceiling', 'tokens_per_s': 'tokens/s bound', 'j_per_token': 'J/token'}), 2)
 say_claims(claims.decode_bound(ext, thesis, theory), ['decode_achieved'])
+say_claims(claims.decode_energy(ext, thesis, theory, unc))
 """),
     md("""
 ## 5. GEMM efficiency against batch size
@@ -779,9 +797,9 @@ NOTEBOOKS["05_roofline_atlas"] = [
 
 **Question.** Where do the measured compute and bandwidth ceilings meet for each precision and memory configuration, and where do achieved kernels sit relative to them?
 
-Line style tells the origin of a ceiling: **dashed** = theoretical (vendor or derived), **solid** = best measured by a dedicated kernel, **dotted** = what a library kernel (oneDNN GEMM) achieved. Each memory ceiling has one purpose. Sections 1 and 3 draw the **ERT reference envelope**: the best sustained rate of every kernel (read-only, Triad, non-temporal Triad, copy), which on Flat HBM is copy. Every LLM statement uses the **read-only** ceiling (weights are only read): the GEMM figures here, the headline roofline, Table 2 and the decode bound of the master notebook. The FP64 sweep uses the **copy** ceiling (it loads one array and stores another), and Cache mode is read at a stated working set. Bytes are modeled, so these are empirical envelopes, not counter-based bounds. Section 6 lists every point that lies above its own roofline.
+Line style tells the origin of a ceiling: **dashed** = theoretical (vendor or derived), **solid** = best measured by a dedicated kernel, **dotted** = what a library kernel (oneDNN GEMM) achieved. Each memory ceiling has one purpose. Sections 1 and 3 draw the **ERT reference envelope**: the best sustained rate of every kernel (read-only, Triad, non-temporal Triad, copy), which on Flat HBM is copy. Every LLM statement uses the **read-only** ceiling (weights are only read): the GEMM figures here, the headline roofline, Table 2 and the decode bound of the master notebook. The FP64 sweep uses the **copy** ceiling (it loads one array and stores another), and Cache mode is read at a stated working set. Sections 1 to 3 are envelopes in the kernels' modeled bytes. The achieved points of sections 2, 4 and 5 come from the counted re-runs (notebook 06): **their intensity is measured** (every DDR and HBM controller channel on Flat; the cores' DRAM line counts in Cache mode while its node has no `perf`), each with a hollow twin at its modeled intensity, and they are drawn against ceilings in the same measured bytes. Section 6 lists every filled point that lies above its own roofline.
 """),
-    code(setup("05_roofline_atlas")),
+    code(setup("05_roofline_atlas") + "\nunc = report.load_uncore()\ncounted = report.counted_gemm_frame(unc)\ncsweep = report.counted_sweep_points(unc)\nMEASURED = dict(x_title='Operations per byte of measured memory traffic', open_label='hollow: the same point at modeled intensity')"),
     code("""
 PATHS = ['fp64', 'fp32', 'avx512_bf16', 'vnni_int8', 'amx_bf16', 'amx_int8']
 def compute_set(mode, scope, cores):
@@ -818,6 +836,18 @@ figure(fig, 'atlas_cache_1s')
 table(pd.DataFrame([dict(case=c.tier, kernel=c.kernel, GBs=c.gbs, working_set_gib=c.working_set_gib) for c in (resident, spilled)]))
 """),
     code("""
+cg = counted[counted.memory_mode == 'cache'] if len(counted) else counted
+if len(cg):
+    # Counted Cache GEMMs (hbm13): the four shapes at the resident and spilled pools, at the intensity the cores' DRAM counts give.
+    cache_meas = [report.ceiling_or_modeled(unc, ext, thesis, 'cache', 'effective_cache', at_gib=16),
+                  report.ceiling_or_modeled(unc, ext, thesis, 'cache', 'effective_cache', access='best', at_gib=96)]
+    cpts = report.measured_workload_points(cg[cg.layout.eq('plain') | cg.dtype.eq('int8')].drop_duplicates(['dtype', 'shape', 'm', 'pool_gib']),
+                                           series=lambda r: f"{r.dtype.upper()} · {r.pool_gib:.0f} GiB pool")
+    fig = plotting.roofline_figure(compute_set('cache', '1S', 56)[-2:], cache_meas, cpts, x_range=(0.5, 4000), **MEASURED,
+                                   title='Cache · one socket · GEMM at Llama-3.1-8B shapes, resident (16 GiB) and spilled (96 GiB) pools')
+    figure(fig, 'atlas_gemm_cache')
+    say(f"Cache GEMM points measured on `{cg.node.iloc[0]}` with bytes from `{cg.bytes_source.iloc[0]}`; ceilings in the same bytes: "
+        + ', '.join(f'{c.kernel} at {c.working_set_gib:.0f} GiB {c.gbs:.0f} GB/s ({c.note or "modeled"})' for c in cache_meas) + '.')
 say_claims(claims.cache_mode(ext, thesis), ['cache_declines_before_capacity', 'cache_triad_spilled_ceiling', 'cache_spilled_gemm'])
 """),
     md("""
@@ -825,14 +855,16 @@ Every ridge moves right by the ratio of the two slopes. The 16 GiB line is the c
 
 ### Every memory configuration on one plane
 
-The measured compute peaks against the four one-socket ceilings an LLM would stream from: Flat HBM and DDR read-only, Cache read-only with the data resident (16 GiB), and Cache spilled (96 GiB, Triad). The shaded bands are the modeled intensity of the BF16 14336×4096 projection at decode (M = 1 to 16 sequences) and prefill (M = 256 to 4096 tokens) batch sizes. AVX-512 BF16 is left out: its line would overprint FP64.
+The measured compute peaks against the four one-socket ceilings an LLM would stream from: Flat HBM and DDR read-only, Cache read-only with the data resident (16 GiB), and Cache spilled (96 GiB, Triad). The shaded bands are the measured intensity (Flat HBM controllers) of the BF16 14336×4096 projection at decode (M = 1 to 16 sequences) and prefill (M = 256 to 4096 tokens) batch sizes. AVX-512 BF16 is left out: its line would overprint FP64.
 """),
     code("""
-phases = report.llm_phase_regions(ext, pad=1)
-configs = [report.memory_ceiling(ext, thesis, 'flat', 'hbm', access='read'), report.memory_ceiling(ext, thesis, 'flat', 'ddr', access='read'), resident, spilled]
+measured_bands = len(counted) > 0 and len(report.measured_phase_regions(counted)) == 2
+phases = report.measured_phase_regions(counted, pad=1) if measured_bands else report.llm_phase_regions(ext, pad=1)
+configs = [report.ceiling_or_modeled(unc, ext, thesis, 'flat', 'hbm'), report.ceiling_or_modeled(unc, ext, thesis, 'flat', 'ddr'), resident, spilled]
 peaks = [report.compute_ceiling(ext, p, 'flat', 56) for p in ('fp64', 'fp32', 'vnni_int8', 'amx_bf16', 'amx_int8')]
 fig = plotting.roofline_figure(peaks, configs, title='One socket · measured peaks against every memory configuration', x_range=(0.5, 30000),
-                               regions=report.llm_phase_regions(ext))
+                               regions=report.measured_phase_regions(counted) if measured_bands else report.llm_phase_regions(ext),
+                               **(dict(x_title=MEASURED['x_title']) if measured_bands else {}))
 # Both Cache ceilings share the Cache hue; the spilled one is dash-dotted to tell them apart.
 fig.for_each_trace(lambda t: t.update(line_dash='dashdot') if t.name and '@96 GiB' in t.name else None)
 figure(fig, 'atlas_configurations_1s')
@@ -866,7 +898,15 @@ pts = report.fp64_sweep_points(thesis, 'flat', 'hbm') + report.fp64_sweep_points
 pts12 = report.fp64_sweep12_points(ext, thesis, theory, 'hbm') + report.fp64_sweep12_points(ext, thesis, theory, 'ddr')
 audits = [roofline.audit_points(pts, mem_rw, fp64).assign(group='FP64 sweep · Flat · sweep ceiling'),
           roofline.audit_points(pts12, mem_rw, fp64).assign(group='FP64 sweep, 12 chains · Flat · sweep ceiling')]
-fig = plotting.roofline_figure(fp64 + theory_set(['fp64'], '1S', 56), mem_rw, pts + pts12, title='FP64 intensity sweep · 8 chains (October) and 12 chains · Flat · one socket', x_range=(0.05, 256))
+sw = csweep[csweep.memory_mode == 'flat'] if len(csweep) else csweep
+if len(sw):
+    # Counted 12-chain sweep: measured intensity against the copy ceiling in the same (controller) bytes.
+    mem_rw = [report.ceiling_or_modeled(unc, ext, thesis, 'flat', t, access='copy') for t in ('hbm', 'ddr')]
+    ptsc = report.measured_workload_points(sw, series=lambda r: 'fp64 sweep, 12 chains, counted')
+    audits.append(roofline.audit_points([q for q in ptsc if not q.provenance['open']], mem_rw, fp64).assign(group='FP64 sweep, 12 chains, counted · Flat · copy ceiling, measured bytes'))
+    fig = plotting.roofline_figure(fp64 + theory_set(['fp64'], '1S', 56), mem_rw, ptsc, title='FP64 intensity sweep · 12 chains · Flat · one socket', x_range=(0.05, 256), **MEASURED)
+else:
+    fig = plotting.roofline_figure(fp64 + theory_set(['fp64'], '1S', 56), mem_rw, pts + pts12, title='FP64 intensity sweep · 8 chains (October) and 12 chains · Flat · one socket', x_range=(0.05, 256))
 figure(fig, 'atlas_fp64_sweep')
 hb = [p for p in pts if p.memory_target == 'hbm']
 say_claims(claims.fp64_sweep(ext, thesis, theory))
@@ -874,7 +914,7 @@ say_claims(claims.fp64_sweep(ext, thesis, theory))
     md("""
 ## 5. Achieved points: BF16 and INT8 GEMM
 
-Each point is one (shape, M) pair of the first sweep. Intensity rises with M because the same weights are reused for more tokens; the point leaves the memory slope when the GEMM becomes compute-limited. The first sweep's pool was about twice the on-chip capacity, so its points at M ≤ 32 are drawn **hollow** (weight traffic overstated); the converged sweep of 14336×4096 (16× pool, M = 1 to 256) and the 64× pool points of 4096×4096 (M = 1, 16, 256) are drawn as their own series.
+Each filled point is one (shape, M) pair of the counted re-runs, at the intensity the memory controllers measured: the four Llama-3.1-8B shapes at M = 1, 16, 256 and 4096 (part `uatlas`) and 14336×4096 at every M from 1 to 4096 (part `ugemmconv`), all with a weight pool of 16× the on-chip capacity. The hollow twin of each is the same rate at its modeled intensity. Intensity rises with M because the same weights are reused for more tokens; the point leaves the memory slope when the GEMM becomes compute-limited. The first sweep (modeled bytes, every M) stays in the gap table below and in the audit.
 """),
     code("""
 gm = report.gemm_points(ext)
@@ -894,7 +934,16 @@ for dtype, path in [('bf16', 'amx_bf16'), ('int8', 'amx_int8')]:
     else:
         cs.append(report.compute_ceiling(ext, 'vnni_int8', 'flat', 56))
     audits.append(roofline.audit_points(pts, mem_read, cs).assign(group=f'{dtype.upper()} GEMM · Flat · read-only ceiling'))
-    fig = plotting.roofline_figure(cs, mem_read, pts + conv, title=f'{dtype.upper()} GEMM M-sweep at Llama-3.1-8B shapes · Flat · one socket', height=820)
+    flat_counted = counted[(counted.memory_mode == 'flat') & (counted.dtype == dtype) & (counted.layout == ('plain' if dtype == 'bf16' else 'prepacked'))] if len(counted) else counted
+    if len(flat_counted):
+        # Counted re-runs (uatlas: four shapes at M = 1, 16, 256, 4096; ugemmconv: 14336x4096 at M = 1-4096), measured bytes.
+        mem_meas = [report.ceiling_or_modeled(unc, ext, thesis, 'flat', t) for t in ('hbm', 'ddr')]
+        fc = flat_counted.drop_duplicates(['memory_target', 'shape', 'm'])
+        mpts = report.measured_workload_points(fc)
+        audits.append(roofline.audit_points([q for q in mpts if not q.provenance['open']], mem_meas, cs).assign(group=f'{dtype.upper()} GEMM, counted · Flat · read-only ceiling, measured bytes'))
+        fig = plotting.roofline_figure(cs, mem_meas, mpts, title=f'{dtype.upper()} GEMM M-sweep at Llama-3.1-8B shapes · Flat · one socket', height=820, **MEASURED)
+    else:
+        fig = plotting.roofline_figure(cs, mem_read, pts + conv, title=f'{dtype.upper()} GEMM M-sweep at Llama-3.1-8B shapes · Flat · one socket', height=820)
     figure(fig, f'atlas_gemm_{dtype}')
 """),
     code("""
@@ -967,9 +1016,9 @@ NOTEBOOKS["06_uncore_power_and_clocks"] = [
 
 **How it was measured.** Since 2026-10-19 the Flat node (`cresco8-hbm14`) allows `sudo perf stat` without a password; the benchmark itself still cannot open uncore events (`perf_event_paranoid` = 2). Each record runs one system-wide `perf stat -a --per-socket -I 100` beside the benchmark (`hwbench.uncore`): the counters are enabled once before the warm-up, read every 100 ms, and disabled once after the last sample. Perf enables its counters one at a time (about 110 ms, socket 0 first), so the counters run continuously and each one-second sample takes the intervals that lie entirely inside it (eight or nine of ten); the disable, which takes 5 ms, places perf's intervals on the benchmark's clock. Events: DDR CAS (`uncore_imc`, 64 B), HBM CAS (`uncore_type_14`, the 32 HBM channel controllers per socket, 32 B, identified with a read stream of known size), UPI data flits, M2M directory updates, package and DRAM energy (RAPL), the CHA clock (uncore frequency) and the PCU's power- and thermal-limit cycles. The probes behind these choices are in `data/probes/uncore-20261019/`.
 
-Cache mode has no such access, so the HBM-cache hit rate (review item U3) stays unmeasured. These campaigns are kept apart from the rates of the other notebooks (`uncore_campaigns` in `configs/analysis.json`).
+Sections 1 to 8 are the Flat node. Since 2026-10-20 the Cache node `cresco8-hbm13` allows the same commands, but `perf` is not installed there, so its records carry `turbostat` instead (`hwbench.turbostat`: package and DRAM power from the same RAPL counters, the uncore ratio, temperature, in 100 ms intervals placed on the benchmark's clock); section 9 checks turbostat against perf on the Flat node, section 10 is Cache mode. These campaigns are kept apart from the rates of the other notebooks (`uncore_campaigns` in `configs/analysis.json`).
 """),
-    code(setup("06_uncore_power_and_clocks") + "\nunc = report.load_uncore()\nU1 = claims.uncore_streams(unc, theory, ext)\nDATA_PATTERN_CAMPAIGN = ctx.policy['data_pattern_campaign']"),
+    code(setup("06_uncore_power_and_clocks") + "\nunc = report.load_uncore(mode='flat')\nucache = report.load_uncore(mode='cache')\nU1 = claims.uncore_streams(unc, theory, ext)\nDATA_PATTERN_CAMPAIGN = ctx.policy['data_pattern_campaign']"),
     md("""
 ## 1. Controller traffic against the traffic model (U1)
 
@@ -1046,6 +1095,18 @@ table(gc, 3)
 say_claims(claims.uncore_gemm(unc), None)
 """),
     md("""
+The same points on the one-socket roofline, placed at the intensity the controllers measured (filled) and at the modeled intensity (hollow), with the read ceilings and AMX peaks of the other notebooks. The shaded bands are the modeled decode (M = 1 to 16) and prefill (M = 256 to 4096) intervals of notebook 05.
+"""),
+    code("""
+ceilings = [report.memory_ceiling(ext, thesis, 'flat', t, access='read') for t in ('hbm', 'ddr')]
+peaks = [report.compute_ceiling(ext, p, 'flat', 56) for p in ('amx_bf16', 'amx_int8')]
+fig = plotting.roofline_figure(peaks, ceilings, report.controller_gemm_points(unc), point_labels=True, x_range=(0.5, 4000),
+                               title='GEMM 14336×4096 · Flat · intensity measured at the memory controllers',
+                               regions=report.llm_phase_regions(ext), open_label='hollow: the same point at modeled intensity',
+                               x_title='Operations per byte at the memory controllers (measured)')
+figure(fig, 'gemm_controller_roofline')
+"""),
+    md("""
 ## 8. Loaded latency with the controllers' bandwidth (R3)
 
 The pairs of notebook 02 again: one core chasing pointers in 1 GiB beside N cores streaming the same tier, one synchronized 5 s window. The controllers' bandwidth on the bound tier replaces the streaming cores' modeled rate in Little's law.
@@ -1056,9 +1117,36 @@ table(lc, 2)
 say_claims(claims.uncore_loaded(unc, ext), None)
 """),
     md("""
-## 9. Still not measured
+## 9. turbostat against perf
 
-* **Cache mode (U3).** No Cache-mode node has the privileged access, so the HBM-cache hit rate, the conflict-miss explanation of the Cache curve and the ordering of the spilled kernels stay inferred.
+The Flat smoke campaign ran both sessions in the same records: perf (RAPL energy and CHA clockticks over each 100 ms interval) and turbostat (RAPL power and the uncore ratio at the end of each 100 ms interval). Both read the same energy counters, so their ratio checks how turbostat's intervals are placed on the samples.
+"""),
+    code("""
+tv = report.turbostat_validation(unc)
+table(tv, 3)
+say_claims(claims.turbostat_matches_perf(unc), None)
+"""),
+    md("""
+## 10. Cache mode: power, clocks and traffic (hbm13)
+
+**Conditions.** Cache mode on `cresco8-hbm13`, socket 0, the streams of section 1 at 1 to 56 cores with the data resident in the HBM cache (8 GiB) and spilled to DDR (96 GiB), and read, Triad and non-temporal Triad at 56 cores from 8 to 128 GiB. Power and clocks come from turbostat; the traffic is the cores' DRAM line counts (`pmu_ocr`) until `perf` is installed on the node, when the memory-side cache's own tag events take over. hbm13 is not the reference Cache node of the other notebooks (hbm01), and Cache-mode rates differ by up to 16% between launches on one node (notebook 01).
+"""),
+    code("""
+cmp = report.mode_power_comparison(unc, ucache)
+table(cmp, 2)
+cs = report.cache_stream_table(ucache)
+if len(cs):
+    figure(plotting.cache_power_figure(cs), 'cache_power_and_clocks')
+cc = report.cache_capacity_table(ucache)
+if len(cc):
+    table(cc, 2)
+    figure(plotting.cache_capacity_counters_figure(cc), 'cache_capacity_counters')
+say_claims(claims.cache_counters(unc, ucache), None)
+"""),
+    md("""
+## 11. Still not measured
+
+* **The HBM-cache hit rate (U3).** It needs the memory-side cache's tag events, which need `perf` on the Cache node; the conflict-miss explanation of the Cache curve and the ordering of the spilled kernels stay inferred until then.
 * **Latency at the caching agents.** The CHA's TOR occupancy over inserts, filtered to the chasing core, gives about 31 ns where the chase measures 141 ns (`data/probes/uncore-20261019/`); it is not a latency here and is not used.
 """),
 ]

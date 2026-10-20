@@ -69,7 +69,7 @@ class WorkloadPoint:
     """One achieved operating point on a measured roofline.
 
     ``bytes_source`` says whether traffic was modeled from tensor sizes or read from
-    hardware counters; the two are not interchangeable and must not be mixed
+    hardware counters (the cores' offcore events, or CAS counts at the memory controllers); the two are not interchangeable and must not be mixed
     silently.
     """
 
@@ -78,7 +78,7 @@ class WorkloadPoint:
     isa_path: str
     gops: float
     intensity: float
-    bytes_source: Literal["modeled", "pmu_ocr"] = "modeled"
+    bytes_source: Literal["modeled", "pmu_ocr", "uncore_cas"] = "modeled"
     mode: str | None = None
     scope: str = "1S"
     cores: int | None = None

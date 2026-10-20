@@ -31,11 +31,16 @@ def load(root: Path = ROOT):
     return df, select_measurements(df, policy), select_extended(df, policy), policy
 
 
-def load_uncore(root: Path = ROOT) -> pd.DataFrame:
-    """Rows of the campaigns measured with the privileged uncore session."""
+def load_uncore(root: Path = ROOT, mode: str | None = None) -> pd.DataFrame:
+    """Rows of the campaigns measured with the privileged counters (perf and/or turbostat).
+
+    ``mode`` keeps one memory mode: the notebook-06 tables of the Flat node take
+    ``mode="flat"``, so Cache rows (other labels, other byte meanings) never merge into them.
+    """
 
     policy = json.loads((root / "configs/analysis.json").read_text())
-    return select_uncore(load_measurements(root / "data/processed/measurements.csv"), policy)
+    out = select_uncore(load_measurements(root / "data/processed/measurements.csv"), policy)
+    return out if mode is None else out[out.memory_mode.eq(mode)].copy()
 
 
 def _cv(series: pd.Series) -> float:
@@ -877,7 +882,7 @@ def span_reference(ext: pd.DataFrame, thesis: pd.DataFrame, kernel: str = "read"
     return out.sort_values("label", ascending=False).reset_index(drop=True)
 
 
-def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> pd.DataFrame:
+def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, unc: pd.DataFrame | None = None) -> pd.DataFrame:
     """T1: the headline ceilings of one socket (socket 0), each with its uncertainty.
 
     ``median``, ``min`` and ``max`` are the five samples of one run; ``sustained`` is the median
@@ -962,10 +967,37 @@ def headline_table(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> p
     out = pd.DataFrame(rows)
     out["spread"] = 100 * (out.high - out.low) / 2 / out["median"]
     out["total"] = out.spread + out[["repeat", "between", "cross_run"]].max(axis=1)
+    if unc is not None and len(unc):
+        out = out.merge(_headline_measured(unc), on="quantity", how="left")
     return out
 
 
-def ridge_table(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
+def _headline_measured(unc: pd.DataFrame) -> pd.DataFrame:
+    """Measured traffic of the Table 1 bandwidth rows: the counted 56-core streams at 8 GiB.
+
+    ``measured`` is the median rate of measured bytes (Flat: every controller channel, U1;
+    Cache: ``bytes_source`` of the Cache node's ``ustreams``); ``measured_over_modeled`` divides
+    it by the same records' modeled rate, so it is free of the launch-to-launch spread.
+    """
+
+    rows = []
+    names = {("flat", "hbm", "read"): "Flat HBM read-only (56 cores)", ("flat", "hbm", "triad"): "Flat HBM Triad (56 cores)",
+             ("flat", "ddr", "read"): "Flat DDR read-only (56 cores)", ("flat", "ddr", "triad"): "Flat DDR Triad (56 cores)",
+             ("cache", "effective_cache", "read"): "Cache read-only, 8 GiB (56 cores)"}
+    d = unc[unc.notes.isin(U1_STREAMS) & unc.threads.eq(56) & unc.working_set_bytes.div(2**30).sub(8).abs().lt(0.5) & unc.accepted]
+    if d.empty:
+        return pd.DataFrame(columns=["quantity", "measured", "measured_over_modeled", "bytes_source", "measured_campaign"])
+    d = _with_measured(d).assign(kernel=lambda f: f.notes.map(U1_STREAMS))
+    for (mode, tier, kernel), g in d.groupby(["memory_mode", "memory_target", "kernel"]):
+        if (mode, tier, kernel) not in names or g.measured_gbs.isna().all():
+            continue
+        rows.append(dict(quantity=names[(mode, tier, kernel)], measured=g.measured_gbs.median(),
+                         measured_over_modeled=(g.measured_gbs / g.bandwidth_gbs).median(),
+                         bytes_source=g.bytes_source.dropna().iloc[0], measured_campaign=_ids(g.campaign_id)))
+    return pd.DataFrame(rows)
+
+
+def ridge_table(ext: pd.DataFrame, thesis: pd.DataFrame, unc: pd.DataFrame | None = None) -> pd.DataFrame:
     """T2: ridge point (operations per byte) of each compute path on each tier, one socket.
 
     Every column uses the read-only ceiling, the one the headline roofline and the decode bound
@@ -974,10 +1006,11 @@ def ridge_table(ext: pd.DataFrame, thesis: pd.DataFrame) -> pd.DataFrame:
 
     from hwbench.roofline import ridge as _ridge
 
+    # With ``unc`` the ceilings are in measured bytes where a counted run measured them.
     tiers = {
-        "HBM read": memory_ceiling(ext, thesis, "flat", "hbm", access="read"),
-        "DDR read": memory_ceiling(ext, thesis, "flat", "ddr", access="read"),
-        "Cache read at 16 GiB": memory_ceiling(ext, thesis, "cache", "effective_cache", access="read", at_gib=16),
+        "HBM read": ceiling_or_modeled(unc, ext, thesis, "flat", "hbm"),
+        "DDR read": ceiling_or_modeled(unc, ext, thesis, "flat", "ddr"),
+        "Cache read at 16 GiB": ceiling_or_modeled(unc, ext, thesis, "cache", "effective_cache", at_gib=16),
     }
     rows = []
     for key, label in [("fp64", "AVX-512 FP64"), ("fp32", "AVX-512 FP32"), ("avx512_bf16", "AVX-512 BF16"), ("vnni_int8", "VNNI INT8"), ("amx_bf16", "AMX BF16"), ("amx_int8", "AMX INT8")]:
@@ -1009,12 +1042,12 @@ def unmeasured_table() -> pd.DataFrame:
 
     return pd.DataFrame(
         [
-            ("Memory-controller traffic in Cache mode and in the earlier campaigns", "privileged perf is allowed on the Flat node only (since 2026-10-19)", "Flat controller bytes agree with the model to 2% (notebook 06); Cache-mode and October rates rest on modeled bytes and per-core line counts"),
-            ("Cache-mode hit rate", "memory-side-cache tag events (M2M) need the privileged session, which no Cache node has", "conflict misses are inferred from bandwidth"),
+            ("Memory-controller traffic in Cache mode", "the Cache node (hbm13) allows privileged perf since 2026-10-20 but has no perf installed", "Cache-mode intensity uses the cores' DRAM line counts (pmu_ocr); Flat headline, atlas and decode points use controller bytes (notebooks 00, 05, 06)"),
+            ("Cache-mode hit rate", "memory-side-cache tag events (M2M) need perf on the Cache node", "DRAM power (turbostat) shows DDR traffic from 32 GiB; the miss count itself is not measured"),
             ("Why Cache-mode spilled streams order read-only < GEMM ≤ Triad", "the same", "ordering reported, not explained"),
             ("Which agent issues the duplicated remote-HBM reads at 56 threads", "the CHA opcode-level events were not part of the session", "the duplication itself is counted (notebook 06); prefetch or retry is not resolved"),
             ("Address-translation share of far latency", "no TLB-miss counter is readable", "the Flat DDR chase to 128 GiB bounds it (a few ns per doubling), so Cache-mode far latency is mostly the memory-side cache"),
-            ("Energy and clocks in Cache mode", "RAPL and the uncore clock need the privileged session", "power, clock-drop and energy figures are Flat only (notebook 06)"),
+
             ("HBM device capability beyond 56 cores", "SNC4 / HBM-only modes are not available on the node", "HBM ceiling is a 56-core figure"),
         ],
         columns=["not measured", "what blocks it", "consequence here"],
@@ -1777,6 +1810,36 @@ def gemm_controller_table(unc: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def controller_gemm_points(unc: pd.DataFrame) -> list:
+    """The U4 GEMM points as roofline markers at controller-measured intensity.
+
+    Each (tier, dtype, M) appears twice at the same rate: filled at the intensity the memory
+    controllers give (operations over CAS bytes of every channel) and hollow at its modeled
+    intensity, so the shift from model to measurement is visible.  Only HBM points carry an
+    M label; DDR points sit at almost the same intensity.
+    """
+
+    from hwbench.roofline import WorkloadPoint
+
+    gc = gemm_controller_table(unc)
+    path = {"bf16": "amx_bf16", "int8": "amx_int8"}
+    out = []
+    for r in gc.itertuples():
+        for source, intensity in (("uncore_cas", r.intensity_ctrl), ("modeled", r.intensity_modeled)):
+            provenance = {"series": r.dtype.upper(), "open": source == "modeled"}
+            if r.memory_target == "hbm":
+                provenance["label"] = f"M={int(r.m)}" if source == "uncore_cas" else ""
+            out.append(
+                WorkloadPoint(
+                    name=f"{r.dtype} gemm 14336x4096 M={int(r.m)} · {source} bytes", precision=r.dtype,
+                    isa_path=path[r.dtype], gops=float(r.gops), intensity=float(intensity), bytes_source=source,
+                    mode="flat", scope="1S", cores=56, threads=56, memory_target=r.memory_target,
+                    provenance=provenance,
+                )
+            )
+    return out
+
+
 def loaded_concurrency(unc: pd.DataFrame) -> pd.DataFrame:
     """Loaded latency with the bandwidth the controllers served in the same windows (R3).
 
@@ -1876,3 +1939,365 @@ def second_window_ratio(ext: pd.DataFrame) -> pd.DataFrame:
         late = g.loc[[2, 3, 4]].median()
         rows.append(dict(zip(keys, key), second_ratio=g.loc[1] / late, drop1_over_drop2=g.loc[[1, 2, 3, 4]].median() / late))
     return pd.DataFrame(rows)
+
+
+# ------------------------------------------------- measured intensity (counted re-runs)
+#: Labels of the counted re-runs behind the measured-intensity roofline (scripts/run_campaign.py).
+COUNTED_GEMM_LABELS = ("u_gemm_conv", "u_gemm_atlas")
+COUNTED_SWEEP_LABEL = "u_sweep_c12"
+COUNTED_CEILING_LABELS = ("u_copy_ceiling", "u1_read", "u1_triad", "u1_copy_nt", "u3_read_capacity",
+                          "u3_triad_capacity", "u3_triad_nt_capacity")
+
+
+def measured_bytes(d: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Memory traffic each sample measured, and what measured it.
+
+    Flat: the CAS bytes of every DDR and HBM channel (``uncore_cas``).  Cache: the bytes the
+    memory-side cache served (``served_bytes``, its tag lookups, also ``uncore_cas``) when the
+    perf session counted them, else the DRAM lines the cores' own offcore events counted
+    (``pmu_ocr``).  In Cache mode the controller sum is no traffic measure: a miss is a DDR read
+    plus an HBM fill, and every lookup also reads the HBM tag.
+    """
+
+    flat = d.memory_mode.eq("flat")
+    served = d["served_bytes"] if "served_bytes" in d else pd.Series(math.nan, index=d.index)
+    ctrl = d["ctrl_bytes"] if "ctrl_bytes" in d else pd.Series(math.nan, index=d.index)
+    counted = d["counted_bytes"] if "counted_bytes" in d else pd.Series(math.nan, index=d.index)
+    nbytes = ctrl.where(flat, served)
+    source = pd.Series("uncore_cas", index=d.index).where(nbytes.notna())
+    fallback = nbytes.isna() & ~flat & counted.notna()
+    nbytes = nbytes.where(~fallback, counted)
+    source = source.where(~fallback, "pmu_ocr")
+    return nbytes, source
+
+
+def _with_measured(d: pd.DataFrame) -> pd.DataFrame:
+    d = d.copy()
+    d["measured_bytes"], d["bytes_source"] = measured_bytes(d)
+    d["measured_gbs"] = d.measured_bytes / d.elapsed_seconds / 1e9
+    d["intensity_measured"] = d.operations / d.measured_bytes
+    return d
+
+
+def counted_gemm_frame(unc: pd.DataFrame, labels=COUNTED_GEMM_LABELS, shape: str | None = None) -> pd.DataFrame:
+    """GEMM points of the counted re-runs: rate, modeled and measured intensity, power.
+
+    One row per mode, tier, precision, weight layout, shape, M and pool; medians over the
+    timed windows.  ``intensity`` is the measured one (``bytes_source`` says how it was
+    measured), ``intensity_modeled`` the tensor-size convention of the other notebooks.
+    ``j_per_op`` is package plus DRAM energy of the computing socket per operation.  Same
+    columns as ``gemm_points`` where they overlap, so the workload-point helpers accept it.
+    """
+
+    d = unc[unc.benchmark.eq("onednn_gemm_sweep") & unc.notes.isin(labels) & unc.accepted]
+    if d.empty:
+        return pd.DataFrame()
+    d = with_config(_with_measured(d))
+    d["layout"] = _layout(d.source_file, d["dtype"])
+    d["shape"] = d.n.astype(int).astype(str) + "x" + d.k.astype(int).astype(str)
+    if shape is not None:
+        d = d[d["shape"].eq(shape)]
+    d["power_w"] = d.pkg_power_w + d.ram_power_w
+    keys = ["memory_mode", "config", "memory_target", "dtype", "layout", "shape", "n", "k", "m", "working_set_bytes"]
+    out = d.groupby(keys, dropna=False).agg(
+        gops=("performance_gops", "median"),
+        gbs=("bandwidth_gbs", "median"),
+        measured_gbs=("measured_gbs", "median"),
+        intensity=("intensity_measured", "median"),
+        intensity_modeled=("arithmetic_intensity", "median"),
+        bytes_source=("bytes_source", "first"),
+        power_w=("power_w", "median"),
+        power_source=("power_source", "first"),
+        cv_percent=("performance_gops", _cv),
+        n_samples=("accepted", "size"),
+        campaign_id=("campaign_id", _ids),
+        node=("node", "first"),
+    ).reset_index()
+    out["measured_over_modeled"] = out.intensity_modeled / out.intensity
+    out["j_per_op"] = out.power_w / (out.gops * 1e9)
+    out["pool_gib"] = out.working_set_bytes / 2**30
+    out["pool_x"] = out.working_set_bytes / ONCHIP_BYTES
+    out["status"] = "counted"
+    return out
+
+
+def measured_workload_points(frame: pd.DataFrame, cores: int = 56, twins: bool = True, series=None) -> list:
+    """Counted points as roofline markers: filled at measured intensity, hollow twin at modeled.
+
+    ``frame`` is ``counted_gemm_frame`` or ``counted_sweep_points`` output.  The hollow twin
+    carries no label and is left out of the audit (``open``).  ``series`` maps a row to its
+    legend series (default: the shape, or "fp64 sweep").
+    """
+
+    from hwbench.roofline import WorkloadPoint
+
+    path = {"bf16": "amx_bf16", "int8": "amx_int8", "fp64": "fp64"}
+    out = []
+    for r in frame.itertuples():
+        name = f"{r.dtype} {getattr(r, 'shape', 'sweep')} {'M' if r.dtype != 'fp64' else 'K'}={int(r.m)} · {r.config}"
+        label = f"{'M' if r.dtype != 'fp64' else 'K'}={int(r.m)}"
+        kinds = [(r.bytes_source, r.intensity, False)] + ([("modeled", r.intensity_modeled, True)] if twins else [])
+        for source, intensity, hollow in kinds:
+            if intensity is None or not math.isfinite(intensity):
+                continue
+            out.append(WorkloadPoint(
+                name=f"{name} · {source} bytes", precision=r.dtype, isa_path=path[r.dtype], gops=float(r.gops),
+                intensity=float(intensity), bytes_source=source, mode=r.memory_mode, scope="1S", cores=cores, threads=cores,
+                memory_target=r.memory_target,
+                provenance={"campaign": r.campaign_id, "cv_percent": r.cv_percent, "pool_gib": getattr(r, "pool_gib", None),
+                            "series": series(r) if series else getattr(r, "shape", "fp64 sweep"),
+                            "label": "" if hollow else label, "status": "modeled twin" if hollow else "counted", "open": hollow},
+            ))
+    return out
+
+
+def counted_sweep_points(unc: pd.DataFrame, label: str = COUNTED_SWEEP_LABEL) -> pd.DataFrame:
+    """The counted FP64 intensity sweep (12 chains), one row per mode, tier, working set and K."""
+
+    d = unc[unc.benchmark.eq("roofline_sweep") & unc.notes.eq(label) & unc.accepted]
+    if d.empty:
+        return pd.DataFrame()
+    d = with_config(_with_measured(d))
+    keys = ["memory_mode", "config", "memory_target", "working_set_bytes", "k"]
+    out = d.groupby(keys).agg(
+        gops=("performance_gops", "median"),
+        gbs=("bandwidth_gbs", "median"),
+        measured_gbs=("measured_gbs", "median"),
+        intensity=("intensity_measured", "median"),
+        intensity_modeled=("arithmetic_intensity", "median"),
+        bytes_source=("bytes_source", "first"),
+        cv_percent=("performance_gops", _cv),
+        n_samples=("accepted", "size"),
+        campaign_id=("campaign_id", _ids),
+    ).reset_index()
+    out["dtype"] = "fp64"
+    out["m"] = out.k
+    out["pool_gib"] = out.working_set_bytes / 2**30
+    out["measured_over_modeled"] = out.intensity_modeled / out.intensity
+    return out
+
+
+def measured_memory_ceiling(unc: pd.DataFrame, mode: str, tier: str, access: str = "read", gib: float | None = None):
+    """Bandwidth ceiling in measured bytes: the best counted 56-core stream of ``access``.
+
+    Taken from the counted ceilings (``COUNTED_CEILING_LABELS``) on socket 0; Flat at 8 GiB,
+    Cache at ``gib`` (default 16 GiB, resident).  The rate is measured bytes over the window,
+    the same bytes that place the counted points.  Raises ``LookupError`` when nothing was
+    counted, so callers can fall back to ``memory_ceiling``.
+    """
+
+    from hwbench.roofline import MemoryCeiling
+
+    gib = gib if gib is not None else (8.0 if mode == "flat" else 16.0)
+    kernel = unc.benchmark.map(BANDWIDTH_KERNELS)
+    d = unc[unc.memory_mode.eq(mode) & unc.memory_target.eq(tier) & unc.notes.isin(COUNTED_CEILING_LABELS)
+            & kernel.isin(ACCESS_KERNELS[access]) & unc.threads.eq(56) & unc.socket.eq(0) & unc.accepted
+            & (unc.memory_socket.isna() | unc.memory_socket.eq(0))
+            & unc.working_set_bytes.div(2**30).sub(gib).abs().lt(0.5)]
+    if d.empty:
+        raise LookupError(f"no counted bandwidth for {mode}/{tier}/{access} at {gib} GiB")
+    d = _with_measured(d).assign(kernel=kernel)
+    d = d[d.measured_gbs.notna()]
+    if d.empty:
+        raise LookupError(f"no measured bytes for {mode}/{tier}/{access} at {gib} GiB")
+    med = d.groupby(["kernel", "campaign_id"]).agg(gbs=("measured_gbs", "median"), cv=("measured_gbs", _cv),
+                                                   source=("bytes_source", "first")).reset_index()
+    best = med.loc[med.gbs.idxmax()]
+    return MemoryCeiling(
+        kind="measured_peak", tier=tier, kernel=best.kernel, gbs=float(best.gbs), scope="1S", mode=mode,
+        working_set_gib=gib, source_campaign=best.campaign_id, cv_percent=None if pd.isna(best.cv) else float(best.cv),
+        note=f"bytes measured ({best.source})",
+    )
+
+
+def ceiling_or_modeled(unc: pd.DataFrame | None, ext: pd.DataFrame, thesis: pd.DataFrame, mode: str, tier: str,
+                       access: str = "read", at_gib: float | None = None):
+    """``measured_memory_ceiling`` when the counted re-runs measured it, else ``memory_ceiling``."""
+
+    if unc is not None and len(unc):
+        try:
+            return measured_memory_ceiling(unc, mode, tier, access, at_gib)
+        except LookupError:
+            pass
+    return memory_ceiling(ext, thesis, mode, tier, access=access, at_gib=at_gib)
+
+
+def measured_phase_regions(counted: pd.DataFrame, decode=(1, 16), prefill=(256, 4096), pad: float = 1.3,
+                           shape: str = "14336x4096", tier: str = "hbm", mode: str = "flat"):
+    """Decode and prefill intervals from measured intensity (``llm_phase_regions`` on counted bytes).
+
+    Uses the BF16 plain-layout points of ``counted_gemm_frame`` for one tier; empty when a
+    batch size at either end was not counted.
+    """
+
+    c = counted[counted.memory_mode.eq(mode) & counted.memory_target.eq(tier) & counted["dtype"].eq("bf16")
+                & counted.layout.eq("plain") & counted["shape"].eq(shape)]
+    at = c.groupby("m").intensity.median()
+    if not {decode[0], decode[1], prefill[0], prefill[1]} <= set(at.index):
+        return []
+    return [(at.loc[lo] / pad, at.loc[hi] * pad, label) for (lo, hi), label in ((decode, "decode"), (prefill, "prefill"))]
+
+
+# ------------------------------------------------- Cache mode: turbostat (and perf, once installed)
+def turbostat_validation(unc: pd.DataFrame) -> pd.DataFrame:
+    """turbostat against the perf session in the same records (Flat smoke, both sessions on).
+
+    One row per record: median over its samples of the turbostat package and DRAM power
+    over perf's RAPL power, and the turbostat uncore ratio minus the CHA clock.  Both read
+    the same RAPL counters, so the ratios check the interval bookkeeping; the uncore clocks
+    differ in kind (an instantaneous ratio against counted ticks).
+    """
+
+    d = unc[unc.memory_mode.eq("flat") & unc.ts_pkg_power_w.notna() & unc.pkg_power_w.notna()].copy()
+    if d.empty:
+        return pd.DataFrame()
+    d["pkg_ratio"] = d.ts_pkg_power_w / d.pkg_power_w
+    d["ram_ratio"] = d.ts_ram_power_w / d.ram_power_w
+    d["uncore_diff"] = d.ts_uncore_ghz - d.uncore_ghz
+    out = d.groupby(["notes", "benchmark", "memory_target", "threads"]).agg(
+        pkg_w_perf=("pkg_power_w", "median"), pkg_w_turbostat=("ts_pkg_power_w", "median"),
+        pkg_ratio=("pkg_ratio", "median"), ram_ratio=("ram_ratio", "median"),
+        uncore_ghz_perf=("uncore_ghz", "median"), uncore_diff=("uncore_diff", "median"),
+        intervals=("ts_intervals", "median"), coverage=("ts_coverage", "median"), n_samples=("ts_pkg_power_w", "size"),
+    ).reset_index()
+    out["seconds"] = (out.intervals / out.coverage * 0.1).round(1)
+    return out
+
+
+def _cache_frame(unc: pd.DataFrame, labels) -> pd.DataFrame:
+    d = unc[unc.memory_mode.eq("cache") & unc.notes.isin(labels) & unc.accepted]
+    if d.empty:
+        return d
+    d = _with_measured(d)
+    d["kernel"] = d.benchmark.map(BANDWIDTH_KERNELS)
+    d["working_set_gib"] = (d.working_set_bytes / 2**30).round(1)
+    d["power_w"] = d.pkg_power_w + d.ram_power_w
+    d["pj_per_byte"] = d.power_w / (d.measured_gbs * 1e9) * 1e12
+    if "nm_hit_rate" not in d:
+        d["nm_hit_rate"] = math.nan
+    if "far_bytes" not in d:
+        d["far_bytes"] = math.nan
+    d["far_gbs"] = d.far_bytes / d.elapsed_seconds / 1e9
+    return d
+
+
+def _cache_agg(d: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
+    return d.groupby(keys).agg(
+        gbs=("bandwidth_gbs", "median"),
+        measured_gbs=("measured_gbs", "median"),
+        bytes_source=("bytes_source", "first"),
+        hit_rate=("nm_hit_rate", "median"),
+        far_gbs=("far_gbs", "median"),
+        core_ghz=("ghz_effective", "median"),
+        uncore_ghz=("uncore_ghz", "median"),
+        pkg_w=("pkg_power_w", "median"),
+        ram_w=("ram_power_w", "median"),
+        pj_per_byte=("pj_per_byte", "median"),
+        power_source=("power_source", "first"),
+        cv_percent=("bandwidth_gbs", _cv),
+        n_samples=("accepted", "size"),
+        campaign=("campaign_id", _ids),
+        node=("node", "first"),
+    ).reset_index()
+
+
+def cache_stream_table(unc: pd.DataFrame) -> pd.DataFrame:
+    """Cache-mode streams against cores at 8 GiB (resident) and 96 GiB (spilled), with power and clocks.
+
+    From part ``ustreams`` on the Cache node.  ``measured_gbs`` is the measured traffic
+    (``bytes_source``: served bytes of the memory-side cache, or the cores' DRAM lines until
+    perf counts it); ``pj_per_byte`` is package plus DRAM energy of the computing socket per
+    measured byte.  Power and clocks come from turbostat (``power_source``).
+    """
+
+    d = _cache_frame(unc, U1_STREAMS)
+    if d.empty:
+        return pd.DataFrame()
+    return _cache_agg(d, ["working_set_gib", "kernel", "threads"])
+
+
+def cache_capacity_table(unc: pd.DataFrame) -> pd.DataFrame:
+    """Cache-mode streams at 56 cores over the working set (part ``ucapacity``, U3).
+
+    One row per kernel and working set: rate, measured traffic, hit rate and far (DDR)
+    traffic when the perf session counted them, clocks, power and energy per byte.
+    """
+
+    d = _cache_frame(unc, ["u3_read_capacity", "u3_triad_capacity", "u3_triad_nt_capacity"])
+    if d.empty:
+        return pd.DataFrame()
+    return _cache_agg(d, ["kernel", "working_set_gib"])
+
+
+def mode_power_comparison(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame) -> pd.DataFrame:
+    """The 56-core streams of both modes side by side: rate, power, clocks, energy per byte.
+
+    Flat rows come from U1 (controller bytes), Cache rows from ``ustreams`` on the Cache
+    node at 8 GiB (resident) and 96 GiB (spilled).  ``pj_per_byte`` divides package plus
+    DRAM power by the measured traffic of each mode.
+    """
+
+    rows = []
+    flat = power_table(unc_flat[unc_flat.memory_mode.eq("flat")]) if len(unc_flat) else pd.DataFrame()
+    if not flat.empty:
+        f = flat[flat.threads.eq(56) & flat.memory_target.isin(["hbm", "ddr"])]
+        ct = controller_table(unc_flat).set_index(["memory_target", "kernel", "threads"])
+        for r in f.itertuples():
+            key = (r.memory_target, r.kernel, 56)
+            rows.append(dict(config=f"Flat {r.memory_target.upper()}", working_set_gib=8.0, kernel=r.kernel, gbs=r.gbs,
+                             measured_gbs=ct.ctrl_gbs.get(key, math.nan), core_ghz=r.core_ghz, uncore_ghz=r.uncore_ghz,
+                             pkg_w=r.pkg_w, ram_w=r.ram_w, pj_per_byte=r.pj_per_byte, power_source="perf"))
+    cache = cache_stream_table(unc_cache)
+    if not cache.empty:
+        for r in cache[cache.threads.eq(56)].itertuples():
+            rows.append(dict(config=f"Cache, {r.working_set_gib:.0f} GiB", working_set_gib=r.working_set_gib, kernel=r.kernel,
+                             gbs=r.gbs, measured_gbs=r.measured_gbs, core_ghz=r.core_ghz, uncore_ghz=r.uncore_ghz, pkg_w=r.pkg_w,
+                             ram_w=r.ram_w, pj_per_byte=r.pj_per_byte, power_source=r.power_source))
+    return pd.DataFrame(rows)
+
+
+def decode_table_measured(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, unc: pd.DataFrame,
+                          shape: str = "14336x4096") -> pd.DataFrame:
+    """T5 at measured bytes: what a decode step (M = 1) moves, against the measured read ceiling.
+
+    Rows come from the counted re-runs (``ugemmconv``): Flat plain BF16, prepacked BF16 and
+    INT8 at 16x the on-chip capacity on HBM and DDR (controller bytes); Cache at the 16 GiB
+    (resident) and 96 GiB (spilled) pools (``bytes_source`` says how they were measured).
+    ``gbs`` is the measured traffic rate and ``modeled_gbs`` the tensor-size convention beside
+    it; ``read_gbs`` is the read-only kernel in the same bytes.  ``tokens_per_s`` is the
+    Llama-3.1-8B bound if every weight streamed at ``gbs``; ``j_per_token`` is the computing
+    socket's package plus DRAM energy for one token at that rate.  Falls back to
+    ``decode_table`` when nothing was counted.
+    """
+
+    counted = counted_gemm_frame(unc, shape=shape) if unc is not None and len(unc) else pd.DataFrame()
+    if counted.empty:
+        return decode_table(ext, thesis, theory, shape)
+    params = theory.model_parameters()
+    model_gb = {"bf16": params * 2 / 1e9, "int8": params * 1 / 1e9}
+    read = {
+        "Flat HBM": ceiling_or_modeled(unc, ext, thesis, "flat", "hbm"),
+        "Flat DDR": ceiling_or_modeled(unc, ext, thesis, "flat", "ddr"),
+        "Cache, 16 GiB": ceiling_or_modeled(unc, ext, thesis, "cache", "effective_cache", at_gib=16),
+        "Cache, 96 GiB": ceiling_or_modeled(unc, ext, thesis, "cache", "effective_cache", at_gib=96),
+    }
+    rows = []
+    for tier, c in read.items():
+        rows.append(dict(tier=tier, precision="—", layout="read-only kernel", pool="—", gbs=c.gbs, modeled_gbs=math.nan,
+                         bytes_source=c.note.removeprefix("bytes measured (").rstrip(")") if c.note else "modeled",
+                         power_w=math.nan, read_gbs=c.gbs))
+    m1 = counted[counted.m.eq(1)]
+    for r in m1.itertuples():
+        tier = (f"Flat {r.memory_target.upper()}" if r.memory_mode == "flat" else f"Cache, {r.pool_gib:.0f} GiB")
+        if tier not in read:
+            continue
+        pool = f"{r.pool_x:.0f}× on-chip" if r.memory_mode == "flat" else f"{r.pool_gib:.0f} GiB"
+        rows.append(dict(tier=tier, precision=r.dtype, layout=r.layout, pool=pool, gbs=r.measured_gbs, modeled_gbs=r.gbs,
+                         bytes_source=r.bytes_source, power_w=r.power_w, read_gbs=read[tier].gbs))
+    out = pd.DataFrame(rows)
+    out["of_read_ceiling"] = out.gbs / out.read_gbs
+    out["tokens_per_s"] = [g / model_gb.get(p, model_gb["bf16"]) for g, p in zip(out.gbs, out.precision)]
+    out["j_per_token"] = out.power_w / out.tokens_per_s
+    order = {t: i for i, t in enumerate(read)}
+    out["_o"] = out.tier.map(order)
+    return out.sort_values(["_o", "layout", "precision"], key=lambda c: c if c.name == "_o" else c.map(lambda v: (v != "read-only kernel", v))).drop(columns="_o").reset_index(drop=True)

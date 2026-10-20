@@ -8,7 +8,9 @@ claim no longer holds, so prose cannot drift away from the data again.
 Claims that describe a mechanism say so explicitly ("inferred", "not measured").  Since
 2026-10-19 the Flat node allows a privileged system-wide ``perf stat``; ``uncore_counters``
 holds the claims that its controller, UPI, power and clock counters measure (notebook 06).
-Cache mode stays without them.
+Since 2026-10-20 the Cache node allows the same, but has no ``perf`` installed: its
+records carry turbostat power and clocks (``turbostat_matches_perf``, ``cache_counters``),
+and its traffic is the cores' own DRAM line counts until perf is installed.
 """
 
 from __future__ import annotations
@@ -1505,6 +1507,136 @@ def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Pa
         "counted": counted(ext, thesis),
         "literature": literature(ext, thesis),
     }
+
+
+def turbostat_matches_perf(unc: pd.DataFrame) -> list[Claim]:
+    """turbostat's power and uncore clock against the perf session in the same records."""
+
+    tv = report.turbostat_validation(unc)
+    if tv.empty:
+        return []
+    long = tv[tv.seconds.ge(1.0)]
+    return [
+        Claim(
+            "turbostat_matches_perf",
+            bool(long.pkg_ratio.sub(1).abs().max() < 0.01 and tv.pkg_ratio.sub(1).abs().max() < 0.025
+                 and tv.ram_ratio.sub(1).abs().max() < 0.025 and tv.uncore_diff.abs().max() < 0.1),
+            f"turbostat, sampled every 100 ms beside the benchmark, gives the same package power as perf's RAPL counts: "
+            f"{_span(long.pkg_ratio, 3)}× in samples of one second or more and {_span(tv.pkg_ratio, 3)}× over every smoke record "
+            f"(DRAM {_span(tv.ram_ratio, 3)}×), and an uncore clock within {tv.uncore_diff.abs().max() * 1000:.0f} MHz of the CHA clockticks "
+            f"(an instantaneous ratio against an average). Where perf is missing (the Cache node) turbostat therefore stands in for "
+            "the power and clock half of the session; it cannot count traffic.",
+        )
+    ]
+
+
+def measured_intensity(unc: pd.DataFrame, shape: str = "14336x4096") -> list[Claim]:
+    """Measured against modeled intensity of the counted GEMM re-run (Flat controllers)."""
+
+    cg = report.counted_gemm_frame(unc, shape=shape)
+    cg = cg[cg.memory_mode.eq("flat")] if len(cg) else cg
+    if cg.empty:
+        return []
+    small = cg[cg.m.le(64)]
+    plain = cg[cg["dtype"].eq("bf16") & cg.layout.eq("plain")]
+    big = plain[plain.m.ge(128)]
+    hbm = plain[plain.memory_target.eq("hbm")].set_index("m")
+    i8 = cg[cg["dtype"].eq("int8") & cg.m.between(128, 512)]
+    bands = report.measured_phase_regions(cg, pad=1)
+    (d_lo, d_hi, _), (p_lo, p_hi, _) = bands
+    return [Claim(
+        "measured_intensity_gemm",
+        bool(small.measured_over_modeled.between(0.93, 1.0).all() and big.measured_over_modeled.min() > 1.15
+             and hbm.intensity.loc[4096] < 0.4 * hbm.intensity_modeled.loc[4096] and (i8.measured_over_modeled < 1).all()),
+        f"Measured at the memory controllers, the 14336×4096 GEMM moves {_span(small.measured_over_modeled)}× the modeled bytes for decode-sized batches "
+        f"(M ≤ 64, every precision and layout, both tiers): the modeled intensity is right to within {_pct(1 / small.measured_over_modeled.min() - 1)}, "
+        f"slightly low because a few percent of the weights are served on chip. From M = 128 the library re-reads the weights: plain BF16 moves "
+        f"{_span(big.measured_over_modeled)}× the modeled bytes, and its measured intensity stops at {_span(hbm.intensity.loc[[1024, 2048, 4096]], 0)} op/B "
+        f"(M = 1024–4096) instead of rising to {hbm.intensity_modeled.loc[4096]:.0f}. INT8 at M = 128–512 moves fewer bytes than modeled "
+        f"({_span(i8.measured_over_modeled)}×; its int32 output stays on chip). On the measured axis decode spans {d_lo:.1f}–{d_hi:.0f} op/B and prefill "
+        f"{p_lo:.0f}–{p_hi:.0f} op/B (Flat HBM, BF16), against {hbm.intensity_modeled.loc[256]:.0f}–{hbm.intensity_modeled.loc[4096]:.0f} op/B modeled.",
+    )]
+
+
+def decode_energy(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, unc: pd.DataFrame) -> list[Claim]:
+    """Energy per Llama-3.1-8B token at the measured decode streaming rate (Table 5)."""
+
+    dt = report.decode_table_measured(ext, thesis, theory, unc)
+    if "j_per_token" not in dt or dt.j_per_token.isna().all():
+        return []
+    g = dt[dt.j_per_token.notna()].set_index(["tier", "precision", "layout"]).j_per_token
+    hbm_b, hbm_i = g[("Flat HBM", "bf16", "plain")], g[("Flat HBM", "int8", "prepacked")]
+    ddr_b = g[("Flat DDR", "bf16", "plain")]
+    w = dt.set_index(["tier", "precision", "layout"]).power_w
+    pw_hbm, pw_ddr = w[("Flat HBM", "bf16", "plain")], w[("Flat DDR", "bf16", "plain")]
+    parts = [f"Flat HBM {hbm_b:.1f} J in BF16 and {hbm_i:.1f} J in INT8, Flat DDR {ddr_b:.1f} J in BF16"]
+    cache = {t: g[(t, "bf16", "plain")] for t in ("Cache, 16 GiB", "Cache, 96 GiB") if (t, "bf16", "plain") in g.index}
+    if cache:
+        parts.append("Cache " + " and ".join(f"{v:.1f} J ({t.split(', ')[1]})" for t, v in cache.items()) + " in BF16")
+    holds = hbm_b < ddr_b and hbm_i < 0.6 * hbm_b and all(v > hbm_b for v in cache.values())
+    return [Claim(
+        "decode_energy",
+        bool(holds),
+        "At the measured streaming rate of a decode step, one Llama-3.1-8B token costs the computing socket (package and DRAM, RAPL) "
+        + "; ".join(parts) + f". The package sits at its limit in every case, so the energy per token follows the streaming rate and the DRAM's own "
+        f"power: DDR costs {ddr_b / hbm_b:.1f}× HBM per BF16 token (it streams slower and its DIMMs draw {pw_ddr - pw_hbm:.0f} W more), INT8 needs "
+        f"{hbm_i / hbm_b:.2f}× the BF16 energy on HBM, and a model spilled out of the HBM cache costs the most. "
+        "This is the bound if every weight streamed at the 14336×4096 rate; the rest of the model streams slower.",
+    )]
+
+
+def cache_counters(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame) -> list[Claim]:
+    """Cache mode with turbostat power and clocks (hbm13), against the Flat node's perf session."""
+
+    cmp_ = report.mode_power_comparison(unc_flat, unc_cache)
+    cc = report.cache_capacity_table(unc_cache)
+    out: list[Claim] = []
+    if len(cmp_) and cmp_.config.eq("Cache, 8 GiB").any():
+        c = cmp_.set_index(["config", "kernel"])
+        res = c.loc["Cache, 8 GiB"]
+        hbm = c.loc["Flat HBM"]
+        ratio = res.pj_per_byte / hbm.pj_per_byte
+        out.append(Claim(
+            "cache_resident_power",
+            bool(res.pkg_w.sub(350).abs().max() < 10 and abs(ratio["read"] - 1) < 0.1 and ratio["copy_nt"] > 1.15),
+            f"Resident in the HBM cache (8 GiB, 56 cores) the streams run at the package limit like Flat HBM ({_span(res.pkg_w, 0)} W, cores at "
+            f"{_span(res.core_ghz)} GHz, uncore at {_span(res.uncore_ghz)} GHz) and read costs the same energy per byte "
+            f"({res.pj_per_byte['read']:.0f} against {hbm.pj_per_byte['read']:.0f} pJ/B on Flat HBM). Non-temporal copy is the exception: "
+            f"{res.measured_gbs['copy_nt']:.0f} against {hbm.measured_gbs['copy_nt']:.0f} GB/s and {ratio['copy_nt']:.2f}× the energy per byte, "
+            "so streaming stores lose most in Cache mode, where every write still goes through the memory-side cache.",
+        ))
+    if len(cc):
+        r = cc[cc.kernel.eq("read")].set_index("working_set_gib")
+        ddr = cmp_.set_index(["config", "kernel"]).loc[("Flat DDR", "read")] if len(cmp_) else None
+        if ddr is not None and {96.0, 128.0} <= set(r.index):
+            out.append(Claim(
+                "cache_spilled_energy",
+                bool(r.pj_per_byte[96.0] > 1.8 * ddr.pj_per_byte and r.pkg_w[96.0] > 340),
+                f"Spilled, the read kernel costs {r.pj_per_byte[96.0]:.0f} pJ/B at 96 GiB and {r.pj_per_byte[128.0]:.0f} at 128 GiB, "
+                f"{r.pj_per_byte[96.0] / ddr.pj_per_byte:.1f}–{r.pj_per_byte[128.0] / ddr.pj_per_byte:.1f}× Flat DDR ({ddr.pj_per_byte:.0f} pJ/B) for "
+                f"{r.measured_gbs[96.0]:.0f} and {r.measured_gbs[128.0]:.0f} GB/s: the package still draws {_span(r.pkg_w.loc[[96.0, 128.0]], 0)} W, "
+                f"with the cores at {_span(r.core_ghz.loc[[96.0, 128.0]])} GHz and the uncore at {_span(r.uncore_ghz.loc[[96.0, 128.0]])} GHz. "
+                "A model that does not fit the HBM cache costs more than twice the energy per weight byte of the same model placed in Flat DDR.",
+            ))
+        kernels = [k for k in ("read", "triad", "triad_nt") if k in set(cc.kernel)]
+        rise = {}
+        for k in kernels:
+            t = cc[cc.kernel.eq(k)].set_index("working_set_gib")
+            if {8.0, 24.0, 32.0} <= set(t.index):
+                rise[k] = (t.ram_w[24.0] - t.ram_w[8.0], t.ram_w[32.0] - t.ram_w[8.0], t.gbs[32.0] / t.gbs[8.0], t)
+        if rise:
+            t_read = rise.get("read", next(iter(rise.values())))[3]
+            first_drop = next((g for g in sorted(t_read.index) if t_read.gbs[g] < 0.97 * t_read.gbs[8.0]), None)
+            out.append(Claim(
+                "cache_dram_power_onset",
+                bool(all(abs(a) < 2.5 and b > 3.0 for a, b, _, _ in rise.values()) and all(rise[k][2] > 0.97 for k in ("read", "triad") if k in rise)),
+                "The DRAM's own power (RAPL, the DDR DIMMs only) shows when Cache mode starts going to DDR: up to 24 GiB it stays within "
+                f"{max(abs(a) for a, _, _, _ in rise.values()):.1f} W of the 8 GiB level, at 32 GiB it is {_span(pd.Series([b for _, b, _, _ in rise.values()]), 1)} W higher "
+                f"for every kernel, while read and Triad still run at {_span(pd.Series([rise[k][2] for k in ('read', 'triad') if k in rise]))}× their 8 GiB rate; "
+                f"read loses 3% only from {first_drop:.0f} GiB. DDR traffic therefore begins at half the 64 GiB cache, before the bandwidth shows it, "
+                "as conflict misses of a direct-mapped cache would (the miss count itself needs the tag counters, which need perf on the Cache node).",
+            ))
+    return out
 
 
 def uncore_claims(unc: pd.DataFrame, ext: pd.DataFrame, theory: Theory, data_pattern: pd.DataFrame | None = None) -> dict[str, list[Claim]]:

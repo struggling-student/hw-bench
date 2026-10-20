@@ -128,6 +128,7 @@ def roofline_figure(
     regions: list[tuple[float, float, str]] | None = None,
     point_labels: bool = False,
     open_label: str = "hollow: first sweep at M ≤ 32, weight pool too small (bytes overstated)",
+    x_title: str = "Operations per byte of memory traffic (modeled)",
 ):
     """Memory slopes, compute plateaus and achieved points on one log-log plane.
 
@@ -243,7 +244,7 @@ def roofline_figure(
             x=[None], y=[None], mode="markers", name=open_label,
             marker=dict(symbol="circle-open", size=9, color=MUTED, line=dict(color=MUTED, width=2)),
         )
-    style(fig, title, "Operations per byte of memory traffic (modeled)", "TOP/s", height)
+    style(fig, title, x_title, "TOP/s", height)
     fig.update_xaxes(type="log", range=[np.log10(x_range[0]), np.log10(x_range[1])], dtick=1, tickformat="~g")
     fig.update_yaxes(type="log", dtick=1, tickformat="~g")
     fig.update_layout(margin=dict(l=85, r=40, t=95, b=125))
@@ -831,6 +832,88 @@ def power_clock_figure(pt: pd.DataFrame):
         fig.update_xaxes(title_text="Cores", type="log", tickmode="array", tickvals=[1, 14, 28, 56], ticktext=["1", "14", "28", "56"], row=1, col=col)
     fig.update_yaxes(title_text="W", row=1, col=1)
     fig.update_yaxes(title_text="GHz (solid core, dotted uncore)", row=1, col=2)
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.25, font=dict(size=12)))
+    return fig
+
+
+CACHE_DASH = {8.0: "solid", 96.0: "dash"}
+CACHE_KERNEL_SYMBOLS = {"read": "circle", "triad": "square", "triad_nt": "diamond", "copy_nt": "diamond"}
+CACHE_KERNEL_NAMES = {"read": "read", "triad": "Triad", "triad_nt": "Triad, non-temporal", "copy_nt": "copy, non-temporal"}
+
+
+def cache_power_figure(cs: pd.DataFrame):
+    """Cache mode: package power (left) and core and uncore clocks (right) against cores.
+
+    ``cs`` is ``report.cache_stream_table``; solid lines are the resident case (8 GiB), dashed
+    the spilled one (96 GiB).  On the right, the uncore line is dotted.  Power and clocks come
+    from turbostat when the node has no perf session.
+    """
+
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("Package power, computing socket", "Clocks"), horizontal_spacing=0.1)
+    color = CONFIG_COLORS["cache"]
+    for gib, dash in CACHE_DASH.items():
+        for kernel, symbol in CACHE_KERNEL_SYMBOLS.items():
+            part = cs[cs.working_set_gib.sub(gib).abs().lt(0.5) & cs.kernel.eq(kernel)].sort_values("threads")
+            if part.empty:
+                continue
+            label = f"{gib:.0f} GiB {CACHE_KERNEL_NAMES[kernel]}"
+            marker = dict(size=9, symbol=symbol, color=color, line=dict(color=SURFACE, width=1.5))
+            fig.add_scatter(x=part.threads, y=part.pkg_w, mode="lines+markers", name=label, legendgroup=label,
+                            line=dict(color=color, width=1.5, dash=dash), marker=marker, row=1, col=1)
+            fig.add_scatter(x=part.threads, y=part.core_ghz, mode="lines+markers", name=label, legendgroup=label, showlegend=False,
+                            line=dict(color=color, width=1.5, dash=dash), marker=marker, row=1, col=2)
+            fig.add_scatter(x=part.threads, y=part.uncore_ghz, mode="lines+markers", name=f"{label} · uncore", legendgroup=label,
+                            showlegend=False, line=dict(color=MUTED, width=1.5, dash="dot"), marker=dict(size=7, symbol=symbol, color=MUTED),
+                            row=1, col=2)
+    style(fig, "Power and clocks of the streams · Cache, socket 0 · solid resident (8 GiB), dashed spilled (96 GiB)", "", "", 560)
+    for col in (1, 2):
+        fig.update_xaxes(title_text="Cores", type="log", tickmode="array", tickvals=[1, 14, 28, 56], ticktext=["1", "14", "28", "56"], row=1, col=col)
+    fig.update_yaxes(title_text="W", row=1, col=1)
+    fig.update_yaxes(title_text="GHz (colour core, grey dotted uncore)", row=1, col=2)
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.25, font=dict(size=12)))
+    return fig
+
+
+def cache_capacity_counters_figure(cc: pd.DataFrame, capacity_gib: float = 64.0):
+    """Cache mode at 56 cores against the working set: traffic, DRAM power, clocks.
+
+    ``cc`` is ``report.cache_capacity_table``.  Left: measured traffic (filled) and the kernel's
+    modeled rate (open) and, when counted, the far (DDR) traffic (dotted); middle: the DRAM's
+    own power (the DDR DIMMs; the package range is in the panel title); right: core (solid)
+    and uncore (dotted) clocks.  The vertical line is the HBM cache capacity of one socket.
+    """
+
+    pkg = f"package {cc.pkg_w.min():.0f}–{cc.pkg_w.max():.0f} W throughout"
+    fig = make_subplots(rows=1, cols=3, subplot_titles=("Traffic", f"DRAM power ({pkg})", "Clocks"), horizontal_spacing=0.07)
+    color = CONFIG_COLORS["cache"]
+    for kernel, symbol in CACHE_KERNEL_SYMBOLS.items():
+        part = cc[cc.kernel.eq(kernel)].sort_values("working_set_gib")
+        if part.empty:
+            continue
+        label = CACHE_KERNEL_NAMES[kernel]
+        marker = dict(size=9, symbol=symbol, color=color, line=dict(color=SURFACE, width=1.5))
+        x = part.working_set_gib
+        fig.add_scatter(x=x, y=part.measured_gbs, mode="lines+markers", name=f"{label} · measured", legendgroup=label,
+                        line=dict(color=color, width=1.5), marker=marker, row=1, col=1)
+        fig.add_scatter(x=x, y=part.gbs, mode="markers", name=f"{label} · modeled", legendgroup=label,
+                        marker=dict(size=9, symbol=f"{symbol}-open", color=color, line=dict(color=color, width=2)), row=1, col=1)
+        if part.far_gbs.notna().any():
+            fig.add_scatter(x=x, y=part.far_gbs, mode="lines+markers", name=f"{label} · far (DDR)", legendgroup=label,
+                            line=dict(color=CONFIG_COLORS["flat_ddr"], width=1.5, dash="dot"), marker=dict(size=7, symbol=symbol, color=CONFIG_COLORS["flat_ddr"]), row=1, col=1)
+        fig.add_scatter(x=x, y=part.ram_w, mode="lines+markers", name=f"{label} · DRAM", legendgroup=label, showlegend=False,
+                        line=dict(color=color, width=1.5), marker=marker, row=1, col=2)
+        fig.add_scatter(x=x, y=part.core_ghz, mode="lines+markers", name=label, legendgroup=label, showlegend=False,
+                        line=dict(color=color, width=1.5), marker=marker, row=1, col=3)
+        fig.add_scatter(x=x, y=part.uncore_ghz, mode="lines+markers", name=f"{label} · uncore", legendgroup=label, showlegend=False,
+                        line=dict(color=MUTED, width=1.5, dash="dot"), marker=dict(size=7, symbol=symbol, color=MUTED), row=1, col=3)
+    for col in (1, 2, 3):
+        fig.add_vline(x=capacity_gib, line=dict(color=MUTED, width=1, dash="dash"), row=1, col=col)
+        fig.update_xaxes(title_text="Working set (GiB)", type="log", tickmode="array", tickvals=[8, 16, 32, 64, 128],
+                         ticktext=["8", "16", "32", "64", "128"], row=1, col=col)
+    style(fig, "Cache mode against the working set · 56 cores, socket 0 · dashed line: HBM cache of one socket (64 GiB)", "", "", 560)
+    fig.update_yaxes(title_text="GB/s", row=1, col=1)
+    fig.update_yaxes(title_text="W", row=1, col=2)
+    fig.update_yaxes(title_text="GHz (colour core, grey dotted uncore)", row=1, col=3)
     fig.update_layout(legend=dict(orientation="h", x=0, y=-0.25, font=dict(size=12)))
     return fig
 
