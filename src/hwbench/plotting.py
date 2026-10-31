@@ -918,6 +918,89 @@ def cache_capacity_counters_figure(cc: pd.DataFrame, capacity_gib: float = 64.0)
     return fig
 
 
+FAMILY_SYMBOLS = {"compute peaks": "x", "GEMM": "circle", "FP64 sweep": "square", "chase": "triangle-up", "streams": "diamond"}
+MODE_COLORS = {"flat": INK_2, "cache": CONFIG_COLORS["cache"]}
+MODE_NAMES = {"flat": "Flat (perf)", "cache": "Cache (turbostat)"}
+
+
+def uncore_coupling_figure(frame: pd.DataFrame, fit: pd.DataFrame):
+    """The socket that runs nothing: its package power against its uncore clock (left), and that clock against the computing socket's (right).
+
+    ``frame`` is ``report.uncore_coupling_frame`` (one marker per one-second sample), ``fit`` is
+    ``report.uncore_coupling_fit``.  Colour is the memory mode (Cache is the Cache hue, Flat is
+    neutral because the points mix both tiers); marker shape is the workload family on socket 0.
+    The dashed line on the left is the least-squares fit of each mode, the dotted line on the
+    right is equal clocks.
+    """
+
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("Package power of the socket that runs nothing", "Its uncore clock follows the computing socket's"),
+                        horizontal_spacing=0.1)
+    for mode, color in MODE_COLORS.items():
+        for family, symbol in FAMILY_SYMBOLS.items():
+            part = frame[frame.memory_mode.eq(mode) & frame.family.eq(family)]
+            if part.empty:
+                continue
+            name = f"{MODE_NAMES[mode]} · {family}"
+            marker = dict(size=7, symbol=symbol, color=color, opacity=0.55, line=dict(color=color, width=1 if symbol == "x" else 0))
+            fig.add_scatter(x=part.uncore_ghz_s1, y=part.pkg_power_w_s1, mode="markers", name=name, legendgroup=name, marker=marker, row=1, col=1)
+            fig.add_scatter(x=part.uncore_ghz_s0, y=part.uncore_ghz_s1, mode="markers", name=name, legendgroup=name, showlegend=False, marker=marker, row=1, col=2)
+    for r in fit.itertuples():
+        grid = np.array([0.8, 2.5])
+        fig.add_scatter(x=grid, y=r.slope_w_per_ghz * grid + r.intercept_w, mode="lines", showlegend=False,
+                        line=dict(color=MODE_COLORS[r.memory_mode], width=2, dash="dash"), row=1, col=1)
+    fig.add_scatter(x=[0.8, 2.5], y=[0.8, 2.5], mode="lines", showlegend=False, line=dict(color=MUTED, width=1, dash="dot"), row=1, col=2)
+    style(fig, "The socket that runs nothing is not idle · socket 0 computes on its own memory", "", "", 600)
+    fig.update_xaxes(title_text="Uncore clock of socket 1 (GHz)", row=1, col=1)
+    fig.update_yaxes(title_text="Package power of socket 1 (W)", row=1, col=1)
+    fig.update_xaxes(title_text="Uncore clock of socket 0, the computing socket (GHz)", row=1, col=2)
+    fig.update_yaxes(title_text="Uncore clock of socket 1 (GHz)", row=1, col=2)
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.3, font=dict(size=12)))
+    return fig
+
+
+ENERGY_TIERS = {
+    "Flat HBM": (CONFIG_COLORS["flat_hbm"], "circle"),
+    "Flat DDR": (CONFIG_COLORS["flat_ddr"], "square"),
+    "Cache, 16 GiB": (CONFIG_COLORS["cache"], "diamond"),
+    "Cache, 96 GiB": (CONFIG_COLORS["cache"], "diamond-open"),
+}
+
+
+def energy_roofline_figure(et: pd.DataFrame):
+    """Energy against the work's shape, Flat and Cache: J per token over the batch size (left), pJ per operation over intensity (right).
+
+    ``et`` is ``report.energy_table``.  Left: the 14336×4096 BF16 GEMM at M = 1 (decode) to
+    4096 (prefill).  Right: the counted FP64 sweep against its measured intensity, the
+    energy counterpart of the roofline.  Solid lines are the computing socket (package plus
+    DRAM), dotted lines the node (both sockets); Cache resident is solid-filled, Cache spilled
+    open.  Hue is the memory configuration.
+    """
+
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("Energy per token · BF16 GEMM 14336×4096", "Energy per operation · FP64 sweep"),
+                        horizontal_spacing=0.1)
+    gemm = et[et.kind.eq("gemm") & et.precision.eq("bf16") & et.layout.eq("plain")]
+    sweep = et[et.kind.eq("sweep")]
+    for tier, (color, symbol) in ENERGY_TIERS.items():
+        for frame, x, ycols, col in ((gemm, "x", ("j_per_token", "j_per_token_node"), 1), (sweep, "intensity", ("pj_per_op", "pj_per_op_node"), 2)):
+            part = frame[frame.tier.eq(tier)].sort_values("x")
+            if part.empty:
+                continue
+            for ycol, dash in zip(ycols, ("solid", "dot")):
+                scope = "socket" if dash == "solid" else "node"
+                fig.add_scatter(x=part[x], y=part[ycol], mode="lines+markers", name=f"{tier} · {scope}", legendgroup=f"{tier} · {scope}",
+                                showlegend=col == 1, line=dict(color=color, width=1.5, dash=dash),
+                                marker=dict(size=8 if dash == "solid" else 5, symbol=symbol, color=color, line=dict(color=color, width=1.5)),
+                                row=1, col=col)
+    style(fig, "Flat against Cache at equal work · computing socket (solid) and node (dotted), idle floor included", "", "", 620)
+    ticks = lambda values: dict(type="log", tickmode="array", tickvals=values, ticktext=[f"{v:g}" for v in values])  # noqa: E731
+    fig.update_xaxes(title_text="Batch size M (tokens per weight pass)", **ticks([1, 4, 16, 64, 256, 1024, 4096]), row=1, col=1)
+    fig.update_yaxes(title_text="J per Llama-3.1-8B token", **ticks([0.1, 0.3, 1, 3, 10, 30, 100]), row=1, col=1)
+    fig.update_xaxes(title_text="Operations per byte (measured)", **ticks([0.125, 1, 8, 64, 128]), row=1, col=2)
+    fig.update_yaxes(title_text="pJ per operation", **ticks([100, 300, 1000, 3000, 10000, 30000]), row=1, col=2)
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.3, font=dict(size=12)))
+    return fig
+
+
 def uncore_timeline_figure(series: pd.DataFrame, tier: str, title: str):
     """Controller bandwidth, package power and uncore clock per 100 ms interval of one record.
 

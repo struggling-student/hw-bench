@@ -168,16 +168,17 @@ table(report.ridge_table(ext, thesis, unc), 1)
 **What the roofline says about decoding.** The weights of a decoder-only model are read once per generated token, so the read ceiling gives a bound on single-sequence decode that does not depend on the compute path.
 """),
     code("""
-say_claims(claims.decode_bound(ext, thesis, theory), ['decode_bound', 'decode_far_below_ridge'])
+say_claims(claims.decode_bound(ext, thesis, theory, unc), ['decode_bound', 'decode_far_below_ridge'])
 """),
     md("""
-**Table 5 — what a decode step streams, in measured bytes.** The 14336×4096 projection at M = 1 against the read ceiling of its tier, both from counted runs. *GB/s* is the measured traffic (*bytes*: `uncore_cas` = every controller channel on Flat, the served bytes of the memory-side cache in Cache mode; `pmu_ocr` = the cores' DRAM line counts, used in Cache mode while its node has no `perf`); *modeled GB/s* is the tensor-size convention beside it. Flat rows use a pool of 16× the on-chip capacity; Cache rows the 16 GiB (resident) and 96 GiB (spilled) pools. *Tokens/s* is the Llama-3.1-8B bound if every weight streamed at this rate (8.03 billion weights, 2 bytes in BF16, 1 in INT8; read-only rows use BF16); it is optimistic for the whole model, since the 4096×4096 projections stream slower. *J/token* is the computing socket's package and DRAM energy per token at that rate (RAPL; turbostat on the Cache node).
+**Table 5 — what a decode step streams, in measured bytes.** The 14336×4096 projection at M = 1 against the read ceiling of its tier, both from counted runs. *GB/s* is the measured traffic (*bytes*: `uncore_cas` = every controller channel on Flat, the served bytes of the memory-side cache in Cache mode; `pmu_ocr` = the cores' DRAM line counts, used in Cache mode while its node has no `perf`); *modeled GB/s* is the tensor-size convention beside it. Flat rows use a pool of 16× the on-chip capacity; Cache rows the 16 GiB (resident) and 96 GiB (spilled) pools. *Tokens/s* is the Llama-3.1-8B bound if every weight streamed at this rate (8.03 billion weights, 2 bytes in BF16, 1 in INT8; read-only rows use BF16); it is optimistic for the whole model, since the 4096×4096 projections stream slower. *J/token* is the computing socket's package and DRAM energy per token at that rate (RAPL; turbostat on the Cache node) and *J/token, node* that of both sockets: the other socket draws 130–230 W while this one computes, because its uncore clock follows (notebook 06, section 11). Both include the idle floor.
 """),
     code("""
 dt = report.decode_table_measured(ext, thesis, theory, unc)
-table(dt.rename(columns={'gbs': 'GB/s', 'modeled_gbs': 'modeled GB/s', 'counted_gbs': 'counted GB/s', 'bytes_source': 'bytes', 'power_w': 'W', 'read_gbs': 'read ceiling GB/s',
-                         'of_read_ceiling': 'of read ceiling', 'tokens_per_s': 'tokens/s bound', 'j_per_token': 'J/token'}), 2)
-say_claims(claims.decode_bound(ext, thesis, theory), ['decode_achieved'])
+table(dt.rename(columns={'gbs': 'GB/s', 'modeled_gbs': 'modeled GB/s', 'counted_gbs': 'counted GB/s', 'bytes_source': 'bytes', 'power_w': 'W', 'node_w': 'node W',
+                         'read_gbs': 'read ceiling GB/s', 'of_read_ceiling': 'of read ceiling', 'tokens_per_s': 'tokens/s bound', 'j_per_token': 'J/token',
+                         'j_per_token_node': 'J/token, node'}), 2)
+say_claims(claims.decode_bound(ext, thesis, theory, unc), ['decode_achieved'])
 say_claims(claims.decode_energy(ext, thesis, theory, unc))
 """),
     md("""
@@ -614,6 +615,16 @@ table(rt[rt.socket == 0][['kernel', 'memory_target', 'threads', 'gbs_local', 'gb
     md("""
 Bind memory and CPUs to the same socket for bandwidth-bound work.
 
+**The serving socket.** The privileged counters of notebook 06 also give the package power, uncore clock and power-limit cycles of the socket whose memory is read (*serving*), beside those of the socket that computes. Local reads have both on socket 0; for remote reads the computing socket is 0 and the serving socket is 1.
+"""),
+    code("""
+unc_flat = report.load_uncore(mode='flat')
+rc = report.remote_counter_table(unc_flat)
+table(rc[rc.kernel.isin(['read', 'triad_nt']) & rc.threads.isin([14, 56])][['memory_target', 'kernel', 'threads', 'placement', 'gbs', 'ctrl_over_modeled',
+      'pkg_w', 'uncore_ghz', 'power_limited', 'serving_pkg_w', 'serving_uncore_ghz', 'serving_power_limited']], 2)
+say_claims(claims.uncore_remote(unc_flat), ['remote_duplicate_reads'])
+"""),
+    md("""
 ## 2. Two sockets, two processes
 
 Each pair completes initialization and warm-up, then synchronizes readiness before a shared clock window. Efficiency is the pair's aggregate throughput divided by the sum of the isolated socket rates.
@@ -797,7 +808,7 @@ NOTEBOOKS["05_roofline_atlas"] = [
 
 **Question.** Where do the measured compute and bandwidth ceilings meet for each precision and memory configuration, and where do achieved kernels sit relative to them?
 
-Line style tells the origin of a ceiling: **dashed** = theoretical (vendor or derived), **solid** = best measured by a dedicated kernel, **dotted** = what a library kernel (oneDNN GEMM) achieved. Each memory ceiling has one purpose. Sections 1 and 3 draw the **ERT reference envelope**: the best sustained rate of every kernel (read-only, Triad, non-temporal Triad, copy), which on Flat HBM is copy. Every LLM statement uses the **read-only** ceiling (weights are only read): the GEMM figures here, the headline roofline, Table 2 and the decode bound of the master notebook. The FP64 sweep uses the **copy** ceiling (it loads one array and stores another), and Cache mode is read at a stated working set. Sections 1 to 3 are envelopes in the kernels' modeled bytes. The achieved points of sections 2, 4 and 5 come from the counted re-runs (notebook 06): **their intensity is measured** (every DDR and HBM controller channel on Flat; the cores' DRAM line counts in Cache mode while its node has no `perf`), each with a hollow twin at its modeled intensity, and they are drawn against ceilings in the same measured bytes. Section 6 lists every filled point that lies above its own roofline.
+Line style tells the origin of a ceiling: **dashed** = theoretical (vendor or derived), **solid** = best measured by a dedicated kernel, **dotted** = what a library kernel (oneDNN GEMM) achieved. Each memory ceiling has one purpose. Sections 1 and 3 draw the **ERT reference envelope**: the best sustained rate of every kernel (read-only, Triad, non-temporal Triad, copy), which on Flat HBM is copy. Every LLM statement uses the **read-only** ceiling (weights are only read): the GEMM figures here, the headline roofline, Table 2 and the decode bound of the master notebook. The FP64 sweep uses the **copy** ceiling (it loads one array and stores another), and Cache mode is read at a stated working set. Sections 1 and 3 are envelopes in the kernels' modeled bytes; the Cache ceilings of section 2, which the all-configurations plane shares, are the counted streams of the Cache node, so they sit on the same bytes as the points. The achieved points of sections 2, 4 and 5 come from the counted re-runs (notebook 06): **their intensity is measured** (every DDR and HBM controller channel on Flat; the cores' DRAM line counts in Cache mode while its node has no `perf`), each with a hollow twin at its modeled intensity, and they are drawn against ceilings in the same measured bytes. Section 6 lists every filled point that lies above its own roofline.
 """),
     code(setup("05_roofline_atlas") + "\nunc = report.load_uncore()\ncounted = report.counted_gemm_frame(unc)\ncsweep = report.counted_sweep_points(unc)\nMEASURED = dict(x_title='Operations per byte of measured memory traffic', open_label='hollow: the same point at modeled intensity')"),
     code("""
@@ -828,12 +839,13 @@ say_claims(claims.ridges(ext, thesis, theory), ['ridge_points'])
 ## 2. Cache mode, one socket
 """),
     code("""
-resident = report.memory_ceiling(ext, thesis, 'cache', 'effective_cache', access='read', at_gib=16)
-spilled = report.memory_ceiling(ext, thesis, 'cache', 'effective_cache', at_gib=96)
+# Counted streams of the Cache node where they exist (the measured axis of the points and bands), else the modeled envelope.
+resident = report.ceiling_or_modeled(unc, ext, thesis, 'cache', 'effective_cache', access='read', at_gib=16)
+spilled = report.ceiling_or_modeled(unc, ext, thesis, 'cache', 'effective_cache', access='best', at_gib=96)
 fig = plotting.roofline_figure(theory_set(['amx_bf16', 'amx_int8'], '1S', 56) + compute_set('cache', '1S', 56), [resident, spilled],
                                title='Cache · one socket · data resident in HBM (16 GiB) and spilled to DDR (96 GiB)')
 figure(fig, 'atlas_cache_1s')
-table(pd.DataFrame([dict(case=c.tier, kernel=c.kernel, GBs=c.gbs, working_set_gib=c.working_set_gib) for c in (resident, spilled)]))
+table(pd.DataFrame([dict(case=c.tier, kernel=c.kernel, GBs=c.gbs, working_set_gib=c.working_set_gib, bytes=c.note or 'modeled') for c in (resident, spilled)]))
 """),
     code("""
 cg = counted[counted.memory_mode == 'cache'] if len(counted) else counted
@@ -1016,7 +1028,9 @@ NOTEBOOKS["06_uncore_power_and_clocks"] = [
 
 **How it was measured.** Since 2026-10-19 the Flat node (`cresco8-hbm14`) allows `sudo perf stat` without a password; the benchmark itself still cannot open uncore events (`perf_event_paranoid` = 2). Each record runs one system-wide `perf stat -a --per-socket -I 100` beside the benchmark (`hwbench.uncore`): the counters are enabled once before the warm-up, read every 100 ms, and disabled once after the last sample. Perf enables its counters one at a time (about 110 ms, socket 0 first), so the counters run continuously and each one-second sample takes the intervals that lie entirely inside it (eight or nine of ten); the disable, which takes 5 ms, places perf's intervals on the benchmark's clock. Events: DDR CAS (`uncore_imc`, 64 B), HBM CAS (`uncore_type_14`, the 32 HBM channel controllers per socket, 32 B, identified with a read stream of known size), UPI data flits, M2M directory updates, package and DRAM energy (RAPL), the CHA clock (uncore frequency) and the PCU's power- and thermal-limit cycles. The probes behind these choices are in `data/probes/uncore-20261019/`.
 
-Sections 1 to 8 are the Flat node. Since 2026-10-20 the Cache node `cresco8-hbm13` allows the same commands, but `perf` is not installed there, so its records carry `turbostat` instead (`hwbench.turbostat`: package and DRAM power from the same RAPL counters, the uncore ratio, temperature, in 100 ms intervals placed on the benchmark's clock); section 9 checks turbostat against perf on the Flat node, section 10 is Cache mode. These campaigns are kept apart from the rates of the other notebooks (`uncore_campaigns` in `configs/analysis.json`).
+Sections 1 to 8 are the Flat node, read for the socket that computes; section 11 reads the socket that runs nothing and section 12 compares the energy of the two modes. Since 2026-10-20 the Cache node `cresco8-hbm13` allows the same commands, but `perf` is not installed there, so its records carry `turbostat` instead (`hwbench.turbostat`: package and DRAM power from the same RAPL counters, the uncore ratio, temperature, in 100 ms intervals placed on the benchmark's clock); section 9 checks turbostat against perf on the Flat node, section 10 is Cache mode.
+
+Every energy figure is stated at one of two RAPL scopes, both including the idle floor: the **computing socket** (package plus DRAM power of the socket that runs the benchmark, per byte its memory controllers moved) and the **node** (package plus DRAM of both sockets, per byte every controller moved). A third, wall-power scope (ipmitool) is not measured yet. These campaigns are kept apart from the rates of the other notebooks (`uncore_campaigns` in `configs/analysis.json`).
 """),
     code(setup("06_uncore_power_and_clocks") + "\nunc = report.load_uncore(mode='flat')\nucache = report.load_uncore(mode='cache')\nU1 = claims.uncore_streams(unc, theory, ext)\nDATA_PATTERN_CAMPAIGN = ctx.policy['data_pattern_campaign']"),
     md("""
@@ -1039,7 +1053,7 @@ The same records, read for package power, DRAM power, the core clock (cycles of 
     code("""
 pt = report.power_table(unc)
 figure(plotting.power_clock_figure(pt), 'power_and_clocks')
-table(pt[pt.memory_target.ne('registers')].drop(columns=['gops', 'pj_per_op', 'other_pkg_w']), 2)
+table(pt[pt.memory_target.ne('registers')].drop(columns=['gops', 'pj_per_op', 'pj_per_op_node']), 2)
 say_claims(U1, ['clock_drop_power'])
 """),
     md("""
@@ -1057,10 +1071,11 @@ say_claims(U1, ['first_window_uncore'])
     md("""
 ## 4. Energy
 
-Whole-socket energy (package plus DRAM of the computing socket, idle floor included) per byte the controllers moved, and per operation for the compute peaks at 56 cores.
+Energy at the two scopes defined above: per byte the controllers moved for the streams (*pj_per_byte* is the computing socket, *pj_per_byte_node* the node), and per operation for the compute peaks at 56 cores (*pj_per_op*, *pj_per_op_node*; the GEMM figures of the other notebooks use the same package-plus-DRAM definition). Both include the idle floor, and the node figure includes what the other socket draws while the computing one runs (section 11).
 """),
     code("""
-table(pt[pt.memory_target.eq('registers')][['kernel', 'threads', 'gops', 'core_ghz', 'uncore_ghz', 'pkg_w', 'power_limited', 'pj_per_op']], 2)
+table(pt[pt.memory_target.ne('registers')][['memory_target', 'kernel', 'threads', 'gbs', 'pkg_w', 'ram_w', 'node_w', 'pj_per_byte', 'pj_per_byte_node']], 1)
+table(pt[pt.memory_target.eq('registers')][['kernel', 'threads', 'gops', 'core_ghz', 'uncore_ghz', 'pkg_w', 'ram_w', 'other_pkg_w', 'node_w', 'power_limited', 'pj_per_op', 'pj_per_op_node']], 2)
 say_claims(U1, ['energy_per_byte', 'energy_per_op'])
 """),
     md("""
@@ -1077,7 +1092,7 @@ say_claims(claims.data_pattern_claims(dp), None)
     md("""
 ## 6. Remote memory (U2)
 
-**Conditions.** Socket 0's cores read 8 GiB bound to socket 0 (local) or socket 1 (remote), HBM and DDR at 14, 28 and 56 cores, and non-temporal Triad on HBM at 56 cores; 5 s windows. UPI flits are data flits over every link of both sockets, halved (each flit is sent by one socket and received by the other) and divided by the 64-byte lines the kernel moved.
+**Conditions.** Socket 0's cores read 8 GiB bound to socket 0 (local) or socket 1 (remote), HBM and DDR at 14, 28 and 56 cores, and non-temporal Triad on HBM at 56 cores; 5 s windows. UPI flits are data flits over every link of both sockets, halved (each flit is sent by one socket and received by the other) and divided by the 64-byte lines the kernel moved. *serving_pkg_w*, *serving_uncore_ghz* and *serving_power_limited* are the package power, uncore clock and share of power-limited PCU cycles of the socket whose memory is read (the computing socket itself for local reads).
 """),
     code("""
 rc = report.remote_counter_table(unc)
@@ -1144,7 +1159,36 @@ if len(cc):
 say_claims(claims.cache_counters(unc, ucache), None)
 """),
     md("""
-## 11. Still not measured
+## 11. The socket that runs nothing is not idle
+
+Every record in this notebook has the second socket idle: nothing is bound to it. Its counters are in the same sessions (perf per socket on Flat, turbostat per package on Cache), so its package power and uncore clock can be read against the computing socket's. **Conditions.** The one-second samples of every counted record in which socket 0 computes on its own memory (remote reads, where socket 1 serves the data, are left out); Flat from perf (the CHA clock averaged over the sample), Cache from turbostat (the uncore ratio at each interval's end). The *floor* is the median power of socket 1 in samples where its uncore clock is below 1 GHz: the lowest state observed, not a measured idle (that needs a record with nothing running). The scatter off the diagonal in the right panel is turbostat's instantaneous ratio (Cache), which can sit at either end of a clock transition when the interval ends; perf's average (Flat) does not.
+"""),
+    code("""
+cf = report.uncore_coupling_frame(unc, ucache)
+cfit = report.uncore_coupling_fit(cf)
+figure(plotting.uncore_coupling_figure(cf, cfit), 'uncore_coupling')
+table(cfit, 2)
+table(report.uncore_coupling(cf), 2)
+say_claims(claims.uncore_coupling(unc, ucache), None)
+"""),
+    md("""
+## 12. Flat against Cache at equal work: energy per token and per operation
+
+The counted GEMM of notebook 05 (14336×4096, BF16 plain) from decode at M = 1 to prefill at M = 4096, the counted FP64 sweep against its measured intensity (the energy counterpart of the roofline), and the 56-core compute peaks, in Flat HBM, Flat DDR, Cache with the data resident in the HBM cache and Cache spilled to DDR. *J/token* is the energy of one Llama-3.1-8B token if the whole model ran at that point's rate and power (2 × 8.03 billion operations per token); at M = 1 it is the decode bound of notebook 00 Table 5. Each is given at the computing-socket and node scopes. Flat bytes are the controllers'; Cache bytes are the cores' DRAM line counts (`pmu_ocr`), which only place the intensity axis of the Cache points: the energies do not use them.
+"""),
+    code("""
+both = pd.concat([unc, ucache], ignore_index=True)
+et = report.energy_table(both, theory)
+figure(plotting.energy_roofline_figure(et), 'energy_roofline')
+g = et[et.kind.eq('gemm') & et.precision.eq('bf16') & et.layout.eq('plain') & et.x.isin([1, 16, 256, 4096])]
+for column in ('j_per_token', 'j_per_token_node'):
+    print(column.replace('_', ' '))
+    table(g.pivot_table(index='x', columns='tier', values=column).reset_index().rename_axis(columns=None), 2)
+table(et[et.kind.eq('peak')][['tier', 'layout', 'gops', 'socket_w', 'node_w', 'pj_per_op', 'pj_per_op_node', 'power_source']], 2)
+say_claims(claims.energy_flat_vs_cache(both, theory), None)
+"""),
+    md("""
+## 13. Still not measured
 
 * **The HBM-cache hit rate (U3).** It needs the memory-side cache's tag events, which need `perf` on the Cache node; the conflict-miss explanation of the Cache curve and the ordering of the spilled kernels stay inferred until then.
 * **Latency at the caching agents.** The CHA's TOR occupancy over inserts, filtered to the chasing core, gives about 31 ns where the chase measures 141 ns (`data/probes/uncore-20261019/`); it is not a latency here and is not used.

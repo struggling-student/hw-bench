@@ -103,6 +103,10 @@ FIELDS = [
     "m2m_directory_updates",
     "uncore_intervals",
     "uncore_coverage",
+    # The same power, clock, PCU-limit and controller-byte quantities per socket (socket 0 and 1),
+    # and the node's RAPL power (both sockets, package plus DRAM).
+    *uncore.SOCKET_FIELDS,
+    "node_power_w",
     # Privileged turbostat (hwbench.turbostat), both modes; fills the power and clock
     # columns above where no perf session ran, and says which source they came from.
     *turbostat.FIELDS,
@@ -118,6 +122,7 @@ TURBOSTAT_FALLBACK = {
     "pkg_power_w": "ts_pkg_power_w",
     "ram_power_w": "ts_ram_power_w",
     "uncore_ghz": "ts_uncore_ghz",
+    **{f"{name}_s{socket}": f"ts_{name}_s{socket}" for name in ("pkg_power_w", "ram_power_w", "uncore_ghz") for socket in (0, 1)},
 }
 
 
@@ -129,10 +134,18 @@ def _power_source(row: dict[str, Any]) -> dict[str, Any]:
     """
 
     if row.get("pkg_power_w") is not None:
-        return dict(power_source="perf")
+        return dict(_node_power(row), power_source="perf")
     if row.get("ts_pkg_power_w") is None:
         return {}
-    return dict({k: row.get(v) for k, v in TURBOSTAT_FALLBACK.items()}, power_source="turbostat")
+    filled = {k: row.get(v) for k, v in TURBOSTAT_FALLBACK.items()}
+    return dict(filled, **_node_power(filled), power_source="turbostat")
+
+
+def _node_power(row: dict[str, Any]) -> dict[str, Any]:
+    """The node's RAPL power: package plus DRAM of both sockets, when all four were read."""
+
+    parts = [row.get(f"{name}_s{socket}") for name in ("pkg_power_w", "ram_power_w") for socket in (0, 1)]
+    return dict(node_power_w=sum(parts)) if None not in parts else {}
 
 
 def _legacy(record: dict[str, Any]) -> bool:
@@ -451,6 +464,79 @@ def _deduplicate_retries(rows):
     return rows
 
 
+#: Counters of one process: an aggregate of two concurrent processes adds them up.
+PER_PROCESS_COUNTERS = ("dram_read_lines", "dram_write_lines", "counted_bytes", "instructions", "ref_cycles")
+#: System-wide totals over a sample's window (they grow with its length).
+SYSTEM_TOTALS = (
+    "ctrl_bytes", "ctrl_bytes_memory_socket", "ctrl_ddr_read_bytes", "ctrl_ddr_write_bytes", "ctrl_hbm_read_bytes",
+    "ctrl_hbm_write_bytes", "energy_pkg_j", "energy_ram_j", "upi_tx_data_flits", "upi_rx_data_flits",
+    "m2m_directory_updates", "ts_energy_pkg_j", "ts_energy_ram_j", *[f"ctrl_bytes_s{s}" for s in (0, 1)],
+)
+#: System-wide rates, clocks and fractions (independent of the window's length).
+SYSTEM_RATES = (
+    "pkg_power_w", "ram_power_w", "system_power_w", "node_power_w", "uncore_ghz", "pcu_power_limit_frac",
+    "pcu_thermal_limit_frac", "uncore_intervals", "uncore_coverage", "ts_pkg_power_w", "ts_ram_power_w",
+    "ts_system_power_w", "ts_uncore_ghz", "ts_pkg_temp_c", "ts_intervals", "ts_coverage",
+    *uncore.SOCKET_FIELDS,
+    *[f for f in turbostat.FIELDS if f.endswith(("_s0", "_s1"))],
+)
+SYSTEM_RATES = tuple(f for f in SYSTEM_RATES if f not in SYSTEM_TOTALS)
+
+
+def _merge_counters(row, members, scope):
+    """Counter columns of an aggregate of concurrent processes.
+
+    The cores' own counters (``PER_PROCESS_COUNTERS``) add up.  Perf and turbostat read the
+    whole node, so a session that ran beside one participant is one measurement of both
+    processes' window and is not summed: with a single session its values are used (totals
+    rescaled from the participant's window to the aggregate's); with a session beside each
+    participant the mean of the two is.  In a ``dual`` aggregate both sockets compute, so the
+    "computing socket" power columns are the two sockets' sum and the clocks and PCU limit
+    fractions their mean; elsewhere they stay those of the session's computing socket.
+    """
+
+    for name in PER_PROCESS_COUNTERS:
+        values = [m.get(name) for m in members]
+        row[name] = sum(values) if all(v is not None for v in values) else None
+    row.update(_counted_fields(row))
+    carriers = [m for m in members if any(m.get(n) is not None for n in ("pkg_power_w", "ts_pkg_power_w", "ctrl_bytes"))]
+    for name in SYSTEM_TOTALS + SYSTEM_RATES:
+        row[name] = None
+    row["power_source"] = None
+    if not carriers:
+        return
+    elapsed = row.get("elapsed_seconds")
+
+    def mean(name, scale=lambda m: 1.0):
+        values = [m[name] * scale(m) for m in carriers if m.get(name) is not None]
+        return sum(values) / len(values) if len(values) == len(carriers) else None
+
+    def rescale(m):
+        return elapsed / m["elapsed_seconds"] if elapsed and m.get("elapsed_seconds") else 1.0
+
+    for name in SYSTEM_TOTALS:
+        row[name] = mean(name, rescale)
+    for name in SYSTEM_RATES:
+        row[name] = mean(name)
+    for name in ("uncore_intervals", "ts_intervals"):
+        if row.get(name) is not None and float(row[name]).is_integer():
+            row[name] = int(row[name])
+    sources = {m.get("power_source") for m in carriers}
+    row["power_source"] = sources.pop() if len(sources) == 1 else "mixed"
+    if row.get("ctrl_bytes") is not None and elapsed:
+        row["ctrl_bandwidth_gbs"] = row["ctrl_bytes"] / elapsed / 1e9
+    else:
+        row["ctrl_bandwidth_gbs"] = None
+    if scope == "dual":
+        both = {n: [row.get(f"{n}_s{s}") for s in (0, 1)] for n in ("pkg_power_w", "ram_power_w", "uncore_ghz", "pcu_power_limit_frac")}
+        for n in ("pkg_power_w", "ram_power_w"):
+            if None not in both[n]:
+                row[n] = sum(both[n])
+        for n in ("uncore_ghz", "pcu_power_limit_frac"):
+            if None not in both[n]:
+                row[n] = sum(both[n]) / 2
+
+
 def _aggregate(rows, scope, component):
     groups = defaultdict(list)
     for row in rows:
@@ -527,6 +613,7 @@ def _aggregate(rows, scope, component):
             cpu_bind=";".join(str(m["cpu_bind"]) for m in members),
             mem_bind=";".join(str(m["mem_bind"]) for m in members),
         )
+        _merge_counters(row, members, scope)
         if not errors:
             row.update(_clock_fields(row, row["threads"]))
             row.update(

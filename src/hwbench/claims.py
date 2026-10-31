@@ -733,25 +733,44 @@ def ridges(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Clai
     ]
 
 
-def decode_bound(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Claim]:
-    """The modeled decode bound: weights streamed once per token, read at the measured ceiling."""
+def decode_bound(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, unc: pd.DataFrame | None = None) -> list[Claim]:
+    """The decode bound: weights streamed once per token, read at the measured ceiling.
+
+    With the counted re-runs (``unc``) the Flat figures are in bytes measured at the memory
+    controllers: the ceiling is the counted read stream, the GEMM points are ``ugemmconv`` at a
+    16x pool (``decode_table_measured``).  Without them the claims read the modeled
+    ``decode_table`` (64x pool).
+    """
 
     from hwbench.roofline import ridge
 
+    counted = report.counted_gemm_frame(unc, shape="14336x4096") if unc is not None and len(unc) else pd.DataFrame()
+    measured = not counted.empty and bool((counted.memory_mode.eq("flat") & counted.m.eq(1)).any())
     spec = theory.data["model"]["llama31_8b"]
     gigabytes = theory.model_bytes() / 1e9
-    hbm = report.memory_ceiling(ext, thesis, "flat", "hbm", access="read")
-    ddr = report.memory_ceiling(ext, thesis, "flat", "ddr", access="read")
+    hbm = report.ceiling_or_modeled(unc if measured else None, ext, thesis, "flat", "hbm")
+    ddr = report.ceiling_or_modeled(unc if measured else None, ext, thesis, "flat", "ddr")
     tokens = {"hbm": hbm.gbs / gigabytes, "ddr": ddr.gbs / gigabytes}
     embedding = int(spec["vocab_size"]) * int(spec["hidden_size"]) / theory.model_parameters()
-    gm = report.gemm_points(ext)
-    one = gm[gm.memory_mode.eq("flat") & gm.dtype.eq("bf16") & gm["shape"].eq("14336x4096") & gm.m.eq(1)]
-    intensity = float(one.intensity.median())
+    if measured:
+        one = counted[counted.memory_mode.eq("flat") & counted.dtype.eq("bf16") & counted.layout.eq("plain") & counted.m.eq(1)]
+        intensity = float(one.intensity.median())
+    else:
+        gm = report.gemm_points(ext)
+        one = gm[gm.memory_mode.eq("flat") & gm.dtype.eq("bf16") & gm["shape"].eq("14336x4096") & gm.m.eq(1)]
+        intensity = float(one.intensity.median())
     amx = report.compute_ceiling(ext, "amx_bf16", "flat", 56)
     gap = {"hbm": ridge(amx.gops, hbm.gbs) / intensity, "ddr": ridge(amx.gops, ddr.gbs) / intensity}
-    dt = report.decode_table(ext, thesis, theory)
-    conv = dt[dt.pool.eq("64× on-chip")].set_index(["tier", "precision"])
-    pk = dt[dt.layout.eq("prepacked") & dt.precision.eq("bf16")].set_index("tier")
+    flat_tiers = ["Flat HBM", "Flat DDR"]
+    if measured:
+        dt = report.decode_table_measured(ext, thesis, theory, unc)
+        conv = dt[dt.pool.eq("16× on-chip") & (dt.layout.eq("plain") | dt.precision.eq("int8"))].set_index(["tier", "precision"])
+        pool_text, source = "converged 16× pool, bytes measured at the memory controllers", "measured"
+    else:
+        dt = report.decode_table(ext, thesis, theory)
+        conv = dt[dt.pool.eq("64× on-chip")].set_index(["tier", "precision"])
+        pool_text, source = "converged pool", "modeled"
+    pk = dt[dt.layout.eq("prepacked") & dt.precision.eq("bf16") & dt.tier.isin(flat_tiers)].set_index("tier")
     pk_converged = bool(pk.pool.eq("16× on-chip").all())
     pool = report.gemm_pool_table(ext)
     plain4 = pool[pool["shape"].eq("14336x4096") & pool.m.eq(1) & pool.pool_x.eq(4) & pool.dtype.eq("bf16")].set_index("memory_target")
@@ -776,19 +795,21 @@ def decode_bound(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> lis
         Claim(
             "decode_far_below_ridge",
             bool(150 < gap["hbm"] < 260 and gap["ddr"] > gap["hbm"]),
-            f"A decode step (M = 1) has a modeled intensity of {intensity:.2f} operations per byte, about {gap['hbm']:.0f}× below the AMX BF16 ridge on HBM "
+            f"A decode step (M = 1) has a {source} intensity of {intensity:.2f} operations per byte, about {gap['hbm']:.0f}× below the AMX BF16 ridge on HBM "
             f"({ridge(amx.gops, hbm.gbs):.0f} op/B) and {gap['ddr']:.0f}× below it on DDR ({ridge(amx.gops, ddr.gbs):.0f} op/B). "
-            "Decode is memory-bound by two orders of magnitude, so the AMX peak does not limit it; batching raises intensity in proportion to M.",
+            "Decode is memory-bound by two orders of magnitude, so the AMX peak does not limit it; batching raises intensity in proportion to M."
+            + (" The intensity is that of the plain BF16 GEMM at the memory controllers (Flat HBM) and the ceilings are the counted read streams." if measured else ""),
         ),
         Claim(
             "decode_achieved",
             bool(ratio["bf16"] < tokens["hbm"] / tokens["ddr"] and ratio["int8"] < tokens["hbm"] / tokens["ddr"]
                  and frac[("Flat HBM", "bf16")] < frac[("Flat DDR", "bf16")]
-                 and plain4.loc["hbm"].counted_gbs <= plain64 <= plain4.loc["hbm"].modeled_gbs * 1.01),
-            f"What a decode step achieves (14336×4096, M=1, converged pool): {conv.loc[('Flat HBM', 'bf16')].gbs:.0f} GB/s for plain BF16 and "
+                 and (conv.loc[("Flat HBM", "bf16")].gbs <= conv.loc[("Flat HBM", "bf16")].modeled_gbs if measured
+                      else plain4.loc["hbm"].counted_gbs <= plain64 <= plain4.loc["hbm"].modeled_gbs * 1.01)),
+            f"What a decode step achieves (14336×4096, M=1, {pool_text}): {conv.loc[('Flat HBM', 'bf16')].gbs:.0f} GB/s for plain BF16 and "
             f"{conv.loc[('Flat HBM', 'int8')].gbs:.0f} GB/s for INT8 on HBM ({_pct(frac[('Flat HBM', 'bf16')])} and {_pct(frac[('Flat HBM', 'int8')])} of the read "
             f"ceiling), against {conv.loc[('Flat DDR', 'bf16')].gbs:.0f} and {conv.loc[('Flat DDR', 'int8')].gbs:.0f} GB/s on DDR ({_pct(frac[('Flat DDR', 'bf16')])} and "
-            f"{_pct(frac[('Flat DDR', 'int8')])}). The library streams DDR almost at the read ceiling but leaves a third of HBM unused, so HBM beats DDR by "
+            f"{_pct(frac[('Flat DDR', 'int8')])}). The library streams DDR at {_pct(frac[('Flat DDR', 'bf16')])} of the read ceiling but leaves {_pct(1 - frac[('Flat HBM', 'bf16')])} of HBM unused, so HBM beats DDR by "
             f"{ratio['bf16']:.2f}× (BF16) and {ratio['int8']:.2f}× (INT8) for this GEMM, not the {tokens['hbm'] / tokens['ddr']:.2f}× of the read kernel. If every "
             f"weight streamed at this rate, Llama-3.1-8B would decode at most {conv.loc[('Flat HBM', 'bf16')].tokens_per_s:.0f} tokens/s per socket in BF16 and "
             f"{conv.loc[('Flat HBM', 'int8')].tokens_per_s:.0f} in INT8 on HBM ({conv.loc[('Flat DDR', 'bf16')].tokens_per_s:.0f} and "
@@ -1260,6 +1281,7 @@ def uncore_remote(unc: pd.DataFrame) -> list[Claim]:
     ddr_flits = remote.loc[("ddr", "read")].upi_flits_per_line
     peak_flits_ddr = float((ddr.gbs * 1e9 / 64 * ddr.upi_flits_per_line).max())
     hbm56_flits = float(hbm56.gbs * 1e9 / 64 * hbm56.upi_flits_per_line)
+    pl1 = float(Theory.load().power["pl1_w"])
     return [
         Claim(
             "upi_flits_per_line",
@@ -1273,7 +1295,7 @@ def uncore_remote(unc: pd.DataFrame) -> list[Claim]:
             "remote_duplicate_reads",
             bool(hbm56.ctrl_over_modeled > 1.5 and hbm56.upi_flits_per_line > 1.5 * ddr_flits.median() and clean.ctrl_over_modeled.between(0.98, 1.03).all()
                  and rc.dir_updates_per_line.max() < 0.01 and rc[rc.index.get_level_values("kernel") == "read"].ctrl_write_per_read.max() < 0.01
-                 and hbm56_flits < peak_flits_ddr),
+                 and hbm56_flits < peak_flits_ddr and hbm56.serving_power_limited < 0.05 and hbm56.serving_uncore_ghz > 2.4),
             f"Remote HBM collapses at 56 threads because its lines are fetched about twice: the kernel receives {hbm56.gbs:.0f} GB/s, the HBM controllers "
             f"of socket 1 read {hbm56.ctrl_over_modeled:.2f}× those bytes and UPI carries {hbm56.upi_flits_per_line:.1f} data flits per delivered line "
             f"against {ddr_flits.median():.1f} for a clean remote read. At 14 and 28 threads the same remote HBM read is clean "
@@ -1281,7 +1303,12 @@ def uncore_remote(unc: pd.DataFrame) -> list[Claim]:
             "and so is remote DDR at every thread count. The link is not saturated "
             f"({hbm56_flits / 1e9:.1f} × 10⁹ flits/s against {peak_flits_ddr / 1e9:.1f} on remote DDR), there are "
             f"{rc.dir_updates_per_line.max() * 1e3:.2f} directory updates per thousand lines at most, and the read kernels write back at most {_pct(float(rc[rc.index.get_level_values('kernel') == 'read'].ctrl_write_per_read.max()), 1)} "
-            "of what they read, so directory traffic is not the mechanism. Which agent issues the second read (a prefetch, a retried request) is not resolved "
+            "of what they read, so directory traffic is not the mechanism. The serving socket is not power-clipped: at 56 threads socket 1 draws "
+            f"{hbm56.serving_pkg_w:.0f} W (PL1 {pl1:.0f} W) with its uncore at {hbm56.serving_uncore_ghz:.2f} GHz, the top of its range, and the power-control unit clips "
+            f"its frequency in {_pct(float(hbm56.serving_power_limited))} of the cycles, while the computing socket is clipped in {_pct(float(hbm56.power_limited))} "
+            f"at {hbm56.uncore_ghz:.2f} GHz; at 14 and 28 threads socket 1 runs at {hbm_low.serving_uncore_ghz.min():.2f}–{hbm_low.serving_uncore_ghz.max():.2f} GHz "
+            f"and {hbm_low.serving_pkg_w.min():.0f}–{hbm_low.serving_pkg_w.max():.0f} W. Its draw near the limit comes with a full clock, not a clipped one, so socket 1 is not "
+            "power-limited; these counters do not say whether its power matters to the duplication. Which agent issues the second read (a prefetch, a retried request) is not resolved "
             "by these events.",
         ),
     ]
@@ -1320,7 +1347,9 @@ def uncore_gemm(unc: pd.DataFrame) -> list[Claim]:
             bool(gc.power_limited.min() > 0.85 and gc.pkg_w.sub(350).abs().max() < 10),
             f"Every GEMM here, M = 1 to 256 on either tier, runs at the package limit ({gc.pkg_w.min():.0f}–{gc.pkg_w.max():.0f} W, clipped for power in "
             f"{_pct(float(gc.power_limited.min()))} or more of the cycles), with cores at {gc.core_ghz.min():.2f}–{gc.core_ghz.max():.2f} GHz and the uncore at "
-            f"{gc.uncore_ghz.min():.2f}–{gc.uncore_ghz.max():.2f} GHz: a 56-core GEMM, decode or prefill, is power-bound on this node.",
+            f"{gc.uncore_ghz.min():.2f}–{gc.uncore_ghz.max():.2f} GHz: a 56-core GEMM, decode or prefill, is power-bound on this node. The limit is per socket: "
+            f"the other socket, running nothing, draws {gc.other_pkg_w.min():.0f}–{gc.other_pkg_w.max():.0f} W on top (uncore-clock coupling, claim "
+            f"`idle_socket_uncore_coupling`), so the node's RAPL power is {gc.node_w.min():.0f}–{gc.node_w.max():.0f} W.",
         ),
     ]
 
@@ -1465,25 +1494,36 @@ def uncore_streams(unc: pd.DataFrame, theory: Theory, ext: pd.DataFrame | None =
         ),
         Claim(
             "energy_per_byte",
-            bool(hbm.pj_per_byte < ddr.pj_per_byte),
-            f"Per byte at full bandwidth HBM costs less energy than DDR: the computing socket's package plus DRAM power over the bytes the "
-            f"controllers moved is {hbm.pj_per_byte:.0f} pJ/B for the 56-core HBM read ({hbm.pkg_w:.0f} + {hbm.ram_w:.0f} W at {hbm.gbs:.0f} GB/s) and "
+            bool(hbm.pj_per_byte < ddr.pj_per_byte and hbm.pj_per_byte_node < ddr.pj_per_byte_node),
+            f"Per byte at full bandwidth HBM costs less energy than DDR at both RAPL scopes. Computing socket (package plus DRAM, per byte its own controllers "
+            f"moved): {hbm.pj_per_byte:.0f} pJ/B for the 56-core HBM read ({hbm.pkg_w:.0f} + {hbm.ram_w:.0f} W at {hbm.gbs:.0f} GB/s) and "
             f"{ddr.pj_per_byte:.0f} pJ/B on DDR ({ddr.pkg_w:.0f} + {ddr.ram_w:.0f} W at {ddr.gbs:.0f} GB/s), {ddr.pj_per_byte / hbm.pj_per_byte:.1f}× more. "
-            "These are whole-socket figures including the idle floor, not the energy of the transfer alone.",
+            f"Node (both sockets, {hbm.node_w:.0f} W and {ddr.node_w:.0f} W, which includes the other socket's {hbm.other_pkg_w:.0f} and {ddr.other_pkg_w:.0f} W of "
+            f"package power): {hbm.pj_per_byte_node:.0f} and {ddr.pj_per_byte_node:.0f} pJ/B, {ddr.pj_per_byte_node / hbm.pj_per_byte_node:.1f}× more. "
+            "Both are whole-socket or whole-node figures including the idle floor, not the energy of the transfer alone.",
         ),
         Claim(
             "energy_per_op",
-            bool(len(compute) == 6 and compute.power_limited.max() < 0.05 and compute.pj_per_op.idxmin() == "AMX INT8"),
+            bool(len(compute) == 6 and compute.power_limited.max() < 0.05 and compute.pj_per_op.idxmin() == "AMX INT8"
+                 and compute.pj_per_op_node.idxmin() == "AMX INT8"),
             "The compute peaks stay below the power limit (at most "
             f"{compute.pkg_w.max():.0f} W, clipped in {_pct(float(compute.power_limited.max()))} of the cycles), so their clocks are not set by power. "
-            "Package energy per operation at 56 cores: "
-            + "; ".join(f"{k} {r.pj_per_op:.1f} pJ ({r.pkg_w:.0f} W)" for k, r in compute.sort_values("pj_per_op").iterrows())
-            + f". AMX INT8 does an operation for {compute.pj_per_op.max() / compute.pj_per_op.min():.0f}× less energy than AVX-512 FP64.",
+            "Energy per operation at 56 cores, computing socket (package plus DRAM, as the GEMM figures): "
+            + "; ".join(f"{k} {r.pj_per_op:.1f} pJ ({r.pkg_w:.0f} + {r.ram_w:.0f} W)" for k, r in compute.sort_values("pj_per_op").iterrows())
+            + f". AMX INT8 does an operation for {compute.pj_per_op.max() / compute.pj_per_op.min():.0f}× less energy than AVX-512 FP64. At the node scope "
+            f"(both sockets, whose other socket draws {_span(compute.other_pkg_w, 0)} W at its lowest uncore state) the same operations cost "
+            f"{compute.pj_per_op_node.min():.1f}–{compute.pj_per_op_node.max():.0f} pJ, {compute.pj_per_op_node.max() / compute.pj_per_op_node.min():.0f}× apart.",
         ),
     ]
 
 
-def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = ROOT) -> dict[str, list[Claim]]:
+def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Path = ROOT,
+               unc: pd.DataFrame | None = None) -> dict[str, list[Claim]]:
+    if unc is None:
+        try:
+            unc = report.load_uncore(root)
+        except (OSError, KeyError, ValueError):
+            unc = None
     return {
         "compute": compute_paths(ext, theory),
         "kernels": kernels(ext, thesis, theory),
@@ -1501,7 +1541,7 @@ def all_claims(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, root: Pa
         "span": span(ext, thesis),
         "ridges": ridges(ext, thesis, theory),
         "fp64_sweep": fp64_sweep(ext, thesis, theory),
-        "decode": decode_bound(ext, thesis, theory),
+        "decode": decode_bound(ext, thesis, theory, unc),
         "platform": platform_caveats(ext, root),
         "gemm": gemm(ext, thesis, theory, root),
         "counted": counted(ext, thesis),
@@ -1569,25 +1609,47 @@ def decode_energy(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, unc: 
     ddr_b = g[("Flat DDR", "bf16", "plain")]
     w = dt.set_index(["tier", "precision", "layout"]).power_w
     pw_hbm, pw_ddr = w[("Flat HBM", "bf16", "plain")], w[("Flat DDR", "bf16", "plain")]
+    gn = dt[dt.j_per_token_node.notna()].set_index(["tier", "precision", "layout"]).j_per_token_node
     parts = [f"Flat HBM {hbm_b:.1f} J in BF16 and {hbm_i:.1f} J in INT8, Flat DDR {ddr_b:.1f} J in BF16"]
     cache = {t: g[(t, "bf16", "plain")] for t in ("Cache, 16 GiB", "Cache, 96 GiB") if (t, "bf16", "plain") in g.index}
     if cache:
         parts.append("Cache " + " and ".join(f"{v:.1f} J ({t.split(', ')[1]})" for t, v in cache.items()) + " in BF16")
+    node = [f"Flat HBM {gn[('Flat HBM', 'bf16', 'plain')]:.1f} J in BF16 and {gn[('Flat HBM', 'int8', 'prepacked')]:.1f} J in INT8, "
+            f"Flat DDR {gn[('Flat DDR', 'bf16', 'plain')]:.1f} J in BF16"]
+    cache_node = {t: gn[(t, "bf16", "plain")] for t in cache if (t, "bf16", "plain") in gn.index}
+    if cache_node:
+        node.append("Cache " + " and ".join(f"{v:.1f} J ({t.split(', ')[1]})" for t, v in cache_node.items()) + " in BF16")
     holds = hbm_b < ddr_b and hbm_i < 0.6 * hbm_b and all(v > hbm_b for v in cache.values())
     return [Claim(
         "decode_energy",
         bool(holds),
         "At the measured streaming rate of a decode step, one Llama-3.1-8B token costs the computing socket (package and DRAM, RAPL) "
-        + "; ".join(parts) + f". The package sits at its limit in every case, so the energy per token follows the streaming rate and the DRAM's own "
+        + "; ".join(parts) + ", and the whole node (both sockets, RAPL) " + "; ".join(node) + f". The package sits at its limit in every case, so the energy per token follows the streaming rate and the DRAM's own "
         f"power: DDR costs {ddr_b / hbm_b:.1f}× HBM per BF16 token (it streams slower and its DIMMs draw {pw_ddr - pw_hbm:.0f} W more), INT8 needs "
         f"{hbm_i / hbm_b:.2f}× the BF16 energy on HBM, and a model spilled out of the HBM cache costs the most. "
         "This is the bound if every weight streamed at the 14336×4096 rate; the rest of the model streams slower.",
     )]
 
 
-def cache_counters(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame) -> list[Claim]:
-    """Cache mode with turbostat power and clocks (hbm13), against the Flat node's perf session."""
+def probe_power_limits(root: Path = ROOT, probe: str = "uncore-cache-20261020") -> dict[str, float]:
+    """RAPL package limits of socket 0 on the node a probe ran on (W), from the probe's ``node.txt``."""
 
+    text = (root / "data/probes" / probe / "node.txt").read_text()
+    limits = {}
+    for key, name in (("constraint_0_power_limit_uw", "pl1_w"), ("constraint_1_power_limit_uw", "pl2_w")):
+        match = re.search(rf"intel-rapl:0/{key}\s+(\d+)", text)
+        limits[name] = int(match[1]) / 1e6
+    return limits
+
+
+def cache_counters(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame, root: Path = ROOT) -> list[Claim]:
+    """Cache mode with turbostat power and clocks (hbm13), against the Flat node's perf session.
+
+    "At the package limit" is judged against hbm13's own PL1, read from the probe record of that
+    node (``probe_power_limits``), not against the Flat node's.
+    """
+
+    pl1 = probe_power_limits(root)["pl1_w"]
     cmp_ = report.mode_power_comparison(unc_flat, unc_cache)
     cc = report.cache_capacity_table(unc_cache)
     out: list[Claim] = []
@@ -1598,10 +1660,12 @@ def cache_counters(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame) -> list[Clai
         ratio = res.pj_per_byte / hbm.pj_per_byte
         out.append(Claim(
             "cache_resident_power",
-            bool(res.pkg_w.sub(350).abs().max() < 10 and abs(ratio["read"] - 1) < 0.1 and ratio["copy_nt"] > 1.15),
-            f"Resident in the HBM cache (8 GiB, 56 cores) the streams run at the package limit like Flat HBM ({_span(res.pkg_w, 0)} W, cores at "
+            bool(res.pkg_w.sub(pl1).abs().max() < 10 and abs(ratio["read"] - 1) < 0.1 and ratio["copy_nt"] > 1.15),
+            f"Resident in the HBM cache (8 GiB, 56 cores) the streams run at the package limit like Flat HBM ({_span(res.pkg_w, 0)} W against PL1 {pl1:.0f} W on "
+            f"hbm13, `data/probes/uncore-cache-20261020/node.txt`; cores at "
             f"{_span(res.core_ghz)} GHz, uncore at {_span(res.uncore_ghz)} GHz) and read costs the same energy per byte "
-            f"({res.pj_per_byte['read']:.0f} against {hbm.pj_per_byte['read']:.0f} pJ/B on Flat HBM). Non-temporal copy is the exception: "
+            f"({res.pj_per_byte['read']:.0f} against {hbm.pj_per_byte['read']:.0f} pJ/B on Flat HBM; {res.pj_per_byte_node['read']:.0f} against "
+            f"{hbm.pj_per_byte_node['read']:.0f} pJ/B with both sockets counted). Non-temporal copy is the exception: "
             f"{res.measured_gbs['copy_nt']:.0f} against {hbm.measured_gbs['copy_nt']:.0f} GB/s and {ratio['copy_nt']:.2f}× the energy per byte, "
             "so streaming stores lose most in Cache mode, where every write still goes through the memory-side cache.",
         ))
@@ -1611,10 +1675,11 @@ def cache_counters(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame) -> list[Clai
         if ddr is not None and {96.0, 128.0} <= set(r.index):
             out.append(Claim(
                 "cache_spilled_energy",
-                bool(r.pj_per_byte[96.0] > 1.8 * ddr.pj_per_byte and r.pkg_w[96.0] > 340),
+                bool(r.pj_per_byte[96.0] > 1.8 * ddr.pj_per_byte and r.pj_per_byte_node[96.0] > 1.8 * ddr.pj_per_byte_node and r.pkg_w[96.0] > pl1 - 10),
                 f"Spilled, the read kernel costs {r.pj_per_byte[96.0]:.0f} pJ/B at 96 GiB and {r.pj_per_byte[128.0]:.0f} at 128 GiB, "
-                f"{r.pj_per_byte[96.0] / ddr.pj_per_byte:.1f}–{r.pj_per_byte[128.0] / ddr.pj_per_byte:.1f}× Flat DDR ({ddr.pj_per_byte:.0f} pJ/B) for "
-                f"{r.measured_gbs[96.0]:.0f} and {r.measured_gbs[128.0]:.0f} GB/s: the package still draws {_span(r.pkg_w.loc[[96.0, 128.0]], 0)} W, "
+                f"{r.pj_per_byte[96.0] / ddr.pj_per_byte:.1f}–{r.pj_per_byte[128.0] / ddr.pj_per_byte:.1f}× Flat DDR ({ddr.pj_per_byte:.0f} pJ/B; "
+                f"{r.pj_per_byte_node[96.0]:.0f} and {r.pj_per_byte_node[128.0]:.0f} against {ddr.pj_per_byte_node:.0f} pJ/B with both sockets counted) for "
+                f"{r.measured_gbs[96.0]:.0f} and {r.measured_gbs[128.0]:.0f} GB/s: the package still draws {_span(r.pkg_w.loc[[96.0, 128.0]], 0)} W (PL1 {pl1:.0f} W), "
                 f"with the cores at {_span(r.core_ghz.loc[[96.0, 128.0]])} GHz and the uncore at {_span(r.uncore_ghz.loc[[96.0, 128.0]])} GHz. "
                 "A model that does not fit the HBM cache costs more than twice the energy per weight byte of the same model placed in Flat DDR.",
             ))
@@ -1639,8 +1704,84 @@ def cache_counters(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame) -> list[Clai
     return out
 
 
-def uncore_claims(unc: pd.DataFrame, ext: pd.DataFrame, theory: Theory, data_pattern: pd.DataFrame | None = None) -> dict[str, list[Claim]]:
-    """Every claim of notebook 06 (privileged uncore counters, Flat node)."""
+def uncore_coupling(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame) -> list[Claim]:
+    """The socket that runs nothing follows the computing socket's uncore clock, and draws power with it (A2)."""
+
+    frame = report.uncore_coupling_frame(unc_flat, unc_cache)
+    if frame.empty:
+        return []
+    fit = report.uncore_coupling_fit(frame).set_index("memory_mode")
+    tab = report.uncore_coupling(frame).set_index(["memory_mode", "family"])
+    lowest, highest = frame.pkg_power_w_s1.min(), frame.pkg_power_w_s1.max()
+    flat = fit.loc["flat"]
+    streams, peaks = tab.loc[("flat", "streams")], tab.loc[("flat", "compute peaks")]
+    gemm = tab.loc[("flat", "GEMM")]
+    induced = tab.other_above_floor_w.drop(index=[i for i in tab.index if i[1] in ("compute peaks", "chase")])
+    top = frame.loc[frame.pkg_power_w_s1.idxmax()]
+    holds = bool(
+        (fit.r2 > 0.9).all() and (fit.clock_corr > 0.9).all() and fit.clock_ratio.between(0.9, 1.0).all()
+        and fit.slope_w_per_ghz.between(40, 80).all() and fit.floor_w.between(120, 150).all()
+        and peaks.other_ghz < 0.9 and streams.other_ghz > 2.0 and induced.max() > 50
+    )
+    return [Claim(
+        "idle_socket_uncore_coupling",
+        holds,
+        f"The socket that runs nothing is not idle. In {len(frame)} one-socket samples (socket 0 computing on its own memory) socket 1 draws "
+        f"{lowest:.0f}–{highest:.0f} W, and its package power follows its own uncore clock: a line of {flat.slope_w_per_ghz:.0f} W/GHz above "
+        f"{flat.intercept_w:.0f} W explains {_pct(float(flat.r2))} of the variance on Flat ({_pct(float(fit.loc['cache'].r2))} on Cache, turbostat), and the clock "
+        f"itself follows the computing socket's (correlation {_span(fit.clock_corr)}, {_pct(float(fit.clock_ratio.median()))} of its value in the median). "
+        f"Beside the compute peaks socket 1 stays at {peaks.other_ghz:.1f} GHz and {peaks.other_w:.0f} W, its lowest state; beside the 56-core GEMM it runs at "
+        f"{gemm.other_ghz:.2f} GHz and {gemm.other_w:.0f} W, and beside Flat streams at {streams.other_ghz:.2f} GHz and {streams.other_w:.0f} W "
+        f"(the maximum, {top.pkg_power_w_s1:.0f} W at {top.uncore_ghz_s1:.2f} GHz, is a {top.threads:.0f}-core {top.notes} sample on {top.memory_mode}). Relative to the lowest state, a socket's own activity therefore induces {induced.min():.0f}–{induced.max():.0f} W "
+        "(median per workload family) on the other socket: every single-socket figure that counts only the computing socket leaves that out, and node-level "
+        "energy includes it. The floor is the lowest state observed, not a measured idle; the Cache clock is turbostat's instantaneous ratio, the Flat one perf's average.",
+    )]
+
+
+def energy_flat_vs_cache(unc: pd.DataFrame, theory: Theory) -> list[Claim]:
+    """Flat against Cache mode at equal workloads, at both RAPL scopes (A5)."""
+
+    et = report.energy_table(unc, theory)
+    if et.empty or not {"gemm", "sweep", "peak"} <= set(et.kind):
+        return []
+    peak = et[et.kind.eq("peak")].pivot(index="layout", columns="tier", values="pj_per_op")
+    peak_ratio = peak.Cache / peak.Flat
+    gemm = et[et.kind.eq("gemm") & et.precision.eq("bf16") & et.layout.eq("plain")]
+    tok = gemm.pivot(index="x", columns="tier", values="j_per_token")
+    tok_n = gemm.pivot(index="x", columns="tier", values="j_per_token_node")
+    prefill = tok.loc[[m for m in tok.index if m >= 1024]].dropna(axis=1, how="any")
+    spread = prefill.max(axis=1) / prefill.min(axis=1)
+    sweep = et[et.kind.eq("sweep")]
+    lo = sweep[sweep.x.eq(sweep.x.min())].set_index("tier").pj_per_op
+    hi = sweep[sweep.x.eq(sweep.x.max())].set_index("tier").pj_per_op
+    d1, d1n = tok.loc[1], tok_n.loc[1]
+    holds = bool(
+        peak_ratio.between(0.97, 1.04).all()
+        and d1["Flat HBM"] < d1["Cache, 16 GiB"] < d1["Flat DDR"] < d1["Cache, 96 GiB"]
+        and d1n["Flat HBM"] < d1n["Cache, 16 GiB"] < d1n["Flat DDR"] < d1n["Cache, 96 GiB"]
+        and spread.max() < 1.2 and hi.max() / hi.min() < 1.1 and lo["Flat HBM"] < lo["Cache, 16 GiB"] < lo["Flat DDR"] < lo["Cache, 96 GiB"]
+    )
+    return [Claim(
+        "energy_flat_vs_cache",
+        holds,
+        "Work that touches no memory costs the same energy in both modes: the 56-core compute peaks draw "
+        f"{_span(peak_ratio, 3)}× as much energy per operation in Cache mode as in Flat (six ISA paths, computing socket). Memory decides the rest. "
+        f"A decode step (M = 1) costs {d1['Flat HBM']:.1f} J per token on Flat HBM, {d1['Cache, 16 GiB']:.1f} J on Cache with the model resident in the HBM cache "
+        f"({d1['Cache, 16 GiB'] / d1['Flat HBM']:.2f}×), {d1['Flat DDR']:.1f} J on Flat DDR ({d1['Flat DDR'] / d1['Flat HBM']:.2f}×) and {d1['Cache, 96 GiB']:.1f} J when it is "
+        f"spilled ({d1['Cache, 96 GiB'] / d1['Flat HBM']:.2f}×); with both sockets counted {d1n['Flat HBM']:.1f}, {d1n['Cache, 16 GiB']:.1f}, {d1n['Flat DDR']:.1f} and "
+        f"{d1n['Cache, 96 GiB']:.1f} J. From M = 1024 up the configurations are within {_pct(float(spread.max() - 1))} of each other "
+        f"({_span(prefill.stack(), 2)} J per token at the computing socket): prefill is compute-bound and the memory mode no longer matters. "
+        f"The FP64 sweep shows the same as an energy roofline: at K = {sweep.x.min():.0f} (the lowest intensity) pJ per operation ranges "
+        f"{lo.min():.0f}–{lo.max():.0f} across the four tiers (Flat HBM {lo['Flat HBM']:.0f}, Cache resident {lo['Cache, 16 GiB']:.0f}, Flat DDR {lo['Flat DDR']:.0f}, "
+        f"Cache spilled {lo['Cache, 96 GiB']:.0f}), and at K = {sweep.x.max():.0f} they converge to {hi.min():.0f}–{hi.max():.0f} pJ. "
+        "Cache bytes (the intensity axis of the Cache sweep and the Cache GEMM points) are the cores' DRAM line counts until the tag counters are measured; "
+        "the energy figures themselves do not depend on them.",
+    )]
+
+
+def uncore_claims(unc: pd.DataFrame, ext: pd.DataFrame, theory: Theory, data_pattern: pd.DataFrame | None = None,
+                  unc_cache: pd.DataFrame | None = None) -> dict[str, list[Claim]]:
+    """Every claim of notebook 06 (privileged counters): ``unc`` is the Flat node, ``unc_cache`` the Cache node."""
 
     out = {
         "uncore_streams": uncore_streams(unc, theory, ext),
@@ -1650,4 +1791,9 @@ def uncore_claims(unc: pd.DataFrame, ext: pd.DataFrame, theory: Theory, data_pat
     }
     if data_pattern is not None and len(data_pattern):
         out["data_pattern"] = data_pattern_claims(data_pattern)
+    out["turbostat"] = turbostat_matches_perf(unc)
+    if unc_cache is not None and len(unc_cache):
+        out["cache_counters"] = cache_counters(unc, unc_cache)
+        out["uncore_coupling"] = uncore_coupling(unc, unc_cache)
+        out["energy_modes"] = energy_flat_vs_cache(pd.concat([unc, unc_cache], ignore_index=True), theory)
     return out

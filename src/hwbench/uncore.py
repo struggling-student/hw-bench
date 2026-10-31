@@ -319,7 +319,9 @@ def sample_fields(window: dict[str, Any] | None, elapsed: float | None,
     and energy totals are those rates times the sample's ``elapsed`` time.  Bytes and
     energy are summed over both sockets (all traffic the sample caused, wherever it
     landed); the uncore clock and the PCU limit fractions are those of the socket that
-    computes, or socket 0 when the process spans both.
+    computes, or socket 0 when the process spans both.  The ``*_s0`` / ``*_s1`` columns
+    give power, clock, PCU limit and controller bytes per socket, so the socket that does
+    not compute (its uncore clock follows the busy one) stays visible.
     """
 
     if not window or not window.get("counts") or not window.get("seconds"):
@@ -354,6 +356,20 @@ def sample_fields(window: dict[str, Any] | None, elapsed: float | None,
         value = total(name)
         if value is not None:
             out[name] = value * scale
+    for sock, c in counts.items():
+        suffix = f"_s{sock}"
+        if "energy_pkg_j" in c:
+            out["pkg_power_w" + suffix] = c["energy_pkg_j"] / seconds
+        if "energy_ram_j" in c:
+            out["ram_power_w" + suffix] = c["energy_ram_j"] / seconds
+        if "cha_clockticks" in c:
+            out["uncore_ghz" + suffix] = c["cha_clockticks"] / seconds / 1e9
+        if c.get("pcu_clockticks") and "pcu_power_limit_cycles" in c:
+            out["pcu_power_limit_frac" + suffix] = c["pcu_power_limit_cycles"] / c["pcu_clockticks"]
+        if {"ddr_cas_rd", "ddr_cas_wr", "hbm_cas_rd", "hbm_cas_wr"} <= c.keys():
+            out["ctrl_bytes" + suffix] = (
+                (c["ddr_cas_rd"] + c["ddr_cas_wr"]) * DDR_CAS_BYTES + (c["hbm_cas_rd"] + c["hbm_cas_wr"]) * HBM_CAS_BYTES
+            ) * scale
     socket = compute_socket if compute_socket in counts else min(counts)
     own = counts[socket]
     if "energy_pkg_j" in own:
@@ -371,6 +387,14 @@ def sample_fields(window: dict[str, Any] | None, elapsed: float | None,
     out["uncore_intervals"] = window.get("intervals")
     out["uncore_coverage"] = window.get("coverage")
     return out
+
+
+#: Per-socket columns of ``sample_fields`` (socket 0 and 1).
+SOCKET_FIELDS = [
+    f"{name}_s{socket}"
+    for name in ("pkg_power_w", "ram_power_w", "uncore_ghz", "pcu_power_limit_frac", "ctrl_bytes")
+    for socket in (0, 1)
+]
 
 
 def series(uncore: dict[str, Any] | None, result: dict[str, Any]) -> list[dict[str, Any]]:

@@ -186,7 +186,9 @@ def sample_fields(window: dict[str, Any] | None, elapsed: float | None, compute_
 
     Powers are time-weighted means over the intervals inside the sample; energies are
     those powers times ``elapsed`` summed over both packages.  The uncore clock and the
-    temperature are the computing package's (socket 0 when the process spans both).
+    temperature are the computing package's (socket 0 when the process spans both).  The
+    ``*_s0`` / ``*_s1`` columns give power, uncore clock and the busy clock of the package's first
+    CPU (``Bzy_MHz``, in MHz) per package.
     """
 
     if not window or not window.get("rows"):
@@ -215,6 +217,12 @@ def sample_fields(window: dict[str, Any] | None, elapsed: float | None, compute_
         value = mean(own, key)
         if value is not None:
             out[name] = value * scale
+    for package in packages:
+        for key, name, scale in (("pkg_w", "ts_pkg_power_w", 1.0), ("ram_w", "ts_ram_power_w", 1.0),
+                                 ("uncore_mhz", "ts_uncore_ghz", 1e-3), ("bzy_mhz", "ts_bzy_mhz", 1.0)):
+            value = mean(package, key)
+            if value is not None:
+                out[f"{name}_s{package}"] = value * scale
     out["ts_intervals"] = sum(1 for r in rows if r["package"] == own)
     out["ts_coverage"] = window.get("coverage")
     return out
@@ -223,4 +231,5 @@ def sample_fields(window: dict[str, Any] | None, elapsed: float | None, compute_
 FIELDS = [
     "ts_energy_pkg_j", "ts_energy_ram_j", "ts_system_power_w", "ts_pkg_power_w", "ts_ram_power_w",
     "ts_uncore_ghz", "ts_pkg_temp_c", "ts_intervals", "ts_coverage",
+    *[f"{name}_s{package}" for name in ("ts_pkg_power_w", "ts_ram_power_w", "ts_uncore_ghz", "ts_bzy_mhz") for package in (0, 1)],
 ]

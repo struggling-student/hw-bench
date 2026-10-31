@@ -139,11 +139,11 @@ def uncore_evidence():
     if not (ROOT / "data/processed/measurements.csv").exists():
         pytest.skip("no processed data in this checkout")
     _, _, ext, policy = report.load(ROOT)
-    unc = report.load_uncore(ROOT)
+    unc = report.load_uncore(ROOT, "flat")  # the Flat node, as notebook 06 reads it
     if unc.empty:
         pytest.skip("no uncore campaigns selected")
     dp = report.data_pattern_counters(policy["data_pattern_campaign"], ROOT) if policy.get("data_pattern_campaign") else None
-    return claims.uncore_claims(unc, ext, Theory.load(), dp)
+    return claims.uncore_claims(unc, ext, Theory.load(), dp, report.load_uncore(ROOT, "cache"))
 
 
 def test_every_uncore_claim_holds(uncore_evidence):
@@ -154,4 +154,5 @@ def test_every_uncore_claim_holds(uncore_evidence):
 def test_uncore_claims_cover_the_review_items(uncore_evidence):
     ids = {c.id for group in uncore_evidence.values() for c in group}
     assert {"controller_streams", "clock_drop_power", "first_window_uncore", "remote_duplicate_reads", "gemm_controller_small_m",
-            "loaded_concurrency_counted"} <= ids
+            "loaded_concurrency_counted", "turbostat_matches_perf", "cache_resident_power", "idle_socket_uncore_coupling",
+            "energy_flat_vs_cache"} <= ids

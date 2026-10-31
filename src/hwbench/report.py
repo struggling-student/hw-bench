@@ -12,6 +12,7 @@ import json
 import math
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from hwbench.analysis import ROOT, load_measurements, select_measurements
@@ -1608,10 +1609,53 @@ def _sample_ratios(d: pd.DataFrame) -> pd.DataFrame:
     d["hbm_share"] = hbm / d.ctrl_bytes
     d["tier_share"] = d.hbm_share.where(d.memory_target.eq("hbm"), 1 - d.hbm_share)
     d["write_share"] = (d.ctrl_ddr_write_bytes + d.ctrl_hbm_write_bytes) / d.ctrl_bytes
-    # Socket 1 is idle in every single-socket record: its power is the reference.
+    # The socket that does not compute runs no benchmark, but it is not idle: its uncore clock follows
+    # the computing socket's, and its package power follows its clock (``uncore_coupling``).
     d["other_pkg_w"] = d.energy_pkg_j / d.elapsed_seconds - d.pkg_power_w
     d["other_ram_w"] = d.energy_ram_j / d.elapsed_seconds - d.ram_power_w
+    if "uncore_ghz_s0" in d:
+        d["other_uncore_ghz"] = socket_column(d, "uncore_ghz", other=True)
     d["core_ghz"] = d.ghz_effective
+    return d
+
+
+def socket_column(d: pd.DataFrame, name: str, which: str = "socket", other: bool = False) -> pd.Series:
+    """Per-socket column ``name_s0`` / ``name_s1`` of one socket of each row.
+
+    ``which`` is ``socket`` (the socket that computes) or ``memory_socket`` (the socket whose
+    memory serves the data); ``other`` takes the opposite socket.  Rows without a socket use 0.
+    """
+
+    chosen = d[which].where(d[which].notna(), d["socket"]).fillna(0)
+    if other:
+        chosen = 1 - chosen
+    return pd.Series(np.where(chosen == 1, d[f"{name}_s1"], d[f"{name}_s0"]), index=d.index)
+
+
+def energy_scopes(d: pd.DataFrame) -> pd.DataFrame:
+    """Power at two RAPL scopes and the energy per byte and per operation at each.
+
+    * **socket**: package plus DRAM power of the socket that computes (``socket_w``), per
+      byte the memory controllers of its memory socket moved (``ctrl_bytes_memory_socket``;
+      Cache rows, which have none, use the measured bytes) and per operation.
+    * **node**: package plus DRAM power of both sockets (``node_w``, ``node_power_w``), per
+      byte every controller moved and per operation.
+
+    Both include the idle floor; a third, wall scope (ipmitool) is added once it is measured.
+    Needs ``pkg_power_w``, ``ram_power_w`` and ``node_power_w``; columns that cannot be
+    formed are NaN.
+    """
+
+    d = _with_measured(d) if "measured_gbs" not in d else d.copy()
+    d["socket_w"] = d.pkg_power_w + d.ram_power_w
+    d["node_w"] = d["node_power_w"] if "node_power_w" in d else math.nan
+    socket_gbs = d.ctrl_bytes_memory_socket / d.elapsed_seconds / 1e9
+    socket_gbs = socket_gbs.where(d.memory_mode.eq("flat") & socket_gbs.notna(), d.measured_gbs)
+    d["pj_per_byte"] = d.socket_w / socket_gbs * 1e3
+    d["pj_per_byte_node"] = d.node_w / d.measured_gbs * 1e3
+    gops = d.performance_gops
+    d["pj_per_op"] = d.socket_w / gops * 1e3
+    d["pj_per_op_node"] = d.node_w / gops * 1e3
     return d
 
 
@@ -1623,12 +1667,14 @@ def controller_table(unc: pd.DataFrame) -> pd.DataFrame:
     sockets by the kernel's traffic convention; ``ctrl_over_counted`` divides them by the
     offcore-response lines of the benchmark's own threads.  ``tier_share`` is the share of
     the controller bytes that landed on the bound tier, ``write_share`` the share written.
+    ``pj_per_byte`` and ``pj_per_byte_node`` are the energy per controller byte at the socket
+    and node RAPL scopes (``energy_scopes``).
     """
 
     d = unc[unc.notes.isin(U1_STREAMS) & unc.ctrl_bytes.notna() & unc.modeled_bytes.gt(0)]
     if d.empty:
         return pd.DataFrame()
-    d = _sample_ratios(d).assign(kernel=lambda f: f.notes.map(U1_STREAMS))
+    d = energy_scopes(_sample_ratios(d)).assign(kernel=lambda f: f.notes.map(U1_STREAMS))
     out = d.groupby(["memory_target", "kernel", "threads"]).agg(
         gbs=("bandwidth_gbs", "median"),
         ctrl_gbs=("ctrl_bandwidth_gbs", "median"),
@@ -1636,11 +1682,110 @@ def controller_table(unc: pd.DataFrame) -> pd.DataFrame:
         ctrl_over_counted=("ctrl_over_counted", "median"),
         tier_share=("tier_share", "median"),
         write_share=("write_share", "median"),
+        socket_w=("socket_w", "median"),
+        node_w=("node_w", "median"),
+        pj_per_byte=("pj_per_byte", "median"),
+        pj_per_byte_node=("pj_per_byte_node", "median"),
         intervals=("uncore_intervals", "median"),
         n_samples=("ctrl_bytes", "size"),
         campaign=("campaign_id", _ids),
     ).reset_index()
     return out
+
+
+# ------------------------------------------------- the socket that runs nothing (A2)
+#: Uncore clock (GHz) below which a socket is taken to be at its idle floor.
+IDLE_UNCORE_GHZ = 1.0
+WORKLOAD_FAMILIES = (
+    ("compute peaks", ("u1_isa",)),
+    ("GEMM", ("u4_gemm", "u_gemm_conv", "u_gemm_atlas", "usmoke_gemm")),
+    ("FP64 sweep", ("u_sweep",)),
+    ("chase", ("u_loaded", "usmoke")),
+    ("streams", ("u1_", "u2_local", "u_copy_ceiling", "u3_")),
+)
+
+
+def workload_family(notes: pd.Series) -> pd.Series:
+    """Group the counted workloads (``notes`` labels) into the families the coupling is read over."""
+
+    out = pd.Series("other", index=notes.index)
+    for family, prefixes in reversed(WORKLOAD_FAMILIES):
+        out = out.mask(notes.str.startswith(prefixes), family)
+    return out
+
+
+def uncore_coupling_frame(*frames: pd.DataFrame) -> pd.DataFrame:
+    """Samples in which socket 0 computes on its own memory, with the other socket's power and clock.
+
+    One row per accepted one-socket sample of ``u*`` records (Flat from the perf session,
+    Cache from turbostat) whose memory is on the computing socket: the other socket runs
+    nothing, serves no memory, and is the one this coupling is read on.  Remote reads, where
+    socket 1 serves the data, are left out.
+    """
+
+    rows = []
+    for frame in frames:
+        if frame is None or frame.empty or "pkg_power_w_s1" not in frame:
+            continue
+        d = frame[frame.accepted & frame.socket_scope.eq("single") & frame.socket.eq(0)
+                  & (frame.memory_socket.isna() | frame.memory_socket.eq(0))
+                  & frame.pkg_power_w_s1.notna() & frame.uncore_ghz_s1.notna()]
+        rows.append(d.assign(family=workload_family(d.notes)))
+    if not rows:
+        return pd.DataFrame()
+    out = pd.concat(rows, ignore_index=True)
+    return out[["memory_mode", "campaign_id", "notes", "family", "benchmark", "memory_target", "threads", "iteration",
+                "power_source", "pkg_power_w_s0", "pkg_power_w_s1", "ram_power_w_s1", "uncore_ghz_s0", "uncore_ghz_s1"]]
+
+
+def uncore_coupling_fit(frame: pd.DataFrame) -> pd.DataFrame:
+    """Per memory mode: how the idle socket's package power follows its uncore clock, and that clock the busy one's.
+
+    ``slope_w_per_ghz`` and ``intercept_w`` are a least-squares line of the other socket's package
+    power on its own uncore clock (``r2`` its fit); ``clock_corr`` is the correlation of the two
+    sockets' uncore clocks and ``clock_ratio`` the median of other over computing.  ``floor_w`` is the
+    median power of the other socket in samples where its uncore sits below ``IDLE_UNCORE_GHZ`` (the
+    node's lowest observed state, not a measured idle: that needs a record with nothing running);
+    ``induced_max_w`` is the largest power above that floor.
+    """
+
+    rows = []
+    for mode, d in frame.groupby("memory_mode"):
+        slope, intercept = np.polyfit(d.uncore_ghz_s1, d.pkg_power_w_s1, 1)
+        resid = d.pkg_power_w_s1 - (slope * d.uncore_ghz_s1 + intercept)
+        low = d[d.uncore_ghz_s1 < IDLE_UNCORE_GHZ]
+        floor = float(low.pkg_power_w_s1.median()) if len(low) else math.nan
+        rows.append(dict(
+            memory_mode=mode, n_samples=len(d), slope_w_per_ghz=slope, intercept_w=intercept,
+            r2=1 - float((resid**2).sum() / ((d.pkg_power_w_s1 - d.pkg_power_w_s1.mean()) ** 2).sum()),
+            clock_corr=float(np.corrcoef(d.uncore_ghz_s0, d.uncore_ghz_s1)[0, 1]),
+            clock_ratio=float((d.uncore_ghz_s1 / d.uncore_ghz_s0).median()),
+            floor_w=floor, floor_ghz=float(low.uncore_ghz_s1.median()) if len(low) else math.nan,
+            power_min_w=float(d.pkg_power_w_s1.min()), power_max_w=float(d.pkg_power_w_s1.max()),
+            induced_max_w=float(d.pkg_power_w_s1.max()) - floor,
+        ))
+    return pd.DataFrame(rows)
+
+
+def uncore_coupling(frame: pd.DataFrame) -> pd.DataFrame:
+    """Medians per memory mode and workload family: both sockets' power and uncore clock.
+
+    ``other_above_floor_w`` is the other socket's package power minus the mode's floor
+    (``uncore_coupling_fit``): what the computing socket's activity induces on it.
+    """
+
+    floor = uncore_coupling_fit(frame).set_index("memory_mode").floor_w
+    out = frame.groupby(["memory_mode", "family"]).agg(
+        n_samples=("notes", "size"),
+        computing_w=("pkg_power_w_s0", "median"),
+        other_w=("pkg_power_w_s1", "median"),
+        computing_ghz=("uncore_ghz_s0", "median"),
+        other_ghz=("uncore_ghz_s1", "median"),
+        other_w_max=("pkg_power_w_s1", "max"),
+    ).reset_index()
+    out["other_above_floor_w"] = out.other_w - out.memory_mode.map(floor)
+    order = {f: i for i, (f, _) in enumerate(WORKLOAD_FAMILIES)}
+    return out.sort_values(["memory_mode", "family"], key=lambda c: c.map(order) if c.name == "family" else c).reset_index(drop=True)
 
 
 def counting_cost(unc: pd.DataFrame) -> pd.DataFrame:
@@ -1669,23 +1814,29 @@ def counting_cost(unc: pd.DataFrame) -> pd.DataFrame:
 def power_table(unc: pd.DataFrame) -> pd.DataFrame:
     """Package and DRAM power, core and uncore clocks and the PCU limit, per configuration (U1).
 
-    Power is that of the socket that computes; ``other_pkg_w`` is the idle socket in the
-    same window.  ``pj_per_byte`` is the computing socket's package plus DRAM energy per
-    byte the controllers moved; ``pj_per_op`` its package energy per operation.
+    ``pkg_w`` and ``ram_w`` are the socket that computes.  ``other_pkg_w`` and
+    ``other_uncore_ghz`` are the socket that runs nothing in the same window: it is not idle,
+    because its uncore clock follows the computing socket's (``uncore_coupling``).  Energy is
+    at two RAPL scopes (``energy_scopes``): ``pj_per_byte`` and ``pj_per_op`` are the computing
+    socket's package plus DRAM power per byte its memory controllers moved and per operation;
+    the ``_node`` columns use both sockets' package plus DRAM power (``node_w``) and every
+    controller's bytes.  All include the idle floor.
     """
 
     d = unc[(unc.notes.isin(U1_STREAMS) | unc.notes.eq("u1_isa")) & unc.pkg_power_w.notna()]
     if d.empty:
         return pd.DataFrame()
-    d = _sample_ratios(d)
+    d = energy_scopes(_sample_ratios(d))
     from hwbench.plotting import PATH_LABELS
 
     paths = [PATH_LABELS.get(KERNEL_PATHS.get((b, t), ""), b) for b, t in zip(d.benchmark, d["dtype"])]
     d["kernel"] = d.notes.map(U1_STREAMS).fillna(pd.Series(paths, index=d.index))
     d["memory_target"] = d.memory_target.where(d.notes.ne("u1_isa"), "registers")
     streams = d.memory_target.ne("registers")
-    d["pj_per_byte"] = ((d.pkg_power_w + d.ram_power_w) / (d.ctrl_bandwidth_gbs * 1e9) * 1e12).where(streams)
-    d["pj_per_op"] = (d.pkg_power_w / (d.performance_gops * 1e9) * 1e12).where(~streams)
+    for column in ("pj_per_byte", "pj_per_byte_node"):
+        d[column] = d[column].where(streams)
+    for column in ("pj_per_op", "pj_per_op_node"):
+        d[column] = d[column].where(~streams)
     out = d.groupby(["memory_target", "kernel", "threads"]).agg(
         gbs=("bandwidth_gbs", "median"),
         gops=("performance_gops", "median"),
@@ -1694,10 +1845,14 @@ def power_table(unc: pd.DataFrame) -> pd.DataFrame:
         pkg_w=("pkg_power_w", "median"),
         ram_w=("ram_power_w", "median"),
         other_pkg_w=("other_pkg_w", "median"),
+        other_uncore_ghz=("other_uncore_ghz", "median"),
+        node_w=("node_w", "median"),
         power_limited=("pcu_power_limit_frac", "median"),
         thermal_limited=("pcu_thermal_limit_frac", "median"),
         pj_per_byte=("pj_per_byte", "median"),
+        pj_per_byte_node=("pj_per_byte_node", "median"),
         pj_per_op=("pj_per_op", "median"),
+        pj_per_op_node=("pj_per_op_node", "median"),
         n_samples=("pkg_power_w", "size"),
     ).reset_index()
     return out
@@ -1741,7 +1896,10 @@ def remote_counter_table(unc: pd.DataFrame) -> pd.DataFrame:
     ``upi_flits_per_line`` is the data flits sent over every UPI link (both sockets) per
     64-byte line the kernel read; ``dir_updates_per_line`` the directory updates per line;
     ``ctrl_write_per_read`` the controller write bytes per controller read byte, which a
-    read-only kernel only causes through directory writes back to memory.
+    read-only kernel only causes through directory writes back to memory.  ``serving_*`` are
+    the package power, uncore clock and share of PCU cycles clipped for power of the socket
+    whose memory is read (the computing socket itself for a local read); ``pkg_w``,
+    ``uncore_ghz`` and ``power_limited`` are the computing socket's.
     """
 
     d = unc[unc.notes.isin(["u2_local", "u2_remote"]) & unc.ctrl_bytes.notna()]
@@ -1755,6 +1913,8 @@ def remote_counter_table(unc: pd.DataFrame) -> pd.DataFrame:
     d["ctrl_write_per_read"] = writes / (d.ctrl_bytes - writes)
     d["placement"] = d.notes.str.replace("u2_", "", regex=False)
     d["kernel"] = d.benchmark.str.replace("stream_", "", regex=False)
+    for name in ("pkg_power_w", "uncore_ghz", "pcu_power_limit_frac"):
+        d[f"serving_{name}"] = socket_column(d, name, which="memory_socket")
     out = d.groupby(["memory_target", "kernel", "threads", "placement"]).agg(
         gbs=("bandwidth_gbs", "median"),
         ctrl_over_modeled=("ctrl_over_modeled", "median"),
@@ -1765,6 +1925,9 @@ def remote_counter_table(unc: pd.DataFrame) -> pd.DataFrame:
         uncore_ghz=("uncore_ghz", "median"),
         pkg_w=("pkg_power_w", "median"),
         power_limited=("pcu_power_limit_frac", "median"),
+        serving_pkg_w=("serving_pkg_power_w", "median"),
+        serving_uncore_ghz=("serving_uncore_ghz", "median"),
+        serving_power_limited=("serving_pcu_power_limit_frac", "median"),
         n_samples=("ctrl_bytes", "size"),
     ).reset_index()
     return out
@@ -1778,13 +1941,14 @@ def gemm_controller_table(unc: pd.DataFrame) -> pd.DataFrame:
 
     ``intensity_ctrl`` places the GEMM on a roofline with the bytes the memory controllers
     served; ``ctrl_over_counted`` near 1 means the cores' own offcore counts already gave
-    the memory traffic.
+    the memory traffic.  ``pj_per_op`` and ``pj_per_op_node`` are the energy per operation at the
+    socket and node RAPL scopes (``energy_scopes``), ``other_pkg_w`` the other socket's package power.
     """
 
     d = unc[unc.notes.eq("u4_gemm") & unc.ctrl_bytes.notna()]
     if d.empty:
         return pd.DataFrame()
-    d = _sample_ratios(d)
+    d = energy_scopes(_sample_ratios(d))
     d["intensity_ctrl"] = d.operations / d.ctrl_bytes
     d["ctrl_read_over_modeled"] = (d.ctrl_ddr_read_bytes + d.ctrl_hbm_read_bytes) / d.modeled_bytes
     d["ctrl_write_over_modeled"] = (d.ctrl_ddr_write_bytes + d.ctrl_hbm_write_bytes) / d.modeled_bytes
@@ -1804,7 +1968,11 @@ def gemm_controller_table(unc: pd.DataFrame) -> pd.DataFrame:
         core_ghz=("core_ghz", "median"),
         uncore_ghz=("uncore_ghz", "median"),
         pkg_w=("pkg_power_w", "median"),
+        node_w=("node_w", "median"),
+        other_pkg_w=("other_pkg_w", "median"),
         power_limited=("pcu_power_limit_frac", "median"),
+        pj_per_op=("pj_per_op", "median"),
+        pj_per_op_node=("pj_per_op_node", "median"),
         n_samples=("ctrl_bytes", "size"),
     ).reset_index()
     return out
@@ -1985,7 +2153,8 @@ def counted_gemm_frame(unc: pd.DataFrame, labels=COUNTED_GEMM_LABELS, shape: str
     One row per mode, tier, precision, weight layout, shape, M and pool; medians over the
     timed windows.  ``intensity`` is the measured one (``bytes_source`` says how it was
     measured), ``intensity_modeled`` the tensor-size convention of the other notebooks.
-    ``j_per_op`` is package plus DRAM energy of the computing socket per operation.  Same
+    ``j_per_op`` is package plus DRAM energy of the computing socket per operation
+    (``power_w``), ``j_per_op_node`` that of both sockets (``node_w``).  Same
     columns as ``gemm_points`` where they overlap, so the workload-point helpers accept it.
     """
 
@@ -1998,6 +2167,7 @@ def counted_gemm_frame(unc: pd.DataFrame, labels=COUNTED_GEMM_LABELS, shape: str
     if shape is not None:
         d = d[d["shape"].eq(shape)]
     d["power_w"] = d.pkg_power_w + d.ram_power_w
+    d["node_w"] = d["node_power_w"] if "node_power_w" in d else math.nan
     keys = ["memory_mode", "config", "memory_target", "dtype", "layout", "shape", "n", "k", "m", "working_set_bytes"]
     out = d.groupby(keys, dropna=False).agg(
         gops=("performance_gops", "median"),
@@ -2007,6 +2177,7 @@ def counted_gemm_frame(unc: pd.DataFrame, labels=COUNTED_GEMM_LABELS, shape: str
         intensity_modeled=("arithmetic_intensity", "median"),
         bytes_source=("bytes_source", "first"),
         power_w=("power_w", "median"),
+        node_w=("node_w", "median"),
         power_source=("power_source", "first"),
         cv_percent=("performance_gops", _cv),
         n_samples=("accepted", "size"),
@@ -2015,6 +2186,7 @@ def counted_gemm_frame(unc: pd.DataFrame, labels=COUNTED_GEMM_LABELS, shape: str
     ).reset_index()
     out["measured_over_modeled"] = out.intensity_modeled / out.intensity
     out["j_per_op"] = out.power_w / (out.gops * 1e9)
+    out["j_per_op_node"] = out.node_w / (out.gops * 1e9)
     out["pool_gib"] = out.working_set_bytes / 2**30
     out["pool_x"] = out.working_set_bytes / ONCHIP_BYTES
     out["status"] = "counted"
@@ -2171,8 +2343,8 @@ def _cache_frame(unc: pd.DataFrame, labels) -> pd.DataFrame:
     d = _with_measured(d)
     d["kernel"] = d.benchmark.map(BANDWIDTH_KERNELS)
     d["working_set_gib"] = (d.working_set_bytes / 2**30).round(1)
-    d["power_w"] = d.pkg_power_w + d.ram_power_w
-    d["pj_per_byte"] = d.power_w / (d.measured_gbs * 1e9) * 1e12
+    d = energy_scopes(d)
+    d["power_w"] = d.socket_w
     if "nm_hit_rate" not in d:
         d["nm_hit_rate"] = math.nan
     if "far_bytes" not in d:
@@ -2192,7 +2364,9 @@ def _cache_agg(d: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
         uncore_ghz=("uncore_ghz", "median"),
         pkg_w=("pkg_power_w", "median"),
         ram_w=("ram_power_w", "median"),
+        node_w=("node_w", "median"),
         pj_per_byte=("pj_per_byte", "median"),
+        pj_per_byte_node=("pj_per_byte_node", "median"),
         power_source=("power_source", "first"),
         cv_percent=("bandwidth_gbs", _cv),
         n_samples=("accepted", "size"),
@@ -2234,7 +2408,8 @@ def mode_power_comparison(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame) -> pd
 
     Flat rows come from U1 (controller bytes), Cache rows from ``ustreams`` on the Cache
     node at 8 GiB (resident) and 96 GiB (spilled).  ``pj_per_byte`` divides package plus
-    DRAM power by the measured traffic of each mode.
+    DRAM power by the measured traffic of each mode (the computing socket's, as ``pj_per_byte``);
+    ``node_w`` and ``pj_per_byte_node`` are the same at the node RAPL scope (both sockets).
     """
 
     rows = []
@@ -2246,13 +2421,15 @@ def mode_power_comparison(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame) -> pd
             key = (r.memory_target, r.kernel, 56)
             rows.append(dict(config=f"Flat {r.memory_target.upper()}", working_set_gib=8.0, kernel=r.kernel, gbs=r.gbs,
                              measured_gbs=ct.ctrl_gbs.get(key, math.nan), core_ghz=r.core_ghz, uncore_ghz=r.uncore_ghz,
-                             pkg_w=r.pkg_w, ram_w=r.ram_w, pj_per_byte=r.pj_per_byte, power_source="perf"))
+                             pkg_w=r.pkg_w, ram_w=r.ram_w, node_w=r.node_w, pj_per_byte=r.pj_per_byte,
+                             pj_per_byte_node=r.pj_per_byte_node, power_source="perf"))
     cache = cache_stream_table(unc_cache)
     if not cache.empty:
         for r in cache[cache.threads.eq(56)].itertuples():
             rows.append(dict(config=f"Cache, {r.working_set_gib:.0f} GiB", working_set_gib=r.working_set_gib, kernel=r.kernel,
                              gbs=r.gbs, measured_gbs=r.measured_gbs, core_ghz=r.core_ghz, uncore_ghz=r.uncore_ghz, pkg_w=r.pkg_w,
-                             ram_w=r.ram_w, pj_per_byte=r.pj_per_byte, power_source=r.power_source))
+                             ram_w=r.ram_w, node_w=r.node_w, pj_per_byte=r.pj_per_byte, pj_per_byte_node=r.pj_per_byte_node,
+                             power_source=r.power_source))
     return pd.DataFrame(rows)
 
 
@@ -2266,7 +2443,8 @@ def decode_table_measured(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theor
     ``gbs`` is the measured traffic rate and ``modeled_gbs`` the tensor-size convention beside
     it; ``read_gbs`` is the read-only kernel in the same bytes.  ``tokens_per_s`` is the
     Llama-3.1-8B bound if every weight streamed at ``gbs``; ``j_per_token`` is the computing
-    socket's package plus DRAM energy for one token at that rate.  Falls back to
+    socket's package plus DRAM energy for one token at that rate (``power_w``), ``j_per_token_node`` that
+    of both sockets (``node_w``).  Falls back to
     ``decode_table`` when nothing was counted.
     """
 
@@ -2285,7 +2463,7 @@ def decode_table_measured(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theor
     for tier, c in read.items():
         rows.append(dict(tier=tier, precision="—", layout="read-only kernel", pool="—", gbs=c.gbs, modeled_gbs=math.nan,
                          bytes_source=c.note.removeprefix("bytes measured (").rstrip(")") if c.note else "modeled",
-                         power_w=math.nan, read_gbs=c.gbs))
+                         power_w=math.nan, node_w=math.nan, read_gbs=c.gbs))
     m1 = counted[counted.m.eq(1)]
     for r in m1.itertuples():
         tier = (f"Flat {r.memory_target.upper()}" if r.memory_mode == "flat" else f"Cache, {r.pool_gib:.0f} GiB")
@@ -2293,11 +2471,81 @@ def decode_table_measured(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theor
             continue
         pool = f"{r.pool_x:.0f}× on-chip" if r.memory_mode == "flat" else f"{r.pool_gib:.0f} GiB"
         rows.append(dict(tier=tier, precision=r.dtype, layout=r.layout, pool=pool, gbs=r.measured_gbs, modeled_gbs=r.gbs,
-                         bytes_source=r.bytes_source, power_w=r.power_w, read_gbs=read[tier].gbs))
+                         bytes_source=r.bytes_source, power_w=r.power_w, node_w=r.node_w, read_gbs=read[tier].gbs))
     out = pd.DataFrame(rows)
     out["of_read_ceiling"] = out.gbs / out.read_gbs
     out["tokens_per_s"] = [g / model_gb.get(p, model_gb["bf16"]) for g, p in zip(out.gbs, out.precision)]
     out["j_per_token"] = out.power_w / out.tokens_per_s
+    out["j_per_token_node"] = out.node_w / out.tokens_per_s
     order = {t: i for i, t in enumerate(read)}
     out["_o"] = out.tier.map(order)
     return out.sort_values(["_o", "layout", "precision"], key=lambda c: c if c.name == "_o" else c.map(lambda v: (v != "read-only kernel", v))).drop(columns="_o").reset_index(drop=True)
+
+
+# ------------------------------------------------- Flat against Cache at equal workloads (A5)
+def _tier_label(mode: str, target: str, pool_gib: float) -> str:
+    return f"Flat {target.upper()}" if mode == "flat" else f"Cache, {pool_gib:.0f} GiB"
+
+
+def energy_table(unc: pd.DataFrame, theory: Theory, shape: str = "14336x4096") -> pd.DataFrame:
+    """Energy per operation and per token of the same workloads in Flat and Cache mode, at both RAPL scopes.
+
+    A long frame, one row per ``kind``, tier and point; ``pj_per_op`` is the computing socket's
+    package plus DRAM power per operation and ``pj_per_op_node`` that of both sockets
+    (``energy_scopes``); both include the idle floor.
+
+    * ``gemm``: the counted GEMM of ``shape`` against the batch size ``x`` = M (decode at M = 1
+      through prefill at M = 4096), BF16 plain and INT8 prepacked, on Flat HBM and DDR at 16×
+      the on-chip capacity and in Cache mode resident (16 GiB) and spilled (96 GiB).
+      ``j_per_token`` is the energy of one Llama-3.1-8B token if the whole model ran at this
+      point's rate and power (2 × parameters operations per token); at M = 1 it is the decode
+      bound, which ``decode_table_measured`` states at measured bytes.
+    * ``sweep``: the counted 12-chain FP64 sweep against its measured intensity (``x`` = K),
+      an energy roofline: Flat HBM and DDR at 8 GiB, Cache at 16 GiB (resident) and 96 GiB.
+    * ``peak``: the 56-core compute peaks of each ISA path in both modes (a sanity check that
+      the mode does not change the energy of work that touches no memory).
+
+    ``intensity`` is the measured one (``bytes_source`` says how it was measured).
+    """
+
+    cols = ["kind", "tier", "precision", "layout", "x", "intensity", "gops", "socket_w", "node_w", "pj_per_op",
+            "pj_per_op_node", "j_per_token", "j_per_token_node", "bytes_source", "power_source", "n_samples", "campaign"]
+    rows = []
+    cg = counted_gemm_frame(unc, shape=shape)
+    ops_per_token = 2 * theory.model_parameters()
+    for r in cg.itertuples():
+        tier = _tier_label(r.memory_mode, r.memory_target, r.pool_gib)
+        rows.append(dict(
+            kind="gemm", tier=tier, precision=r.dtype, layout=r.layout, x=r.m, intensity=r.intensity, gops=r.gops,
+            socket_w=r.power_w, node_w=r.node_w, pj_per_op=r.j_per_op * 1e12, pj_per_op_node=r.j_per_op_node * 1e12,
+            j_per_token=r.j_per_op * ops_per_token, j_per_token_node=r.j_per_op_node * ops_per_token,
+            bytes_source=r.bytes_source, power_source=r.power_source, n_samples=r.n_samples, campaign=r.campaign_id))
+    d = unc[unc.benchmark.eq("roofline_sweep") & unc.notes.eq(COUNTED_SWEEP_LABEL) & unc.accepted]
+    if len(d):
+        d = energy_scopes(_with_measured(d))
+        d["tier"] = [_tier_label(m, t, w / 2**30) for m, t, w in zip(d.memory_mode, d.memory_target, d.working_set_bytes)]
+        g = d.groupby(["tier", "k"]).agg(
+            intensity=("intensity_measured", "median"), gops=("performance_gops", "median"), socket_w=("socket_w", "median"),
+            node_w=("node_w", "median"), pj_per_op=("pj_per_op", "median"), pj_per_op_node=("pj_per_op_node", "median"),
+            bytes_source=("bytes_source", "first"), power_source=("power_source", "first"), n_samples=("k", "size"),
+            campaign=("campaign_id", _ids)).reset_index()
+        for r in g.itertuples():
+            rows.append(dict(kind="sweep", tier=r.tier, precision="fp64", layout="—", x=r.k, **{c: getattr(r, c) for c in (
+                "intensity", "gops", "socket_w", "node_w", "pj_per_op", "pj_per_op_node", "bytes_source", "power_source", "n_samples", "campaign")}))
+    d = unc[unc.notes.eq("u1_isa") & unc.threads.eq(56) & unc.accepted & unc.pkg_power_w.notna()]
+    if len(d):
+        from hwbench.plotting import PATH_LABELS
+
+        d = energy_scopes(d)
+        d["path"] = [PATH_LABELS.get(KERNEL_PATHS.get((b, t), ""), b) for b, t in zip(d.benchmark, d["dtype"])]
+        d["tier"] = d.memory_mode.map({"flat": "Flat", "cache": "Cache"})
+        g = d.groupby(["tier", "path", "dtype"]).agg(
+            gops=("performance_gops", "median"), socket_w=("socket_w", "median"), node_w=("node_w", "median"),
+            pj_per_op=("pj_per_op", "median"), pj_per_op_node=("pj_per_op_node", "median"), power_source=("power_source", "first"),
+            n_samples=("path", "size"), campaign=("campaign_id", _ids)).reset_index()
+        for r in g.itertuples():
+            rows.append(dict(kind="peak", tier=r.tier, precision=r.dtype, layout=r.path, x=math.nan, intensity=math.nan, gops=r.gops,
+                             socket_w=r.socket_w, node_w=r.node_w, pj_per_op=r.pj_per_op, pj_per_op_node=r.pj_per_op_node,
+                             bytes_source="—", power_source=r.power_source, n_samples=r.n_samples, campaign=r.campaign))
+    return pd.DataFrame(rows, columns=cols)
+

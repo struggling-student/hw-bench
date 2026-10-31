@@ -239,3 +239,42 @@ def test_sweeps_with_eight_or_more_chains_are_accepted_and_fewer_are_superseded(
     ]:
         reasons = [r for row in rows_from_record(_sweep_record(impl), Path("raw.json"), {}) for r in str(row.get("exclusion_reason", "")).split(";")]
         assert ("superseded_dependency_limited_sweep" in reasons) is (not accepted), impl
+
+
+def _dual_rows():
+    a = record(scope="dual_component")
+    b = record(scope="dual_component", socket=1)
+    return rows_from_record(a, Path("a"), {}) + rows_from_record(b, Path("b"), {})
+
+
+def test_dual_aggregate_adds_per_process_counters_and_takes_one_system_session():
+    rows = _dual_rows()
+    a, b = rows
+    a.update(dram_read_lines=100, dram_write_lines=40, instructions=1000)
+    b.update(dram_read_lines=60, dram_write_lines=20, instructions=500)
+    # One perf session, beside participant a, counted both sockets over its 3 s window.
+    a.update(ctrl_bytes=3.0e11, ctrl_bytes_s0=1.5e11, ctrl_bytes_s1=1.5e11, energy_pkg_j=2400.0, pkg_power_w=400.0,
+             pkg_power_w_s0=400.0, pkg_power_w_s1=380.0, ram_power_w=30.0, ram_power_w_s0=30.0, ram_power_w_s1=28.0,
+             uncore_ghz=2.0, uncore_ghz_s0=2.0, uncore_ghz_s1=1.6, pcu_power_limit_frac=0.5, pcu_power_limit_frac_s0=0.5,
+             pcu_power_limit_frac_s1=0.1, node_power_w=838.0, power_source="perf", uncore_intervals=28)
+    aggregate = _aggregate_dual(rows)[0]
+    assert aggregate["accepted"]
+    assert (aggregate["dram_read_lines"], aggregate["dram_write_lines"], aggregate["instructions"]) == (160, 60, 1500)
+    assert aggregate["counted_bytes"] == 220 * 64
+    # The session is one measurement of the node, not summed, and rescaled to the 3 s window.
+    assert aggregate["ctrl_bytes"] == 3.0e11 and aggregate["energy_pkg_j"] == 2400.0
+    assert aggregate["ctrl_bandwidth_gbs"] == 3.0e11 / 3 / 1e9
+    assert aggregate["node_power_w"] == 838.0 and aggregate["power_source"] == "perf" and aggregate["uncore_intervals"] == 28
+    # Both sockets compute: package and DRAM power are the sockets' sum, clocks their mean.
+    assert aggregate["pkg_power_w"] == 780.0 and aggregate["ram_power_w"] == 58.0
+    assert aggregate["uncore_ghz"] == 1.8 and aggregate["pcu_power_limit_frac"] == 0.3
+
+
+def test_aggregate_without_a_session_carries_no_power_and_two_sessions_average():
+    rows = _dual_rows()
+    aggregate = _aggregate_dual(rows)[0]
+    assert aggregate["pkg_power_w"] is None and aggregate["ctrl_bytes"] is None and aggregate["power_source"] is None
+    rows = _dual_rows()
+    for row, watts in zip(rows, (400.0, 420.0)):
+        row.update(pkg_power_w=watts, power_source="perf")
+    assert _aggregate_dual(rows)[0]["pkg_power_w"] == 410.0

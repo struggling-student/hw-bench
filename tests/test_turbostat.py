@@ -57,6 +57,33 @@ def test_intervals_inside_a_sample_and_the_gap_between_runs():
     assert fields["ts_coverage"] == pytest.approx(0.8, abs=0.01)
 
 
+def test_per_package_columns():
+    (w,) = turbostat.windows(_turbo(), dict(samples=[dict(start_ns=int(10.0e9), end_ns=int(11.0e9))]))
+    fields = turbostat.sample_fields(w, 1.0, 0)
+    assert fields["ts_pkg_power_w_s0"] == pytest.approx(300.0) and fields["ts_pkg_power_w_s1"] == pytest.approx(100.0)
+    assert fields["ts_ram_power_w_s1"] == pytest.approx(20.0)
+    assert fields["ts_uncore_ghz_s0"] == pytest.approx(1.6) and fields["ts_uncore_ghz_s1"] == pytest.approx(0.8)
+    assert fields["ts_bzy_mhz_s0"] == pytest.approx(1900) and fields["ts_bzy_mhz_s1"] == pytest.approx(800)
+    # The computing package's columns are the per-package ones of that package.
+    assert fields["ts_pkg_power_w"] == fields["ts_pkg_power_w_s0"]
+    assert fields["ts_system_power_w"] == pytest.approx(sum(fields[f"ts_{n}_power_w_s{p}"] for n in ("pkg", "ram") for p in (0, 1)))
+    assert set(fields) <= set(turbostat.FIELDS)
+
+
+def test_process_node_power_and_per_socket_fallback():
+    per_socket = {f"ts_{n}_power_w_s{p}": v for (n, p), v in {("pkg", 0): 300.0, ("pkg", 1): 150.0, ("ram", 0): 40.0, ("ram", 1): 10.0}.items()}
+    ts = dict(ts_pkg_power_w=300.0, ts_ram_power_w=40.0, ts_uncore_ghz=1.6, ts_uncore_ghz_s0=1.6, ts_uncore_ghz_s1=1.4, **per_socket)
+    filled = process._power_source(ts)
+    assert filled["power_source"] == "turbostat"
+    assert filled["pkg_power_w_s1"] == 150.0 and filled["uncore_ghz_s1"] == 1.4
+    assert filled["node_power_w"] == pytest.approx(500.0)
+    # perf rows keep their own per-socket columns and get the node power from them.
+    perf = process._power_source(dict(pkg_power_w=310.0, pkg_power_w_s0=310.0, pkg_power_w_s1=140.0, ram_power_w_s0=30.0, ram_power_w_s1=5.0))
+    assert perf == dict(power_source="perf", node_power_w=pytest.approx(485.0))
+    # Missing DRAM power on one socket: no node figure rather than a partial sum.
+    assert "node_power_w" not in process._power_source(dict(pkg_power_w=310.0, pkg_power_w_s0=310.0, pkg_power_w_s1=140.0))
+
+
 def test_first_row_of_a_run_starts_one_interval_before_its_end():
     turbo = _turbo()
     # The second run's first interval ends at 12.4 s; it must not reach back across the gap.

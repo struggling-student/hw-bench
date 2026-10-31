@@ -72,6 +72,33 @@ def test_samples_take_only_intervals_entirely_inside():
     assert fields["uncore_ghz"] == pytest.approx(2.0)
 
 
+def test_per_socket_columns_keep_the_idle_socket_visible():
+    parsed = uncore.parse(_log(), EVENTS)
+    disable = 10e9 + 1.64e9
+    result = dict(
+        uncore_disable_ns=[int(disable), int(disable)],
+        samples=[dict(start_ns=int(10.62e9), end_ns=int(11.13e9), elapsed_seconds=0.51)],
+    )
+    (window,) = uncore.windows(parsed, result)
+    # Socket 1 draws the same package energy in the fixture and moves no controller bytes.
+    window["counts"][1]["pcu_clockticks"] = 100e6 * 4
+    window["counts"][1]["pcu_power_limit_cycles"] = 100e6
+    fields = uncore.sample_fields(window, 0.51, 0, 0)
+    assert fields["pkg_power_w_s0"] == pytest.approx(300.0)
+    assert fields["pkg_power_w_s1"] == pytest.approx(300.0)
+    assert fields["uncore_ghz_s0"] == pytest.approx(2.0) and fields["uncore_ghz_s1"] == pytest.approx(2.0)
+    assert fields["ctrl_bytes_s1"] == 0  # the fixture moves no bytes on socket 1
+    assert fields["ctrl_bytes_s0"] == pytest.approx(fields["ctrl_bytes"])
+    assert fields["pcu_power_limit_frac_s1"] == pytest.approx(0.25)
+    assert "pcu_power_limit_frac_s0" not in fields
+    assert set(uncore.SOCKET_FIELDS) >= {k for k in fields if k.endswith(("_s0", "_s1"))}
+    # The computing-socket columns are the per-socket ones of that socket.
+    assert fields["pkg_power_w"] == fields["pkg_power_w_s0"]
+    assert fields["uncore_ghz"] == fields["uncore_ghz_s0"]
+    on_one = uncore.sample_fields(window, 0.51, 1, 0)
+    assert on_one["pkg_power_w"] == on_one["pkg_power_w_s1"]
+
+
 def test_no_anchor_no_attribution():
     parsed = uncore.parse(_log(), EVENTS)
     result = dict(samples=[dict(start_ns=1, end_ns=2)])

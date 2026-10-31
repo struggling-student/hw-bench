@@ -77,9 +77,11 @@ sudo -n perf stat -a --per-socket -D -1 -I 100 -x, --control fifo:CTL,ACK -e <ev
 | `ctrl_ddr_read_bytes`, `ctrl_ddr_write_bytes` | `uncore_imc` event 0x05, umask 0xcf / 0xf0 | 64 B per CAS, 8 channels per socket |
 | `ctrl_hbm_read_bytes`, `ctrl_hbm_write_bytes` | `uncore_type_14` event 0x05, umask 0xcf / 0xf0 | the HBM channel controllers (32 per socket, unnamed by the 5.14 driver); 32 B per CAS, identified with a read stream of known size |
 | `ctrl_bytes`, `ctrl_bandwidth_gbs` | sum of the four | every channel of both sockets |
-| `energy_pkg_j`, `energy_ram_j`, `pkg_power_w`, `ram_power_w` | `power/energy-pkg/`, `power/energy-ram/` | RAPL; power columns are the computing socket's |
+| `energy_pkg_j`, `energy_ram_j`, `pkg_power_w`, `ram_power_w` | `power/energy-pkg/`, `power/energy-ram/` | RAPL; the energies are summed over both sockets, the power columns are the computing socket's |
 | `uncore_ghz` | `uncore_cha_0` event 0x01 | CHA (mesh) clock of the computing socket |
 | `pcu_power_limit_frac`, `pcu_thermal_limit_frac` | `unc_p_freq_max_power_cycles`, `unc_p_freq_max_limit_thermal_cycles` over `unc_p_clockticks` | share of PCU cycles with the frequency clipped |
+| `pkg_power_w_s0`, `pkg_power_w_s1`, `ram_power_w_s0`, `ram_power_w_s1`, `uncore_ghz_s0`, `uncore_ghz_s1`, `pcu_power_limit_frac_s0`, `pcu_power_limit_frac_s1`, `ctrl_bytes_s0`, `ctrl_bytes_s1` | the same events, per socket | both sockets are in every session; these keep the one that does not compute (and, for remote reads, the one that serves the data). The computing-socket columns above are the `_s0` or `_s1` column of the computing socket |
+| `node_power_w` | package plus DRAM power of both sockets | the node's RAPL power; equal to `system_power_w`, formed from the four per-socket powers |
 | `upi_tx_data_flits`, `upi_rx_data_flits` | `unc_upi_txl_flits.all_data`, `unc_upi_rxl_flits.all_data` | all links, both sockets |
 | `m2m_directory_updates` | `unc_m2m_directory_update.any` | all mesh-to-memory agents |
 
@@ -109,10 +111,12 @@ sudo -n turbostat --quiet -c 0,56 --interval 0.1 --num_iterations 50 \
   benchmark's clock. Each sample takes the intervals entirely inside it (four of five in a
   0.5 s sample, nine of ten in a one-second one).
 * **Columns.** `ts_pkg_power_w`, `ts_ram_power_w`, `ts_energy_pkg_j`, `ts_energy_ram_j`,
-  `ts_system_power_w`, `ts_uncore_ghz`, `ts_pkg_temp_c`, `ts_intervals`, `ts_coverage`.
-  Where no perf session ran, `process.py` copies them into `pkg_power_w`, `ram_power_w`,
-  `energy_*`, `system_power_w` and `uncore_ghz` and sets `power_source = "turbostat"`
-  (`"perf"` otherwise), so the power tables read both modes alike.
+  `ts_system_power_w`, `ts_uncore_ghz`, `ts_pkg_temp_c`, `ts_intervals`, `ts_coverage`, and per
+  package `ts_pkg_power_w_s0/s1`, `ts_ram_power_w_s0/s1`, `ts_uncore_ghz_s0/s1` and `ts_bzy_mhz_s0/s1`
+  (the busy clock of the package's first CPU, in MHz). Where no perf session ran, `process.py`
+  copies them into `pkg_power_w`, `ram_power_w`, `energy_*`, `system_power_w`, `uncore_ghz` and the
+  per-socket columns and sets `power_source = "turbostat"` (`"perf"` otherwise), so the power tables
+  read both modes alike.
 * **Validation.** The Flat smoke campaign `flat-usmoke-20261020T201307Z` ran both sessions in
   the same records: package power 0.997–1.002× perf's RAPL in samples of one second or more,
   0.997–1.018× over every record, DRAM 0.998–1.016×, uncore clock within 35 MHz of the CHA
@@ -125,7 +129,45 @@ sudo -n turbostat --quiet -c 0,56 --interval 0.1 --num_iterations 50 \
   identification probe staged for hbm13 (`data/probes/uncore-cache-20261020/README.md`).
 
 **Still unavailable.** The HBM-cache (M2M near-memory tag) hit rate (review item U3) and the
-controller traffic in Cache mode: both need perf on the Cache node.
+controller traffic in Cache mode: both need perf on the Cache node. The administrators have said
+that perf is available there now; this is **not verified**, because hbm13 can only be reached
+through Slurm (its host key is not in `known_hosts`). The identification probe
+(`data/probes/uncore-cache-20261020/probe.sh`) is the first thing to run, and it checks the
+package and the sudoers rule before it counts anything.
+
+## Energy scopes
+
+Every energy figure of the notebooks says which of these it is. All include the idle floor
+(nothing is subtracted, because no idle record has been measured yet).
+
+| Scope | Power | Bytes or work | Columns |
+| --- | --- | --- | --- |
+| **Computing socket** | package plus DRAM RAPL power of the socket that runs the benchmark | bytes the memory controllers of its memory socket moved (`ctrl_bytes_memory_socket`; Cache: the measured bytes) or the operations | `pj_per_byte`, `pj_per_op`, `j_per_op`, `j_per_token` |
+| **Node (RAPL)** | package plus DRAM RAPL power of both sockets (`node_power_w`) | every controller's bytes (all traffic the sample caused) or the operations | `pj_per_byte_node`, `pj_per_op_node`, `j_per_op_node`, `j_per_token_node` |
+| Node (wall) | BMC "Sys Power" (`ipmitool sensor`) | as above | **not measured yet** |
+
+Before 2026-10-31 the pJ/op of the compute peaks counted the package only, the GEMM J/op and the
+pJ/B counted package plus DRAM, and the Flat pJ/B divided one socket's power by both sockets'
+bytes; they are now one definition (`report.energy_scopes`). The effect on the headline figures is
+small at the computing-socket scope (pJ/B within 0.2%, pJ/op +7–9% from the DRAM added) and large at
+the node scope (pJ/B and pJ/op about 1.5× the computing-socket figure).
+
+**The socket that runs nothing is not idle.** Its uncore clock follows the computing socket's
+(correlation 0.93–0.95; 0.8 GHz beside the compute peaks, about 1.7 GHz beside a 56-core GEMM, up to
+2.4 GHz beside streams with few cores), and its package power follows its own clock: 131–235 W, about
+58 W/GHz above 75 W (R² 0.94 on Flat from perf, 0.94 on Cache from turbostat). The lowest state
+seen is about 134 W; relative to it a socket's activity induces 25–75 W (median per workload
+family) and up to 100 W on the other socket (claim `idle_socket_uncore_coupling`, notebook 06
+section 11). The old `other_pkg_w` label "idle reference" was therefore wrong; the column is the
+other socket's power in the same window. The floor is the lowest state observed, not a measured
+idle.
+
+**ipmitool.** `sudo -n ipmitool sensor` works on both nodes and reports Sys, CPU and Mem power in
+whole watts; one full listing takes about 6 s and the sudoers rule allows only the full listing, so
+it cannot be sampled per record. It is not used by the pipeline yet; the planned use is a
+campaign-level background log joined to records of at least 12 s, for the wall scope and for
+checking that RAPL "ram" covers only the DDR DIMMs (docs/MEASUREMENT_GAPS_PLAN_2026-10-31.md,
+B0 and B2).
 
 ## In the analysis
 
