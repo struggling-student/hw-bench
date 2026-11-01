@@ -67,6 +67,9 @@ def main(argv: list[str] | None = None) -> int:
         sampler = Sampler(args.output.with_suffix(".turbostat.txt"))
         sampler.start()
     before = _frequency_khz()
+    # CLOCK_REALTIME minus CLOCK_MONOTONIC, to place the record on the wall clock of the
+    # campaign-level logs (hwbench.ipmi).
+    realtime_offset_ns = time.time_ns() - time.monotonic_ns()
     started_ns = time.monotonic_ns()
     try:
         completed = subprocess.run(command, capture_output=True, text=True, check=False, env=environment)
@@ -104,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         "memory_socket": args.memory_socket,
         "synchronized": bool(os.environ.get("HWBENCH_SYNC_DIR")),
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "realtime_offset_ns": realtime_offset_ns,
         "process_start_ns": started_ns,
         "process_end_ns": finished_ns,
         "hostname": platform.node(),
