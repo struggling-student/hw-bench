@@ -52,6 +52,12 @@ uatlas       (privileged counters) the four Llama shapes at M = 1, 16, 256, 4096
              the atlas GEMM points at measured intensity
 usweep       (privileged counters) the FP64 intensity sweep (12 chains) and the copy
              ceiling, counted
+uidle        (privileged counters, both modes) the node at rest: one record of five 60 s
+             windows with no work, then one 14-core read per tier (five 30 s windows) for the
+             BMC's memory power against RAPL DRAM; the static floor of power, clocks and background traffic
+udual        (privileged counters, both modes) both sockets at once: 56+56 cores in 10 s
+             windows, read, the 14336x4096 GEMM at M = 1 (BF16, INT8) and the AMX BF16 peak,
+             each beside a one-socket control, for the energy of the deployment case
 
 Privileged counters: on the Flat node the perf session of ``hwbench.uncore`` (event set
 ``base``); on the Cache node, where perf is not installed, ``hwbench.turbostat`` (power,
@@ -115,8 +121,11 @@ NEW_PARTS = [
     "ugemmconv",
     "uatlas",
     "usweep",
+    "uidle",
+    "udual",
 ]
-UNCORE_PARTS = ["ustreams", "uremote", "ugemm", "uloaded", "usmoke", "ucapacity", "ucachelat", "ucacherep", "ugemmconv", "uatlas", "usweep"]
+UNCORE_PARTS = ["ustreams", "uremote", "ugemm", "uloaded", "usmoke", "ucapacity", "ucachelat", "ucacherep", "ugemmconv", "uatlas", "usweep",
+                "uidle", "udual"]
 CACHE_ONLY_UNCORE_PARTS = ["ucapacity", "ucachelat", "ucacherep"]
 
 THREAD_STEPS = [1, 2, 4, 8, 14, 28, 56]
@@ -156,6 +165,13 @@ UNCORE_ATLAS_M = [1, 16, 256, 4096]
 UNCORE_CAPACITY_GIB = [8, 16, 24, 32, 40, 48, 56, 64, 96, 128]
 UNCORE_CACHEREP_GIB = [8, 32, 56]
 SWEEP_K = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+IDLE_SECONDS = 60  # long enough for about ten BMC listings (6 s each) per window
+IDLE_REPETITIONS = 5  # the validation rule: five samples per configuration
+IDLE_LOAD_SECONDS = 30
+IDLE_LOAD_REPETITIONS = 5
+IDLE_LOAD_THREADS = 14  # not power-limited: the package stays well under PL1
+DUAL_SECONDS = 10
+UNCORE_CACHE_DUAL_GIB = [8, 96]
 
 
 def per_thread_sizes(low, high):
@@ -460,7 +476,7 @@ def main():
                 "--seconds",
                 seconds,
                 "--repetitions",
-                "5",
+                str(s.get("reps", 5)),
                 "--k",
                 str(s["k"]),
             ]
@@ -1149,6 +1165,45 @@ def main():
             for kind in ["read", "triad"]:
                 execute(spec(0, kind, target="effective_cache", gib=gib, label=f"u3_rep_{kind}", **counted_by))
 
+    if part == "uidle":
+        # The node at rest, recorded through the standard pipeline: the counters are enabled
+        # over windows in which nothing runs.  Idle first, while the node is still settled
+        # from the start of the campaign; the loads follow.  Turbostat runs beside perf in
+        # every record, so the two sessions can be checked against each other at rest.
+        both_counters = dict(counted_by, turbostat=True)
+        execute(dict(spec(0, "idle", 1, label="u_idle", **both_counters), seconds=IDLE_SECONDS, reps=IDLE_REPETITIONS))
+        # One read per tier below the power limit (the BMC's memory rail against RAPL DRAM):
+        # Flat HBM and DDR; Cache resident in the HBM cache and spilled to DDR.
+        loads = [(t, 8, f"u_idle_load_{t}") for t in targets] if flat else [("effective_cache", g, f"u_idle_load_{g}g") for g in (8, 96)]
+        for target, gib, label in loads:
+            execute(dict(spec(0, "read", IDLE_LOAD_THREADS, target, gib=gib, label=label, **both_counters),
+                         seconds=IDLE_LOAD_SECONDS, reps=IDLE_LOAD_REPETITIONS))
+    if part == "udual":
+        # Both sockets at once, each on its own memory, with the perf and turbostat session beside
+        # participant 0 only (its windows are the pair's; the session counts both sockets), and
+        # the same work on socket 0 alone from the same launch for the efficiency ratio.
+        both_counters = dict(counted_by, turbostat=True)
+        gemm_dtypes = ["bf16"] + (["int8"] if int8_gemm_verified() else [])
+        cases = []  # (name, builder(socket, extra) -> spec)
+        if flat:
+            for target in targets:
+                cases.append((f"read_{target}", lambda sock, extra, t=target: spec(sock, "read", 56, t, gib=8, **extra)))
+        else:
+            for gib in UNCORE_CACHE_DUAL_GIB:
+                cases.append((f"read_{gib}g", lambda sock, extra, g=gib: spec(sock, "read", 56, "effective_cache", gib=g, **extra)))
+        for target, pool in gemm_pools:
+            for dtype in gemm_dtypes:
+                tag = f"{target}_{pool // GIB}g" if not flat else target
+                cases.append((f"gemm_{dtype}_{tag}", lambda sock, extra, t=target, p=pool, d=dtype: spec(
+                    sock, "gemm", target=t, shape=4096, m=1, gemm_n=14336, dtype=d, pool=p, warm=GEMM_WARM_PASSES, **extra)))
+        cases.append(("amx_bf16", lambda sock, extra: spec(sock, "bf16", **extra)))
+        for name, build in cases:
+            members = [dict(build(sock, dict(both_counters if sock == 0 else {}, scope="dual_component", label=f"u5_dual_{name}")),
+                            seconds=DUAL_SECONDS) for sock in (0, 1)]
+            pair(members, f"udual-{name}")
+            control = dict(build(0, dict(both_counters, label=f"u5_dual_{name}_control")), seconds=DUAL_SECONDS)
+            execute(control)
+
     # ------------------------------------------------------------------- copy
     # The intensity sweep at K=1 loads one array and stores another, a pattern none of
     # Triad (two loads, one store), read-only and non-temporal Triad reproduces.  Copy
@@ -1375,7 +1430,7 @@ def main():
     if dry:
         names = [n for n, _, _ in plan]
         assert len(names) == len(set(names)), "duplicate record names in the plan"
-        measured = sum(5 * sec for _, sec, _ in plan)
+        measured = sum(s.get("reps", 5) * sec for _, sec, s in plan)
         print(f"{args.mode} {part}: {len(plan)} records, {measured / 60:.1f} min of timed windows (initialisation not included)")
         for name, sec, _ in plan:
             print(f"  {sec:g}s  {name}")

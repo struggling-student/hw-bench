@@ -54,6 +54,10 @@ def test_dry_run_writes_nothing():
         ("cache", "ucapacity", 30),
         ("cache", "ucachelat", 5),
         ("cache", "ucacherep", 6),
+        ("flat", "uidle", 3),
+        ("cache", "uidle", 3),
+        ("flat", "udual", 21),
+        ("cache", "udual", 21),
     ],
 )
 def test_part_sizes_and_unique_record_names(mode, part, count):
@@ -154,3 +158,27 @@ def test_counted_gemm_sweep_reaches_prefill_and_spills_in_cache():
     _, cache = plan("cache", "ugemmconv")
     spilled = [n for n in cache if f"pool{96 * 2**30}" in n]
     assert len(spilled) == 8 and not any("prepacked" in n for n in spilled)
+
+
+@pytest.mark.parametrize("mode", ["flat", "cache"])
+def test_uidle_is_one_idle_record_of_five_windows_then_one_read_per_tier(mode):
+    head, names = plan(mode, "uidle")
+    assert names[0].startswith("u_idle-") and "-idle-" in names[0]
+    assert all("-read-" in n and "-t14-" in n for n in names[1:]) and len(names) == 3
+    # The validation rule needs five samples per configuration: five windows of 60 s, five of 30 s per read.
+    assert float(head.split("records,")[1].split("min")[0]) == pytest.approx(10.0)
+
+
+@pytest.mark.parametrize("mode", ["flat", "cache"])
+def test_udual_pairs_both_sockets_beside_a_one_socket_control(mode):
+    _, names = plan(mode, "udual")
+    comps = [n for n in names if "-dual_component-" in n]
+    controls = [n for n in names if n.split("-")[0].endswith("_control")]
+    assert len(comps) == 14 and len(controls) == 7
+    for control in controls:
+        base = control.split("-")[0].removesuffix("_control")
+        assert sum(n.startswith(base + "-dual_component-s0-") for n in comps) == 1
+        assert sum(n.startswith(base + "-dual_component-s1-") for n in comps) == 1
+    # Decode GEMM (M = 1, 14336x4096) in BF16 and INT8, the AMX peak, and the reads.
+    assert sum("-M1-N14336-bf16-" in n for n in controls) == 2 and sum("-M1-N14336-int8-" in n for n in controls) == 2
+    assert sum("-bf16-registers-" in n for n in controls) == 1

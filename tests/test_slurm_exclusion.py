@@ -85,3 +85,25 @@ def test_template_and_python_constant_name_the_same_node():
     assert FLAT_NODE == "cresco8-hbm14"
     submit = (ROOT / "scripts/submit_cresco8.sh").read_text()
     assert f'{FLAT_NODE}"' in submit  # literal on the sbatch line and flat default
+
+
+def test_counter_settings_reach_both_launch_paths():
+    """HW_BENCH_CACHE_UNCORE and HW_BENCH_IPMI must be forwarded to the Slurm job and to the Flat tmux run.
+
+    ``--export=ALL`` exports the login shell of the remote side, not the submitting shell, so a
+    setting that is not named is silently lost and the campaign would run without counters.
+    """
+
+    sbatch_line = next(line for line in logical_lines(ROOT / "scripts/submit_cresco8.sh") if "--export=" in line)
+    flat_line = next(line for line in logical_lines(ROOT / "scripts/submit_cresco8.sh") if "INNER=" in line)
+    for name in ("HW_BENCH_CACHE_UNCORE", "HW_BENCH_IPMI"):
+        assert f"{name}=${{{name}:-}}" in sbatch_line, name
+        assert f"{name}=${{{name}:-}}" in flat_line, name
+    assert "HW_BENCH_RESUME" in sbatch_line
+
+
+def test_the_ipmi_logger_is_gated_and_stopped_by_the_one_script_both_paths_run():
+    run_all = (ROOT / "scripts/run_all.sh").read_text()
+    assert '"${HW_BENCH_IPMI:-}" == 1' in run_all and "hwbench.ipmi log" in run_all and "trap stop_ipmi EXIT" in run_all
+    assert "run_all.sh" in (ROOT / "slurm/cache_campaign.sbatch").read_text()
+    assert "run_all.sh" in (ROOT / "scripts/flat_campaign.sh").read_text()

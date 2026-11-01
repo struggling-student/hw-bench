@@ -370,8 +370,12 @@ int main(int argc, char **argv) {
     const bool fp32 = kind == "fp32", fp64 = kind == "fp64",
                amx = kind == "bf16", amx_i8 = kind == "int8",
                vnni = kind == "vnni", vbf16 = kind == "avx512bf16";
+    // Idle: no work at all. Each sample sleeps until its deadline with the counters
+    // enabled (PerfControl), so the privileged sessions record the node at rest through
+    // the standard pipeline: the static floor of power, clocks and background traffic.
+    const bool idle = kind == "idle";
     if (!(triad || triad_nt || copy || copy_nt || sweep || latency || readk ||
-          fp32 || fp64 || amx || amx_i8 || vnni || vbf16))
+          fp32 || fp64 || amx || amx_i8 || vnni || vbf16 || idle))
       return 2;
     const bool stream = triad || triad_nt;
     const bool copyk = copy || copy_nt;
@@ -482,6 +486,11 @@ int main(int argc, char **argv) {
     // Bytes moved by the last read pass loop; the read kernel counts its own.
     std::uint64_t read_bytes = 0;
     auto work = [&](std::uint64_t deadline) -> std::uint64_t {
+      if (idle) {
+        while (clock_ns() < deadline)
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        return 0;
+      }
       if (latency) {
         for (int j = 0; j < 65536; ++j)
           cursor = cursor->next;
@@ -722,7 +731,8 @@ int main(int argc, char **argv) {
       work(0);
       work(0);
     }
-    std::string benchmark = triad      ? "stream_triad"
+    std::string benchmark = idle       ? "idle"
+                            : triad    ? "stream_triad"
                             : triad_nt ? "stream_triad_nt"
                             : copy     ? "stream_copy"
                             : copy_nt  ? "stream_copy_nt"
@@ -734,7 +744,7 @@ int main(int argc, char **argv) {
                             : vnni     ? "vnni_peak"
                             : vbf16    ? "avx512_bf16_peak"
                                        : "avx512_peak";
-    std::string dtype = stream || copyk || latency || readk ? ""
+    std::string dtype = stream || copyk || latency || readk || idle ? ""
                         : amx || vbf16             ? "bf16"
                         : amx_i8 || vnni           ? "int8"
                         : fp32                     ? "fp32"
@@ -745,6 +755,7 @@ int main(int argc, char **argv) {
         : vnni     ? "avx512_vnni_12_chains"
         : vbf16    ? "avx512_bf16_" + std::to_string(chains_eff) + "_chains"
         : triad_nt || copy_nt ? "native_avx512_nt_stores"
+        : idle     ? "idle_sleep"
         : readk    ? "native_avx512_read_8_accumulators"
         : sweep    ? "avx512_" + std::to_string(chains_eff) + "_independent_chains"
         : latency  ? "random_dependent_cachelines"
