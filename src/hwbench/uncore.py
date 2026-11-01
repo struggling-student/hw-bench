@@ -480,13 +480,14 @@ def series(uncore: dict[str, Any] | None, result: dict[str, Any]) -> list[dict[s
 
 
 def kernel_phase(parsed: dict[str, Any], tier: str, socket: str = "0", floor: float = 0.8,
-                 write_cap: float = 0.05) -> dict[str, Any]:
+                 write_cap: float | None = 0.05) -> dict[str, Any]:
     """Medians over the read phase of a session that counted a whole launch (E6).
 
     The phase is the run of intervals in which the bound tier's controllers read at least
     ``floor`` of the launch's highest interval and write at most ``write_cap`` of what they
     read (initialisation writes, the read kernel does not); its first and last interval are
-    dropped.  Rates are those of ``socket``.
+    dropped.  Rates are those of ``socket``.  ``write_cap=None`` keeps the phase of a kernel that writes
+    (Triad, Copy; E7): the intervals in which the controllers read at least ``floor`` of the highest read rate.
     """
 
     times = parsed["times"]
@@ -505,7 +506,7 @@ def kernel_phase(parsed: dict[str, Any], tier: str, socket: str = "0", floor: fl
     if not rows:
         return {}
     top = max(r["read"] for r in rows)
-    phase = [r for r in rows if r["read"] >= floor * top and r["write"] <= write_cap * r["read"]]
+    phase = [r for r in rows if r["read"] >= floor * top and (write_cap is None or r["write"] <= write_cap * r["read"])]
     # One contiguous phase: drop its edges, which hold part of the launch's start or end.
     phase = phase[1:-1]
     if not phase:
@@ -518,6 +519,8 @@ def kernel_phase(parsed: dict[str, Any], tier: str, socket: str = "0", floor: fl
     return dict(
         intervals=len(phase),
         ctrl_gbs=median(r["read"] + r["write"] for r in phase),
+        read_gbs=median(r["read"] for r in phase),
+        write_gbs=median(r["write"] for r in phase),
         pkg_w=median(r["pkg_w"] / r["seconds"] for r in phase if r["pkg_w"] is not None),
         ram_w=median(r["ram_w"] / r["seconds"] for r in phase if r["ram_w"] is not None),
         uncore_ghz=median(r["cha"] / r["seconds"] / 1e9 for r in phase if r["cha"] is not None),

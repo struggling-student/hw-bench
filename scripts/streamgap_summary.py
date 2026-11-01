@@ -22,7 +22,7 @@ def med(values):
 
 def load_gap(records):
     out = defaultdict(list)
-    for path in sorted(records.glob("e[1345]_*.json")):
+    for path in sorted(records.glob("e[13457]_*.json")):
         text = path.read_text().strip()
         if not text:
             continue
@@ -80,6 +80,24 @@ def table(title, groups, pattern):
             print(f"  {key:<34} {fmt(row(group))}   (n={len(group)})")
 
 
+def e7(gap, records):
+    """E7: one-factor-at-a-time search for the highest rate, per tier, against the E4 reference."""
+    print("\n== E7: highest-rate search, GB/s of counted bytes (best = STREAM convention, med = sustained)")
+    for tier in ("hbm", "ddr"):
+        keys = [k for k in gap if k.startswith(f"e7_{tier}_")]
+        if not keys:
+            continue
+        ref = row(gap[f"e7_{tier}_ref_u4"])["med"] if f"e7_{tier}_ref_u4" in gap else float("nan")
+        print(f"\n  -- {tier.upper()} (reference ref_u4: median {ref:.1f} GB/s)")
+        for key in sorted(keys, key=lambda k: -row(gap[k])["med"]):
+            r = row(gap[key])
+            print(f"  {key[7:]:<22} {fmt(r)}   {100 * (r['med'] / ref - 1):+5.1f}% vs ref   (n={len(gap[key])})")
+    for path in sorted(records.glob("base_stream_*.txt")):
+        hit = re.search(r"^Triad:\s+([\d.]+)", path.read_text(), re.M)
+        if hit:
+            print(f"  vendored STREAM Triad ({path.stem[12:]}): best {float(hit[1]) / 1000:.1f} GB/s")
+
+
 def main():
     root = Path(sys.argv[1])
     records = root / "records"
@@ -93,6 +111,7 @@ def main():
     table("E4: 10 s runs, unrolled non-temporal Triad, thesis size", gap, r"^e4_long")
     table("E5: data pattern (varied = thesis, const, random, zero), read-only and 4-line non-temporal Triad", gap, r"^e5_(?!long)")
     table("E5: 10 s read-only runs", gap, r"^e5_long")
+    e7(gap, records)
     bad = [d["label"] for g in gap.values() for d in g if d["wrong"]]
     print("\nVerification failures:", bad or "none")
 

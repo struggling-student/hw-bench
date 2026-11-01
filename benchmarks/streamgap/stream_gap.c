@@ -17,6 +17,12 @@
 //   --kernel read               the read-only kernel of hardware.cpp (8 accumulators, 8 lines per
 //                               iteration, one private array per thread); --elements is the total
 //   variant u1r (triad, nt)     u1 with the pointers reloaded every iteration, as in hardware.cpp
+//   --kernel mix                E7, the search for the highest rate: one write stream and --reads K
+//                               read streams (a = b0 + 3 (b1 + ... + b_{K-1}); K = 2 is Triad, K = 1
+//                               Copy), with --unroll 1|2|4|8|16 cache lines per iteration,
+//                               --width 512|256 (zmm or ymm vectors), --store reg|nt and --pad LINES,
+//                               a stagger of LINES cache lines between the starting addresses of
+//                               consecutive arrays (0 = every array starts on a 2 MiB boundary)
 //   --elements E --ntimes N --label NAME
 //
 // Threads, placement and memory binding come from OMP_* and numactl, as for the campaign.
@@ -141,21 +147,29 @@ static inline double fill(int mode, int which, size_t i) {
   }
 }
 
-static void report(const char *label, const char *kernel, const char *variant, const char *store,
-                   size_t pf, int hint, const char *init, size_t elements, int threads, int ntimes,
-                   size_t wrong, double per_iter, const double *times) {
+static void report_ext(const char *label, const char *kernel, const char *variant, const char *store,
+                       size_t pf, int hint, const char *init, size_t elements, int threads, int ntimes,
+                       size_t wrong, double per_iter, const double *times, const char *extra) {
   double *sorted = malloc(sizeof(double) * ntimes);
   memcpy(sorted, times + 1, sizeof(double) * (ntimes - 1));
   qsort(sorted, ntimes - 1, sizeof(double), cmp);
   printf("{\"label\":\"%s\",\"kernel\":\"%s\",\"variant\":\"%s\",\"store\":\"%s\",\"pf_lines\":%zu,"
          "\"pf_hint\":%d,\"init\":\"%s\",\"elements\":%zu,\"threads\":%d,\"ntimes\":%d,\"anon_huge_kb\":%ld,"
          "\"wrong\":%zu,\"bytes_per_iter\":%.0f,\"best_gbs\":%.2f,\"median_gbs\":%.2f,"
-         "\"first_gbs\":%.2f,\"times_s\":[",
+         "\"first_gbs\":%.2f,%s\"times_s\":[",
          label, kernel, variant, store, pf, hint, init, elements, threads, ntimes, anon_huge_kb(), wrong,
          per_iter, per_iter / sorted[0] / 1e9, per_iter / sorted[(ntimes - 1) / 2] / 1e9,
-         per_iter / times[0] / 1e9);
+         per_iter / times[0] / 1e9, extra);
   for (int i = 0; i < ntimes; ++i) printf("%s%.6f", i ? "," : "", times[i]);
   printf("]}\n");
+  free(sorted);
+}
+
+static void report(const char *label, const char *kernel, const char *variant, const char *store,
+                   size_t pf, int hint, const char *init, size_t elements, int threads, int ntimes,
+                   size_t wrong, double per_iter, const double *times) {
+  report_ext(label, kernel, variant, store, pf, hint, init, elements, threads, ntimes, wrong, per_iter,
+             times, "");
 }
 
 // The read pass of hardware.cpp (read_passes): 8 independent accumulators, 8 cache lines per
@@ -215,10 +229,117 @@ static int run_read(const char *label, int mode, const char *init, size_t total,
   return wrong ? 1 : 0;
 }
 
+// E7 kernels: one write stream and K read streams, U cache lines per iteration, zmm or ymm vectors.
+// Every read stream is loaded before the first store, so the stores never wait on the loads of the
+// same iteration; `bs` holds the K read pointers and the loop copies them to locals.
+typedef void (*mix_fn)(double *restrict, const double *const *, size_t, size_t);
+
+#define MIXK(NAME, VT, VL, LOADF, STOREF, FMAF, SET1F, U, K)                                       \
+  static void NAME(double *restrict a, const double *const *bs, size_t l0, size_t l1) {            \
+    enum { NV = U * (LINE / VL) };                                                                 \
+    const VT s = SET1F(3.0);                                                                       \
+    const double *p[K];                                                                            \
+    for (int k = 0; k < K; ++k) p[k] = bs[k];                                                      \
+    for (size_t l = l0; l < l1; l += U) {                                                          \
+      VT x[NV];                                                                                    \
+      _Pragma("GCC unroll 32") for (int v = 0; v < NV; ++v) x[v] = LOADF(p[0] + l * LINE + v * VL); \
+      _Pragma("GCC unroll 4") for (int k = 1; k < K; ++k)                                          \
+        _Pragma("GCC unroll 32") for (int v = 0; v < NV; ++v)                                      \
+          x[v] = FMAF(s, LOADF(p[k] + l * LINE + v * VL), x[v]);                                   \
+      _Pragma("GCC unroll 32") for (int v = 0; v < NV; ++v) STOREF(a + l * LINE + v * VL, x[v]);   \
+    }                                                                                              \
+  }
+
+#define MIX_ALL(U, K)                                                                              \
+  MIXK(mx_512_reg_u##U##_k##K, __m512d, 8, _mm512_load_pd, _mm512_store_pd, _mm512_fmadd_pd,       \
+       _mm512_set1_pd, U, K)                                                                       \
+  MIXK(mx_512_nt_u##U##_k##K, __m512d, 8, _mm512_load_pd, _mm512_stream_pd, _mm512_fmadd_pd,       \
+       _mm512_set1_pd, U, K)                                                                       \
+  MIXK(mx_256_reg_u##U##_k##K, __m256d, 4, _mm256_load_pd, _mm256_store_pd, _mm256_fmadd_pd,       \
+       _mm256_set1_pd, U, K)                                                                       \
+  MIXK(mx_256_nt_u##U##_k##K, __m256d, 4, _mm256_load_pd, _mm256_stream_pd, _mm256_fmadd_pd,       \
+       _mm256_set1_pd, U, K)
+
+#define MIX_U(U) MIX_ALL(U, 1) MIX_ALL(U, 2) MIX_ALL(U, 3) MIX_ALL(U, 4)
+MIX_U(1) MIX_U(2) MIX_U(4) MIX_U(8) MIX_U(16)
+
+#define MIX_ROW(W, ST, U) {mx_##W##_##ST##_u##U##_k1, mx_##W##_##ST##_u##U##_k2, \
+                           mx_##W##_##ST##_u##U##_k3, mx_##W##_##ST##_u##U##_k4}
+#define MIX_UROWS(W, ST) {MIX_ROW(W, ST, 1), MIX_ROW(W, ST, 2), MIX_ROW(W, ST, 4), MIX_ROW(W, ST, 8), \
+                          MIX_ROW(W, ST, 16)}
+// [width 512|256][store reg|nt][unroll 1,2,4,8,16][reads 1..4]
+static const mix_fn MIX_TABLE[2][2][5][4] = {{MIX_UROWS(512, reg), MIX_UROWS(512, nt)},
+                                              {MIX_UROWS(256, reg), MIX_UROWS(256, nt)}};
+
+static int run_mix(const char *label, int mode, const char *init, size_t elements, int ntimes,
+                   int reads, int unroll, int width, int nt, size_t pad) {
+  int ui = -1;
+  const int unrolls[] = {1, 2, 4, 8, 16};
+  for (int i = 0; i < 5; ++i)
+    if (unrolls[i] == unroll) ui = i;
+  if (ui < 0 || reads < 1 || reads > 4 || (width != 512 && width != 256)) return 2;
+  const mix_fn fn = MIX_TABLE[width == 256][nt][ui][reads - 1];
+  const size_t unit = 16; // lines, so every unroll sees whole iterations in every thread's block
+  const size_t lines = elements / LINE / unit * unit;
+  elements = lines * LINE;
+  const size_t bytes = elements * sizeof(double), slack = (size_t)(reads + 1) * pad * 64;
+  double *base[5], *arr[5]; // arr[0] is the written array, arr[1..reads] the read ones
+  for (int j = 0; j <= reads; ++j) {
+    base[j] = grab(bytes + slack);
+    arr[j] = base[j] + (size_t)j * pad * LINE;
+  }
+  const double *bs[4];
+  for (int k = 0; k < reads; ++k) bs[k] = arr[k + 1];
+  const int threads = omp_get_max_threads();
+  const size_t blocks = lines / unit;
+
+#pragma omp parallel
+  {
+    const int t = omp_get_thread_num();
+    const size_t l0 = blocks * t / threads * unit, l1 = blocks * (t + 1) / threads * unit;
+    for (size_t i = l0 * LINE; i < l1 * LINE; ++i) {
+      arr[0][i] = 0.0;
+      for (int k = 0; k < reads; ++k) arr[k + 1][i] = fill(mode, k < 2 ? k + 1 : 3, i);
+    }
+  }
+
+  double *times = malloc(sizeof(double) * ntimes);
+  for (int it = 0; it < ntimes; ++it) {
+    const double t0 = omp_get_wtime();
+#pragma omp parallel
+    {
+      const int t = omp_get_thread_num();
+      fn(arr[0], bs, blocks * t / threads * unit, blocks * (t + 1) / threads * unit);
+      if (nt) _mm_sfence();
+    }
+    times[it] = omp_get_wtime() - t0;
+  }
+
+  size_t wrong = 0;
+#pragma omp parallel for schedule(static) reduction(+ : wrong)
+  for (size_t i = 0; i < elements; ++i) {
+    double want = bs[0][i];
+    for (int k = 1; k < reads; ++k) want += 3.0 * bs[k][i];
+    const double err = arr[0][i] - want;
+    wrong += err > 1e-12 || err < -1e-12;
+  }
+
+  char variant[32], extra[160];
+  snprintf(variant, sizeof variant, "w%du%dk%d", width, unroll, reads);
+  snprintf(extra, sizeof extra, "\"reads\":%d,\"unroll\":%d,\"width\":%d,\"pad_lines\":%zu,", reads, unroll,
+           width, pad);
+  report_ext(label, "mix", variant, nt ? "nt" : "reg", 0, 0, init, elements, threads, ntimes, wrong,
+             8.0 * (reads + 1) * elements, times, extra);
+  for (int j = 0; j <= reads; ++j) free(base[j]);
+  free(times);
+  return wrong ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
   const char *kernel = "triad", *variant = "u4", *store = "nt", *label = "run", *init = "const";
   size_t elements = 160000000, pf = 0;
-  int ntimes = 100, hint = 0;
+  int ntimes = 100, hint = 0, reads = 2, unroll = 8, width = 512;
+  size_t pad = 0;
   for (int i = 1; i + 1 < argc; i += 2) {
     const char *k = argv[i], *v = argv[i + 1];
     if (!strcmp(k, "--kernel")) kernel = v;
@@ -230,6 +351,10 @@ int main(int argc, char **argv) {
     else if (!strcmp(k, "--pf")) pf = strtoull(v, 0, 10);
     else if (!strcmp(k, "--hint")) hint = atoi(v);
     else if (!strcmp(k, "--init")) init = v;
+    else if (!strcmp(k, "--reads")) reads = atoi(v);
+    else if (!strcmp(k, "--unroll")) unroll = atoi(v);
+    else if (!strcmp(k, "--width")) width = atoi(v);
+    else if (!strcmp(k, "--pad")) pad = strtoull(v, 0, 10);
     else { fprintf(stderr, "unknown option %s\n", k); return 2; }
   }
   int mode = -1;
@@ -238,6 +363,8 @@ int main(int argc, char **argv) {
     if (!strcmp(init, modes[m])) mode = m;
   if (mode < 0 || ntimes < 3) return 2;
   if (!strcmp(kernel, "read")) return run_read(label, mode, init, elements, ntimes);
+  if (!strcmp(kernel, "mix"))
+    return run_mix(label, mode, init, elements, ntimes, reads, unroll, width, !strcmp(store, "nt"), pad);
   const int triad = !strcmp(kernel, "triad"), nt = !strcmp(store, "nt");
   const int plain = !strcmp(variant, "plain"), u4 = !strcmp(variant, "u4");
   if (!triad && strcmp(kernel, "copy")) return 2;
