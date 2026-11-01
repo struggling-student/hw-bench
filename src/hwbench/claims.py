@@ -394,9 +394,9 @@ def cache_mode(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"decode GEMMs (M=1) stream {spill.gbs.min():.0f}–{spill.gbs.max():.0f} GB/s over the four shapes and both precisions (14336×4096: "
             f"{big_spill['bf16']:.0f} BF16, {big_spill['int8']:.0f} INT8), {_pct(spill.gbs.min() / ddr['read'])}–{_pct(spill.gbs.max() / ddr['read'])} of Flat DDR "
             f"read, while the read-only kernel at 96 GiB moves {read96.min():.0f}–{read96.max():.0f} GB/s in two campaigns and Triad {triad[96.0]:.0f}. The ordering "
-            "read-only < GEMM ≤ Triad is unexplained: a pure read stream should not be slower than one that also writes. One difference is that each "
-            "read thread streams its own private array while the GEMM's threads share one matrix at a time (a hypothesis; the memory-side-cache tag "
-            "counters would test it). The read-only kernel is therefore not used as the spilled ceiling of a GEMM.",
+            "read-only < GEMM ≤ Triad is unexplained: a pure read stream should not be slower than one that also writes. The memory-side cache's tag counters "
+            "rule out the simplest explanation, a different hit rate (claim `cache_spilled_gemm_counted`: the kernels' hit rates at 96 GiB are the same to a few points, and the "
+            "ordering is that of the DDR fill rates they reach). The read-only kernel is therefore not used as the spilled ceiling of a GEMM.",
         ),
         Claim(
             "cache_triad_spilled_ceiling",
@@ -1631,6 +1631,231 @@ def decode_energy(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, unc: 
     )]
 
 
+def _ids_text(frame: pd.DataFrame) -> str:
+    return ";".join(sorted(frame.campaign_id.unique())) if len(frame) else ""
+
+
+def cache_tag_claims(cc: pd.DataFrame, other_launch_gbs: float | None = None, other_launch: str = "") -> list[Claim]:
+    """What the memory-side cache's tag counters say about the capacity curve (U3).
+
+    ``cc`` is ``report.cache_capacity_table`` of a launch that counted the tags: the hit rate against
+    the working set, the DDR traffic behind it, the agreement of the cache's served bytes with the
+    cores' own DRAM line counts, and the DRAM power that follows the DDR traffic.
+    """
+
+    read = cc[cc.kernel.eq("read")].set_index("working_set_gib").sort_index()
+    capacity = 64.0
+    sizes = [g for g in (8.0, 16.0, 32.0, 64.0, 96.0, 128.0) if g in read.index]
+    model = np.exp(-read.index.to_series() / capacity)
+    monotone = all(cc[cc.kernel.eq(k)].sort_values("working_set_gib").hit_rate.diff().dropna().max() < 0.01 for k in cc.kernel.unique())
+    rate_vs_hit = np.corrcoef(read.gbs, read.hit_rate)[0, 1]
+    ddr = cc.dropna(subset=["ddr_gbs", "ram_w"])
+    slope, intercept = np.polyfit(ddr.ddr_gbs, ddr.ram_w, 1)
+    r2 = float(np.corrcoef(ddr.ddr_gbs, ddr.ram_w)[0, 1] ** 2)
+    r8, r64, r128 = read.loc[8.0], read.loc[64.0], read.loc[128.0]
+    return [
+        Claim(
+            "cache_hit_rate_curve",
+            bool(monotone and r8.hit_rate > 0.85 and r64.hit_rate < 0.6 and r128.hit_rate < 0.2 and rate_vs_hit > 0.8
+                 and abs(float(cc.served_over_counted.median()) - 1) < 0.02 and cc.served_over_counted.between(0.95, 1.03).all() and (read.far_gbs > 0).all()
+                 and cc.served_over_modeled.between(0.95, 1.05).all() and cc[cc.working_set_gib.eq(8.0)].served_over_modeled.between(0.97, 1.03).all()),
+            "Counted at the memory-side cache's tags (the HBM controllers' lookup events, one 64-byte lookup per line requested), the hit rate of a 56-core read falls steadily with the working set and "
+            f"the cache never holds a set that fits it: {_pct(float(r8.hit_rate))} at 8 GiB, "
+            + ", ".join(f"{_pct(float(read.hit_rate[g]))} at {g:.0f}" for g in sizes[1:3]) + f", {_pct(float(r64.hit_rate))} at the 64 GiB capacity, "
+            f"{_pct(float(read.hit_rate[96.0]))} at 96 and {_pct(float(r128.hit_rate))} at 128 GiB; Triad and non-temporal Triad follow within "
+            f"{_pct(float((cc.pivot(index='working_set_gib', columns='kernel', values='hit_rate').sub(read.hit_rate, axis=0)).abs().max().max()))} points. A direct-mapped cache "
+            "whose pages land on random physical addresses keeps a page only when no other page of the set shares its slot, e^(−W/64 GiB): "
+            + ", ".join(f"{_pct(float(model[g]))}" for g in sizes) + f" at {', '.join(f'{g:.0f}' for g in sizes)} GiB, against the measured "
+            + ", ".join(f"{_pct(float(read.hit_rate[g]))}" for g in sizes) + ": the same decline, a few points higher up to the capacity, so this is the conflict-miss mechanism inferred before, "
+            f"now counted. The rate follows the hit rate (correlation {rate_vs_hit:.2f} for the read kernel): the 56-core read delivers {r8.gbs:.0f} GB/s at 8 GiB and {r64.gbs:.0f} GB/s at the capacity, "
+            f"with {r8.far_gbs:.0f} and {r64.far_gbs:.0f} GB/s of DDR fills behind them. The cache's served bytes equal the cores' own DRAM line counts: {cc.served_over_counted.median():.3f}× pooled "
+            f"({_span(cc.served_over_counted, 3)}× over the {len(cc)} kernel and size points, medians of five 1 s windows), so the earlier Cache points, which used the line counts, stand. Hits plus misses are the lines the kernel requested: {_span(cc.served_over_modeled, 3)}× the modeled bytes over all points and "
+            f"{_span(cc[cc.working_set_gib.eq(8.0)].served_over_modeled, 3)}× at the resident 8 GiB point"
+            + (" (inside the 0.98–1.02 the plan asked for)." if cc[cc.working_set_gib.eq(8.0)].served_over_modeled.between(0.98, 1.02).all()
+               else f" (outside the 0.98–1.02 the plan asked for: the lowest kernel, {cc[cc.working_set_gib.eq(8.0)].sort_values('served_over_modeled').iloc[0].kernel.replace('_', ' ')}, "
+                    f"sits {_pct(float(1 - cc[cc.working_set_gib.eq(8.0)].served_over_modeled.min()), 1)} below the model).")
+            + (f" This is one launch: an earlier launch of the same part (`{other_launch}`) placed its pages differently and read {other_launch_gbs:.0f} GB/s at 56 GiB where this one reads "
+               f"{float(read.gbs[56.0]):.0f} (part `ucacherep` repeats it)." if other_launch_gbs else ""),
+        ),
+        Claim(
+            "cache_dram_power_onset",
+            bool(r2 > 0.8 and slope > 0 and (ddr.groupby("working_set_gib").ddr_gbs.median().iloc[0] > 20)),
+            "DDR traffic starts at the smallest working set, not at half the cache, and the DRAM's own power (RAPL, the DDR DIMMs only) follows it: the resident 8 GiB read already fills "
+            f"{r8.far_gbs:.0f} GB/s from DDR ({_pct(float(1 - r8.hit_rate))} of its lookups miss), and over the {len(ddr)} kernel and size points of this launch the DRAM power "
+            f"rises {slope:.2f} W per GB/s of DDR traffic from {intercept:.0f} W (R² {r2:.2f}); it peaks at {ddr.ram_w.max():.0f} W where the DDR traffic peaks, "
+            f"at {ddr.loc[ddr.ddr_gbs.idxmax()].working_set_gib:.0f} GiB. The earlier inference that DDR traffic begins at half the capacity came from a launch whose DRAM power was flat to 24 GiB "
+            "(`cache-ucapacity-20261020T201654Z`): that launch had far fewer misses at small sizes, so the onset moves with the launch's page placement and is not a property of the capacity.",
+        ),
+    ]
+
+
+def cache_launch_claims(spread: pd.DataFrame, curve: pd.DataFrame) -> list[Claim]:
+    """Launch-to-launch spread of the Cache capacity curve against its hit rate (C2).
+
+    ``spread`` is ``report.cache_launch_spread``, ``curve`` the counted capacity table: the rate of the
+    read kernel as a function of the hit rate, which turns the rate of a launch that did not count tags
+    into an inferred hit rate.
+    """
+
+    counted = spread[spread.hit_rate.notna()]
+    earlier = spread[spread.hit_rate.isna()]
+    if counted.campaign_id.nunique() < 3 or earlier.empty:
+        return []
+    per = counted.groupby(["kernel", "gib"])
+    hit_range = (per.hit_rate.max() - per.hit_rate.min()).max()
+    rate_spread = ((per.gbs.max() / per.gbs.min()) - 1).max()
+    read = curve[curve.kernel.eq("read")].sort_values("gbs")
+    r56 = earlier[earlier.kernel.eq("read") & earlier.gib.eq(56.0)].gbs.median()
+    t56 = earlier[earlier.kernel.eq("triad") & earlier.gib.eq(56.0)].gbs.median()
+    now_r56 = counted[counted.kernel.eq("read") & counted.gib.eq(56.0)].gbs.median()
+    now_t56 = counted[counted.kernel.eq("triad") & counted.gib.eq(56.0)].gbs.median()
+    inferred = float(np.interp(r56, read.gbs.to_numpy(), read.hit_rate.to_numpy()))
+    now_h56 = counted[counted.kernel.eq("read") & counted.gib.eq(56.0)].hit_rate.median()
+    return [Claim(
+        "cache_launch_spread",
+        bool(hit_range < 0.03 and rate_spread < 0.08 and r56 > 2.5 * now_r56 and inferred > now_h56 + 0.2),
+        f"The hit rate repeats from launch to launch within a day and not between days. Over {counted.campaign_id.nunique()} launches of the same part on hbm13 within two hours, the hit rate of the 56-core read "
+        f"and Triad at 8, 32 and 56 GiB agrees to {100 * float(hit_range):.1f} points at most and the rates to {_pct(float(rate_spread), 1)}: "
+        + "; ".join(f"{k} {g:.0f} GiB {_pct(float(h.min()))}–{_pct(float(h.max()))} hit at {r.min():.0f}–{r.max():.0f} GB/s"
+                    for (k, g), h, r in ((key, grp.hit_rate, grp.gbs) for key, grp in per) if k == "read") + ". "
+        f"The launch of 2026-10-20 (`{';'.join(sorted(earlier.campaign_id.unique()))}`, turbostat only, no tag counters) read {r56:.0f} GB/s at 56 GiB where these read {now_r56:.0f} ({r56 / now_r56:.1f}×) "
+        f"and Triad {t56:.0f} against {now_t56:.0f} ({t56 / now_t56:.1f}×): on the rate-against-hit-rate relation of the counted launch, {r56:.0f} GB/s is a hit rate of about {_pct(inferred)} at 56 GiB "
+        f"against {_pct(float(now_h56))} now (an inference, since that launch did not count the tags). That is what a difference in where the node's physical pages happen to lie would do to a direct-mapped "
+        "cache, and it is the explanation the counters now support for the between-campaign spread of Cache mode (claim `campaign_spread`), but the counters cannot show it for the earlier launch: "
+        "a Cache capacity curve is a measurement of the node's page placement as much as of the cache, and near the capacity another day differed by a factor of three here.",
+    )]
+
+
+def cache_latency_claims(lat: pd.DataFrame, flat_far: pd.DataFrame | None = None) -> list[Claim]:
+    """The far-latency rise of Cache mode against the miss rate of the chase's own lookups (R2/C7).
+
+    ``lat`` is ``report.cache_latency_counted``; ``flat_far`` the Flat control (``report.flat_latency_far``), where a
+    chase of the same size on plain DDR rises by a few nanoseconds only.
+    """
+
+    if lat is None or len(lat) < 4:
+        return []
+    miss = 1 - lat.hit_rate
+    slope, intercept = np.polyfit(miss, lat.latency_ns, 1)
+    r2 = float(np.corrcoef(miss, lat.latency_ns)[0, 1] ** 2)
+    first, last = lat.iloc[0], lat.iloc[-1]
+    holds = bool(r2 > 0.95 and slope > 0 and last.latency_ns > first.latency_ns and last.hit_rate < first.hit_rate)
+    control = ""
+    if flat_far is not None and len(flat_far):
+        ddr = flat_far[flat_far.config.eq("flat_ddr")].sort_values("working_set_gib")
+        if len(ddr) > 1:
+            control = (f" The Flat control, the same chase on plain DDR, rises {ddr.latency_ns.iloc[-1] - ddr.latency_ns.iloc[0]:.0f} ns over the same sizes "
+                       "(claim `latency_translation`), so none of the rise is address translation.")
+    return [Claim(
+        "cache_latency_far_counted",
+        holds,
+        f"The far-latency rise of Cache mode is the miss rate. A one-core chase over {first.gib:.0f} to {last.gib:.0f} GiB (part `ucachelat`), counted at the memory-side cache with the idle node's background "
+        f"subtracted, hits {_pct(float(first.hit_rate))} of its lookups at {first.gib:.0f} GiB and {_pct(float(last.hit_rate))} at {last.gib:.0f} GiB while its latency rises from {first.latency_ns:.0f} to "
+        f"{last.latency_ns:.0f} ns; across the {len(lat)} sizes the latency is a straight line of the miss rate (R² {r2:.3f}): {intercept:.0f} ns when every lookup hits and {slope:.0f} ns more per unit of miss rate, "
+        f"so a miss costs about {intercept + slope:.0f} ns against {intercept:.0f} for a hit." + control,
+    )]
+
+
+def cache_gemm_claims(gt: pd.DataFrame, cc: pd.DataFrame) -> list[Claim]:
+    """The decode GEMM seen by the memory-side cache's tags, against the streams of the same launch (C3, R2/C7)."""
+
+    small = gt[gt.m.le(64)]
+    res, spill = small[small.pool_gib.eq(16)], small[small.pool_gib.eq(96)]
+    big = gt[gt.m.eq(256) & gt.dtype.eq("bf16")]
+    at96 = cc[cc.working_set_gib.eq(96.0)].set_index("kernel")
+    at16 = cc[cc.working_set_gib.eq(16.0)].set_index("kernel")
+    gemm96 = spill[spill.m.eq(1)].set_index("dtype")
+    fill_rate = at96.far_gbs
+    holds = bool(
+        spill.hit_rate.between(0.2, 0.35).all() and (at96.hit_rate.between(0.2, 0.35)).all()
+        and (spill.hit_rate.max() - at96.hit_rate.min()) < 0.12 and res.hit_rate.between(0.7, 0.95).all()
+        and gemm96.gbs["bf16"] > at96.gbs["read"] and gemm96.far_gbs["bf16"] > fill_rate["read"]
+        and small.served_over_modeled.between(0.9, 1.05).all() and small.served_over_counted.between(0.95, 1.02).all()
+        and big.served_over_counted.max() < 0.95
+    )
+    return [Claim(
+        "cache_spilled_gemm_counted",
+        holds,
+        f"Counted at the memory-side cache's tags, the decode GEMM (14336×4096, M = 1–64) hits {_span(res.hit_rate.map(lambda x: 100 * x), 0)}% of its lookups with the 16 GiB pool and "
+        f"{_span(spill.hit_rate.map(lambda x: 100 * x), 0)}% with the 96 GiB pool, the same as the streams of the same launch at those sizes ({_pct(float(at16.hit_rate['read']))} for the read kernel at 16 GiB, "
+        f"{_span(at96.hit_rate.map(lambda x: 100 * x), 0)}% for read, Triad and non-temporal Triad at 96 GiB). A higher hit rate is therefore not why a spilled GEMM can out-stream the read-only kernel: "
+        f"what differs between the kernels is the DDR fill rate they reach at that hit rate: {fill_rate['read']:.0f} GB/s for the read kernel, {gemm96.far_gbs['bf16']:.0f} for the BF16 GEMM and "
+        f"{gemm96.far_gbs['int8']:.0f} for the INT8 one, {fill_rate['triad']:.0f} for Triad, and the delivered rate is that fill rate over the miss rate. The spilled BF16 GEMM moves {gemm96.gbs['bf16']:.0f} GB/s "
+        f"(INT8 {gemm96.gbs['int8']:.0f}) against {at96.gbs['read']:.0f} for the read kernel and {at96.gbs['triad']:.0f} for Triad: the ordering read-only < GEMM ≤ Triad of claim `cache_spilled_gemm` is an ordering of how fast "
+        "each kernel keeps DDR busy with fills, not of how often the cache hits. Why a read stream with private arrays and eight accumulators fills DDR more slowly than a GEMM is not in these counters. "
+        f"The bytes the cache serves equal the modeled bytes of a decode GEMM to {_span(small.served_over_modeled, 3)}× and the cores' DRAM line counts to {_span(small.served_over_counted, 3)}×, but at M = 256 "
+        f"BF16 they are {_span(big.served_over_counted, 2)}× the line counts (consistent with the cores' write estimate over-counting at M = 256, as on Flat) and {_span(big.served_over_modeled, 2)}× the modeled bytes "
+        "(the library re-reads weights): the Cache points of the roofline place prefill batches with the cache's served bytes only where the part `uatlas` was re-run with the Cache counters.",
+    )]
+
+
+def cache_session_claims(probe: pd.DataFrame, earlier: pd.DataFrame | None = None) -> list[Claim]:
+    """The Cache event set's cost, and the base counters' hit rate against its tags (2026-10-31 launches).
+
+    ``probe`` is ``report.load_session_probe``: launches of ``ucacherep``, ``usmoke`` and ``uidle`` on hbm13
+    with the perf session that counts the memory-side cache's tag events, with the base events only, with
+    the BMC logger only and with turbostat alone; ``earlier`` the Cache rows of the analysis, whose turbostat-only
+    smoke of 2026-10-20 is the chase without any logger.
+    """
+
+    if probe is None or probe.empty:
+        return []
+    p = probe.assign(session=probe.uncore_event_set.fillna("none").astype(str), gib=(probe.working_set_bytes / 2**30).round(0))
+    tag, base = p[p.session.eq("cache")], p[p.session.eq("base")]
+    none = p[p.session.eq("none")]
+    if tag.empty or base.empty or none.empty:
+        return []
+
+    def rate(frame: pd.DataFrame, kernel: str, gib: float) -> float:
+        part = frame[frame.notes.eq(f"u3_rep_{kernel}") & frame.gib.eq(gib)]
+        return float(part.bandwidth_gbs.median())
+
+    def chase(frame: pd.DataFrame) -> float:
+        return float(frame[frame.notes.eq("usmoke_chase") & frame.benchmark.eq("pointer_chase") & frame.socket_scope.eq("concurrent_tier_component")].latency_ns.median())
+
+    rows = [(k, g, rate(tag, k, g), rate(base, k, g), rate(none, k, g)) for k in ("read", "triad") for g in (8.0, 32.0, 56.0)]
+    triad8 = next(r for r in rows if r[0] == "triad" and r[1] == 8.0)
+    read8 = next(r for r in rows if r[0] == "read" and r[1] == 8.0)
+    quiet = none[~none.ipmi_logged]
+    if earlier is not None and len(earlier):
+        quiet = pd.concat([quiet, earlier[earlier.uncore_event_set.isna() & ~earlier.ipmi_logged]], ignore_index=True)
+    chase_tag, chase_base, chase_none = chase(tag), chase(base), chase(quiet)
+    chase_ipmi = chase(none[none.ipmi_logged])
+    idle = p[report.is_idle_note(p.notes)].groupby("session").agg(unc=("uncore_ghz_s0", "median"), node=("node_power_w", "median"), bzy=("ts_bzy_mhz_s0", "median"))
+    ipmi_triad = float(p[p.session.eq("none") & p.ipmi_logged & p.notes.eq("u3_rep_triad") & p.gib.eq(8.0)].bandwidth_gbs.median())
+    holds = bool(
+        triad8[2] < 0.6 * triad8[4] and abs(triad8[3] / triad8[4] - 1) < 0.03 and abs(ipmi_triad / triad8[4] - 1) < 0.03
+        and read8[2] > 0.9 * read8[4] and chase_tag > 2 * chase_none and abs(chase_base / chase_none - 1) < 0.1 and abs(chase_ipmi / chase_none - 1) < 0.1
+        and idle.loc["cache"].unc > 1.2 and idle.loc["none"].unc < 0.9
+    )
+    out = [Claim(
+        "cache_tag_session_cost",
+        holds,
+        "Counting the memory-side cache's tag lookups through perf is not free, and the base counters are. The perf session with the tag events (three more HBM-controller events, 96 more counters per "
+        f"socket) slows the benchmark threads sharing core 0 with perf's counter reads: Cache-mode Triad at 8 GiB runs at {triad8[2]:.0f} GB/s against {triad8[3]:.0f} with the base events and {triad8[4]:.0f} with "
+        f"turbostat alone (32 GiB {rows[4][2]:.0f} against {rows[4][3]:.0f}; 56 GiB {rows[5][2]:.0f} against {rows[5][3]:.0f}), a one-core chase of 1 GiB reads {chase_tag:.0f} ns against {chase_base:.0f} and {chase_none:.0f}, "
+        f"and the barrier-free read kernel loses only {_pct(float(1 - read8[2] / read8[4]))} ({read8[2]:.0f} against {read8[4]:.0f} GB/s): a kernel that synchronises its threads each pass waits for the slowest. "
+        f"The node also stops resting: with the tag session it idles at {idle.loc['cache'].unc:.1f} GHz and {idle.loc['cache'].node:.0f} W of RAPL power (the sampled cores at {idle.loc['cache'].bzy:.0f} MHz), "
+        f"with turbostat alone at {idle.loc['none'].unc:.1f} GHz and {idle.loc['none'].node:.0f} W, the Flat node's state. The BMC logger is harmless: Triad {ipmi_triad:.0f} GB/s and the chase {chase_ipmi:.0f} ns with it. "
+        "So every Cache measurement of 2026-10-31 that matters for rates, latency or power uses the base event set; the tag-event launches are kept as the validation of the hit rate "
+        "(claim `cache_hit_rate_from_cas`), not used for any other figure.",
+    )]
+    t = tag[tag.nm_hit_rate.notna() & tag.ctrl_hbm_read_bytes.notna() & (tag.served_bytes / tag.elapsed_seconds > 1e10)]
+    if len(t):
+        cas = 1 - t.ctrl_ddr_read_bytes / t.ctrl_hbm_read_bytes
+        diff = (t.nm_hit_rate - cas).abs()
+        ratio = t.served_bytes / t.ctrl_hbm_read_bytes
+        out.append(Claim(
+            "cache_hit_rate_from_cas",
+            bool(float(diff.median()) < 0.01 and float(diff.max()) < 0.03 and ratio.between(0.97, 1.03).all()),
+            f"The hit rate follows from the base counters alone. Over the {len(t)} one-second windows of the tag-event launches that moved at least 10 GB/s, the share of tag lookups that hit differs from "
+            f"one minus the DDR read bytes over the HBM read bytes by {100 * float(diff.median()):.2f} points in the median ({100 * float(diff.max()):.1f} at most), and the lookups times 64 B equal the HBM read bytes "
+            f"({_span(ratio, 3)}×): every lookup reads one line from HBM and every miss is one DDR read, so the served bytes are the HBM read bytes and the far traffic the DDR read bytes "
+            "(`hwbench.uncore.sample_fields` with `cache_mode`).",
+        ))
+    return out
+
+
 def probe_power_limits(root: Path = ROOT, probe: str = "uncore-cache-20261020") -> dict[str, float]:
     """RAPL package limits of socket 0 on the node a probe ran on (W), from the probe's ``node.txt``."""
 
@@ -1642,7 +1867,7 @@ def probe_power_limits(root: Path = ROOT, probe: str = "uncore-cache-20261020") 
     return limits
 
 
-def cache_counters(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame, root: Path = ROOT) -> list[Claim]:
+def cache_counters(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame, root: Path = ROOT, flat_far: pd.DataFrame | None = None) -> list[Claim]:
     """Cache mode with turbostat power and clocks (hbm13), against the Flat node's perf session.
 
     "At the package limit" is judged against hbm13's own PL1, read from the probe record of that
@@ -1683,24 +1908,21 @@ def cache_counters(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame, root: Path =
                 f"with the cores at {_span(r.core_ghz.loc[[96.0, 128.0]])} GHz and the uncore at {_span(r.uncore_ghz.loc[[96.0, 128.0]])} GHz. "
                 "A model that does not fit the HBM cache costs more than twice the energy per weight byte of the same model placed in Flat DDR.",
             ))
-        kernels = [k for k in ("read", "triad", "triad_nt") if k in set(cc.kernel)]
-        rise = {}
-        for k in kernels:
-            t = cc[cc.kernel.eq(k)].set_index("working_set_gib")
-            if {8.0, 24.0, 32.0} <= set(t.index):
-                rise[k] = (t.ram_w[24.0] - t.ram_w[8.0], t.ram_w[32.0] - t.ram_w[8.0], t.gbs[32.0] / t.gbs[8.0], t)
-        if rise:
-            t_read = rise.get("read", next(iter(rise.values())))[3]
-            first_drop = next((g for g in sorted(t_read.index) if t_read.gbs[g] < 0.97 * t_read.gbs[8.0]), None)
-            out.append(Claim(
-                "cache_dram_power_onset",
-                bool(all(abs(a) < 2.5 and b > 3.0 for a, b, _, _ in rise.values()) and all(rise[k][2] > 0.97 for k in ("read", "triad") if k in rise)),
-                "The DRAM's own power (RAPL, the DDR DIMMs only) shows when Cache mode starts going to DDR: up to 24 GiB it stays within "
-                f"{max(abs(a) for a, _, _, _ in rise.values()):.1f} W of the 8 GiB level, at 32 GiB it is {_span(pd.Series([b for _, b, _, _ in rise.values()]), 1)} W higher "
-                f"for every kernel, while read and Triad still run at {_span(pd.Series([rise[k][2] for k in ('read', 'triad') if k in rise]))}× their 8 GiB rate; "
-                f"read loses 3% only from {first_drop:.0f} GiB. DDR traffic therefore begins at half the 64 GiB cache, before the bandwidth shows it, "
-                "as conflict misses of a direct-mapped cache would (the miss count itself needs the tag counters, which need perf on the Cache node).",
-            ))
+        counted = cc[cc.hit_rate.notna()]
+        if len(counted):
+            earlier = unc_cache[unc_cache.notes.eq("u3_read_capacity") & unc_cache.threads.eq(56) & unc_cache.working_set_bytes.div(2**30).sub(56).abs().lt(0.5)
+                                & ~unc_cache.campaign_id.isin(set(counted.campaign.str.split(";").explode()))]
+            other = float(earlier.bandwidth_gbs.median()) if len(earlier) else None
+            out.extend(cache_tag_claims(counted, other, _ids_text(earlier)))
+            spread = report.cache_launch_spread(unc_cache)
+            if len(spread):
+                out.extend(cache_launch_claims(spread, counted))
+            lat = report.cache_latency_counted(unc_cache)
+            if len(lat):
+                out.extend(cache_latency_claims(lat, flat_far))
+            gt = report.cache_gemm_table(unc_cache)
+            if len(gt):
+                out.extend(cache_gemm_claims(gt, counted))
     return out
 
 
@@ -1779,8 +2001,122 @@ def energy_flat_vs_cache(unc: pd.DataFrame, theory: Theory) -> list[Claim]:
     )]
 
 
+def idle_baseline(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame | None = None) -> list[Claim]:
+    """The node at rest and what the BMC's rails measure (B2): claims ``idle_floor`` and ``rapl_dram_is_ddr``."""
+
+    frames = {"Flat": unc_flat, "Cache": unc_cache}
+    floors = {name: report.idle_floor(f) for name, f in frames.items() if f is not None and len(f)}
+    floors = {name: t.iloc[0] for name, t in floors.items() if len(t)}
+    if "Flat" not in floors:
+        return []
+    flat = floors["Flat"]
+    loads = pd.concat([report.idle_load_table(f).assign(mode=name) for name, f in frames.items() if f is not None and len(f)], ignore_index=True)
+    loads = loads[loads.notna().all(axis=1)] if len(loads) else loads
+    pl1 = float(Theory.load().power["pl1_w"])
+    out: list[Claim] = []
+    both = [floors[n] for n in floors]
+    agree = max(abs(f.node_w / flat.node_w - 1) for f in both)
+    ts_ok = all(abs(f.ts_over_perf - 1) < 0.01 for f in both if pd.notna(f.ts_over_perf))
+    streams = report.power_table(unc_flat)
+    hbm = streams[(streams.memory_target == "hbm") & (streams.kernel == "read") & (streams.threads == 56)].iloc[0]
+    ddr = streams[(streams.memory_target == "ddr") & (streams.kernel == "read") & (streams.threads == 56)].iloc[0]
+    holds = bool(
+        flat.node_w > 0.4 * (2 * pl1) and flat.socket_w < 0.5 * (hbm.pkg_w + hbm.ram_w) and agree < 0.05 and ts_ok
+        and flat.uncore_ghz_s0 < 0.9 and flat.uncore_ghz_s1 < 0.9 and flat.wall_w > flat.node_w
+        and hbm.pj_per_byte_dyn < hbm.pj_per_byte and ddr.pj_per_byte_dyn < ddr.pj_per_byte
+        and ddr.pj_per_byte_dyn / hbm.pj_per_byte_dyn > ddr.pj_per_byte / hbm.pj_per_byte
+    )
+    cache_text = ""
+    if "Cache" in floors:
+        c = floors["Cache"]
+        cache_text = (f" The Cache node rests in the same state: {c.node_w:.0f} W of RAPL power ({c.pkg_w_s0:.0f} + {c.pkg_w_s1:.0f} W of package, {c.ram_w_s0 + c.ram_w_s1:.0f} W of DRAM) "
+                      f"and {c.wall_w:.0f} W at the wall, {_pct(float(abs(c.node_w / flat.node_w - 1)), 1)} from the Flat node's, with both uncores at {c.uncore_ghz_s0:.1f} GHz "
+                      "(a perf session that also counts the memory-side cache's tags keeps the node out of this state, claim `cache_tag_session_cost`).")
+    out.append(Claim(
+        "idle_floor",
+        holds,
+        f"At rest (five 60 s windows with the counters on and nothing running) the Flat node draws {flat.node_w:.0f} W of RAPL power: socket 0 {flat.pkg_w_s0:.0f} W of package "
+        f"and {flat.ram_w_s0:.0f} W of DRAM, socket 1 {flat.pkg_w_s1:.0f} W and {flat.ram_w_s1:.0f} W, both uncores at {flat.uncore_ghz_s0:.1f} GHz, with {flat.background_gbs:.1f} GB/s "
+        f"of background memory traffic. The BMC reads {flat.wall_w:.0f} W at the wall, {flat.non_rapl_w:.0f} W more than RAPL covers (fans, PSU losses, board, the rest of the chassis)."
+        + cache_text +
+        f" The floor is what every figure so far included: a 56-core HBM read draws {hbm.pkg_w + hbm.ram_w:.0f} W at the computing socket, {flat.socket_w:.0f} W of it the floor, so its "
+        f"dynamic energy is {hbm.pj_per_byte_dyn:.0f} pJ/B against {hbm.pj_per_byte:.0f} total ({hbm.pj_per_byte_node_dyn:.0f} against {hbm.pj_per_byte_node:.0f} at the node) and a DDR read "
+        f"{ddr.pj_per_byte_dyn:.0f} against {ddr.pj_per_byte:.0f} ({ddr.pj_per_byte_node_dyn:.0f} against {ddr.pj_per_byte_node:.0f}); DDR costs {ddr.pj_per_byte_dyn / hbm.pj_per_byte_dyn:.1f}× HBM "
+        f"per byte once the floor is out, against {ddr.pj_per_byte / hbm.pj_per_byte:.1f}× with it. turbostat and perf agree at rest to {_pct(float(abs(flat.ts_over_perf - 1)), 2)}.",
+    ))
+    if len(loads):
+        ddr_load = loads[loads.notes.str.endswith("ddr") | loads.notes.str.endswith("96g")]
+        hbm_load = loads[loads.notes.str.endswith("hbm")]
+        holds = bool(
+            loads.bmc_mem_over_rapl.sub(1).abs().max() < 0.03 and loads.bmc_cpu_over_rapl.sub(1).abs().max() < 0.03
+            and (flat.bmc_mem_w / (flat.ram_w_s0 + flat.ram_w_s1) - 1) < 0.03
+            and ddr_load.ram_over_idle_w.min() > 20 and hbm_load.ram_over_idle_w.abs().max() < 2
+        )
+        out.append(Claim(
+            "rapl_dram_is_ddr",
+            holds,
+            f"RAPL's \"ram\" domain is the DDR DIMMs and nothing else. The BMC's memory rail equals it at rest ({flat.bmc_mem_w:.0f} W against {flat.ram_w_s0 + flat.ram_w_s1:.0f} W) and under load "
+            f"({_span(loads.bmc_mem_over_rapl, 3)}× in every 14-core read, with the uncore at {_span(loads.uncore_ghz_s0, 2)} GHz), and a 14-core read of HBM, at {_span(hbm_load.gbs, 0)} GB/s, raises the DRAM power by "
+            f"{_span(hbm_load.ram_over_idle_w, 1)} W while a DDR read at {_span(ddr_load.gbs, 0)} GB/s raises it by {_span(ddr_load.ram_over_idle_w, 0)} W: the HBM stacks are inside the package "
+            f"domain, not in \"ram\". The BMC's CPU rail follows RAPL package power on both sockets ({_span(loads.bmc_cpu_over_rapl, 3)}×), so the BMC and RAPL agree on both rails; whether the BMC reads "
+            "its rails independently of RAPL is not known, so this is agreement, not an independent calibration. The BMC reads whole watts every few seconds (the figures are means of "
+            f"{_span(loads.listings, 0)} listings), too coarse for per-sample use.",
+        ))
+    return out
+
+
+def dual_energy(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame | None, theory: Theory) -> list[Claim]:
+    """Both sockets streaming at once: node energy per token and per watt (B4), claim ``dual_energy``."""
+
+    frames = [f for f in (unc_flat, unc_cache) if f is not None and len(f)]
+    tables = [report.dual_energy(f, theory) for f in frames]
+    tables = [t for t in tables if len(t)]
+    if not tables:
+        return []
+    t = pd.concat(tables, ignore_index=True)
+    flat = t[t.memory_mode.eq("flat")].set_index("case")
+    cache = t[t.memory_mode.eq("cache")].set_index("case")
+    decode = t[t.kind.eq("decode GEMM")]
+    hbm_b, ddr_b = flat.loc["gemm_bf16_hbm"], flat.loc["gemm_bf16_ddr"]
+    hbm_i = flat.loc["gemm_int8_hbm"]
+    peak = flat.loc["amx_bf16"]
+    wall = t.dropna(subset=["per_watt_gain_wall"])
+    holds = bool(
+        t.scaling.between(0.93, 1.07).all() and flat.scaling.between(0.97, 1.04).all() and t.node_power_ratio.between(1.1, 1.6).all()
+        and t.per_watt_gain_node.between(1.3, 1.8).all()
+        and ((decode.j_per_token_node_dual / decode.j_per_token_socket_single) - 1).abs().max() < 0.07
+        and (decode.j_per_token_node_dual < decode.j_per_token_node_single).all()
+        and (wall.per_watt_gain_wall > 1.3).all() and (decode.uncore_ghz_s1_dual > decode.uncore_ghz_s1_single - 0.05).all()
+    )
+    cache_text = ""
+    if len(cache):
+        cr = cache.loc[[i for i in cache.index if i.startswith("gemm_bf16")]]
+        cache_text = (" In Cache mode the same pairs give " + "; ".join(
+            f"{i.removeprefix('gemm_bf16_effective_cache_').removeprefix('read_')}: {r.rate_dual / (2 * r.rate_single):.3f} scaling, "
+            f"{r.j_per_token_node_dual:.1f} J per token at the node against {r.j_per_token_node_single:.1f} on one socket"
+            for i, r in cr.iterrows()) + ".")
+    return [Claim(
+        "dual_energy",
+        holds,
+        f"Two sockets streaming at once scale as well as ever: {flat.scaling.min():.3f}–{flat.scaling.max():.3f} of twice one socket over the {len(flat)} Flat cases (10 s windows, against "
+        f"0.984–1.017 for the earlier 5 s pairs)"
+        + (f" and {cache.scaling.min():.3f}–{cache.scaling.max():.3f} over the {len(cache)} Cache cases, whose spilled pools repeat only to a few percent from launch to launch (claim `cache_launch_spread`)" if len(cache) else "")
+        + f", and they cost far less than twice the power: the node's RAPL power is {t.node_power_ratio.min():.2f}–{t.node_power_ratio.max():.2f}× that of one socket working "
+        f"alone (the BMC's wall power {wall.wall_power_ratio.min():.2f}–{wall.wall_power_ratio.max():.2f}×), because the second socket draws its 130–230 W anyway (claim `idle_socket_uncore_coupling`): "
+        f"throughput per node watt rises {t.per_watt_gain_node.min():.2f}–{t.per_watt_gain_node.max():.2f}× (per wall watt {wall.per_watt_gain_wall.min():.2f}–{wall.per_watt_gain_wall.max():.2f}×). "
+        f"For the decode GEMM that is the energy per token: on Flat HBM one socket streams {hbm_b.tokens_single:.1f} tokens/s (BF16) at {hbm_b.j_per_token_node_single:.1f} J per token for the node, both together "
+        f"{hbm_b.tokens_dual:.1f} tokens/s at {hbm_b.j_per_token_node_dual:.1f} J ({hbm_b.j_per_token_wall_dual:.1f} J at the wall, {hbm_b.j_per_token_node_dyn_dual:.1f} J once the idle floor is out); "
+        f"Flat DDR {ddr_b.j_per_token_node_single:.1f} against {ddr_b.j_per_token_node_dual:.1f} J, INT8 on HBM {hbm_i.j_per_token_node_single:.1f} against {hbm_i.j_per_token_node_dual:.1f} J. "
+        f"The node figure with both sockets working equals the computing-socket figure of one ({hbm_b.j_per_token_socket_single:.1f} J on HBM BF16, within "
+        f"{_pct(float(((decode.j_per_token_node_dual / decode.j_per_token_socket_single) - 1).abs().max()), 1)} in every decode case): the per-socket energy of notebook 00 Table 5 is the right per-token cost of "
+        f"a node that uses both sockets, and one socket alone costs the node {hbm_b.j_per_token_node_single / hbm_b.j_per_token_node_dual:.2f}× as much. The AMX BF16 peak shows the compute case: "
+        f"{peak.rate_dual / 1e3:.0f} TOP/s on two sockets for {peak.node_w_dual:.0f} W against {peak.rate_single / 1e3:.0f} TOP/s for {peak.node_w_single:.0f} W." + cache_text
+        + " Tokens per second add only if the two sockets serve independent streams (two replicas); a model sharded across them would add communication this measurement does not include.",
+    )]
+
+
 def uncore_claims(unc: pd.DataFrame, ext: pd.DataFrame, theory: Theory, data_pattern: pd.DataFrame | None = None,
-                  unc_cache: pd.DataFrame | None = None) -> dict[str, list[Claim]]:
+                  unc_cache: pd.DataFrame | None = None, session_probe: pd.DataFrame | None = None) -> dict[str, list[Claim]]:
     """Every claim of notebook 06 (privileged counters): ``unc`` is the Flat node, ``unc_cache`` the Cache node."""
 
     out = {
@@ -1792,8 +2128,12 @@ def uncore_claims(unc: pd.DataFrame, ext: pd.DataFrame, theory: Theory, data_pat
     if data_pattern is not None and len(data_pattern):
         out["data_pattern"] = data_pattern_claims(data_pattern)
     out["turbostat"] = turbostat_matches_perf(unc)
+    if session_probe is not None and len(session_probe):
+        out["cache_sessions"] = cache_session_claims(session_probe, unc_cache)
+    out["idle_baseline"] = idle_baseline(unc, unc_cache)
+    out["dual_energy"] = dual_energy(unc, unc_cache, theory)
     if unc_cache is not None and len(unc_cache):
-        out["cache_counters"] = cache_counters(unc, unc_cache)
+        out["cache_counters"] = cache_counters(unc, unc_cache, flat_far=report.flat_latency_far(ext))
         out["uncore_coupling"] = uncore_coupling(unc, unc_cache)
         out["energy_modes"] = energy_flat_vs_cache(pd.concat([unc, unc_cache], ignore_index=True), theory)
     return out

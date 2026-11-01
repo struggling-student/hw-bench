@@ -875,17 +875,21 @@ def cache_power_figure(cs: pd.DataFrame):
 
 
 def cache_capacity_counters_figure(cc: pd.DataFrame, capacity_gib: float = 64.0):
-    """Cache mode at 56 cores against the working set: traffic, DRAM power, clocks.
+    """Cache mode at 56 cores against the working set: traffic, hit rate, DRAM power, clocks.
 
-    ``cc`` is ``report.cache_capacity_table``.  Left: measured traffic (filled) and the kernel's
-    modeled rate (open) and, when counted, the far (DDR) traffic (dotted); middle: the DRAM's
-    own power (the DDR DIMMs; the package range is in the panel title); right: core (solid)
-    and uncore (dotted) clocks.  The vertical line is the HBM cache capacity of one socket.
+    ``cc`` is ``report.cache_capacity_table``.  Top left: measured traffic (filled), the kernel's
+    modeled rate (open) and, when counted, the far (DDR) fill rate (dotted); top right: the share of
+    the memory-side cache's tag lookups that hit, with the random-placement model e^(-W/C) of a
+    direct-mapped cache (grey); bottom left: the DRAM's own power (the DDR DIMMs; the package range
+    is in the title); bottom right: core (solid) and uncore (dotted) clocks.  The vertical line is
+    the HBM cache capacity of one socket.
     """
 
     pkg = f"package {cc.pkg_w.min():.0f}–{cc.pkg_w.max():.0f} W throughout"
-    fig = make_subplots(rows=1, cols=3, subplot_titles=("Traffic", f"DRAM power ({pkg})", "Clocks"), horizontal_spacing=0.07)
+    fig = make_subplots(rows=2, cols=2, subplot_titles=("Traffic", "Hit rate of the memory-side cache", f"DRAM power ({pkg})", "Clocks"),
+                        horizontal_spacing=0.1, vertical_spacing=0.16)
     color = CONFIG_COLORS["cache"]
+    counted_hits = cc.hit_rate.notna().any()
     for kernel, symbol in CACHE_KERNEL_SYMBOLS.items():
         part = cc[cc.kernel.eq(kernel)].sort_values("working_set_gib")
         if part.empty:
@@ -900,21 +904,29 @@ def cache_capacity_counters_figure(cc: pd.DataFrame, capacity_gib: float = 64.0)
         if part.far_gbs.notna().any():
             fig.add_scatter(x=x, y=part.far_gbs, mode="lines+markers", name=f"{label} · far (DDR)", legendgroup=label,
                             line=dict(color=CONFIG_COLORS["flat_ddr"], width=1.5, dash="dot"), marker=dict(size=7, symbol=symbol, color=CONFIG_COLORS["flat_ddr"]), row=1, col=1)
+        if counted_hits:
+            fig.add_scatter(x=x, y=100 * part.hit_rate, mode="lines+markers", name=label, legendgroup=label, showlegend=False,
+                            line=dict(color=color, width=1.5), marker=marker, row=1, col=2)
         fig.add_scatter(x=x, y=part.ram_w, mode="lines+markers", name=f"{label} · DRAM", legendgroup=label, showlegend=False,
-                        line=dict(color=color, width=1.5), marker=marker, row=1, col=2)
+                        line=dict(color=color, width=1.5), marker=marker, row=2, col=1)
         fig.add_scatter(x=x, y=part.core_ghz, mode="lines+markers", name=label, legendgroup=label, showlegend=False,
-                        line=dict(color=color, width=1.5), marker=marker, row=1, col=3)
+                        line=dict(color=color, width=1.5), marker=marker, row=2, col=2)
         fig.add_scatter(x=x, y=part.uncore_ghz, mode="lines+markers", name=f"{label} · uncore", legendgroup=label, showlegend=False,
-                        line=dict(color=MUTED, width=1.5, dash="dot"), marker=dict(size=7, symbol=symbol, color=MUTED), row=1, col=3)
-    for col in (1, 2, 3):
-        fig.add_vline(x=capacity_gib, line=dict(color=MUTED, width=1, dash="dash"), row=1, col=col)
+                        line=dict(color=MUTED, width=1.5, dash="dot"), marker=dict(size=7, symbol=symbol, color=MUTED), row=2, col=2)
+    if counted_hits:
+        grid = np.geomspace(cc.working_set_gib.min(), cc.working_set_gib.max(), 40)
+        fig.add_scatter(x=grid, y=100 * np.exp(-grid / capacity_gib), mode="lines", name="random placement, e^(−W/C)", showlegend=True,
+                        line=dict(color=MUTED, width=1.5, dash="dash"), row=1, col=2)
+    for row, col in ((1, 1), (1, 2), (2, 1), (2, 2)):
+        fig.add_vline(x=capacity_gib, line=dict(color=MUTED, width=1, dash="dash"), row=row, col=col)
         fig.update_xaxes(title_text="Working set (GiB)", type="log", tickmode="array", tickvals=[8, 16, 32, 64, 128],
-                         ticktext=["8", "16", "32", "64", "128"], row=1, col=col)
-    style(fig, "Cache mode against the working set · 56 cores, socket 0 · dashed line: HBM cache of one socket (64 GiB)", "", "", 560)
+                         ticktext=["8", "16", "32", "64", "128"], row=row, col=col)
+    style(fig, "Cache mode against the working set · 56 cores, socket 0 · dashed line: HBM cache of one socket (64 GiB)", "", "", 880)
     fig.update_yaxes(title_text="GB/s", row=1, col=1)
-    fig.update_yaxes(title_text="W", row=1, col=2)
-    fig.update_yaxes(title_text="GHz (colour core, grey dotted uncore)", row=1, col=3)
-    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.25, font=dict(size=12)))
+    fig.update_yaxes(title_text="Lookups that hit (%)", range=[0, 100], row=1, col=2)
+    fig.update_yaxes(title_text="W", row=2, col=1)
+    fig.update_yaxes(title_text="GHz (colour core, grey dotted uncore)", row=2, col=2)
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.12, font=dict(size=12)))
     return fig
 
 

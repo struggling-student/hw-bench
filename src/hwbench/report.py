@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from hwbench.analysis import ROOT, load_measurements, select_measurements
-from hwbench.extended import select_extended, select_uncore
+from hwbench.extended import select_extended, select_session_probe, select_uncore
 from hwbench.plotting import config_key
 from hwbench.roofline import BANDWIDTH_KERNELS
 from hwbench.theory import KERNEL_PATHS, Theory
@@ -42,6 +42,13 @@ def load_uncore(root: Path = ROOT, mode: str | None = None) -> pd.DataFrame:
     policy = json.loads((root / "configs/analysis.json").read_text())
     out = select_uncore(load_measurements(root / "data/processed/measurements.csv"), policy)
     return out if mode is None else out[out.memory_mode.eq(mode)].copy()
+
+
+def load_session_probe(root: Path = ROOT) -> pd.DataFrame:
+    """Rows of the Cache-node launches with the tag-event session (validation of the hit rate, not rates)."""
+
+    policy = json.loads((root / "configs/analysis.json").read_text())
+    return select_session_probe(load_measurements(root / "data/processed/measurements.csv"), policy)
 
 
 def _cv(series: pd.Series) -> float:
@@ -1632,7 +1639,7 @@ def socket_column(d: pd.DataFrame, name: str, which: str = "socket", other: bool
     return pd.Series(np.where(chosen == 1, d[f"{name}_s1"], d[f"{name}_s0"]), index=d.index)
 
 
-def energy_scopes(d: pd.DataFrame) -> pd.DataFrame:
+def energy_scopes(d: pd.DataFrame, floors: pd.DataFrame | None = None) -> pd.DataFrame:
     """Power at two RAPL scopes and the energy per byte and per operation at each.
 
     * **socket**: package plus DRAM power of the socket that computes (``socket_w``), per
@@ -1641,9 +1648,12 @@ def energy_scopes(d: pd.DataFrame) -> pd.DataFrame:
     * **node**: package plus DRAM power of both sockets (``node_w``, ``node_power_w``), per
       byte every controller moved and per operation.
 
-    Both include the idle floor; a third, wall scope (ipmitool) is added once it is measured.
-    Needs ``pkg_power_w``, ``ram_power_w`` and ``node_power_w``; columns that cannot be
-    formed are NaN.
+    Both include the idle floor.  With ``floors`` (``idle_floor``: the node at rest, per memory
+    mode) the same energies are also given *dynamic*, with the floor subtracted from the power
+    (``socket_dyn_w``, ``node_dyn_w``, and the ``_dyn`` columns of each energy): the computing
+    socket's floor for the socket scope and the whole node's for the node scope, so the node's
+    dynamic energy includes what the other socket draws above its own floor.  Needs
+    ``pkg_power_w``, ``ram_power_w`` and ``node_power_w``; columns that cannot be formed are NaN.
     """
 
     d = _with_measured(d) if "measured_gbs" not in d else d.copy()
@@ -1656,7 +1666,94 @@ def energy_scopes(d: pd.DataFrame) -> pd.DataFrame:
     gops = d.performance_gops
     d["pj_per_op"] = d.socket_w / gops * 1e3
     d["pj_per_op_node"] = d.node_w / gops * 1e3
+    if floors is not None and len(floors):
+        d["socket_dyn_w"] = d.socket_w - d.memory_mode.map(floors.socket_w)
+        d["node_dyn_w"] = d.node_w - d.memory_mode.map(floors.node_w)
+        d["pj_per_byte_dyn"] = d.socket_dyn_w / socket_gbs * 1e3
+        d["pj_per_byte_node_dyn"] = d.node_dyn_w / d.measured_gbs * 1e3
+        d["pj_per_op_dyn"] = d.socket_dyn_w / gops * 1e3
+        d["pj_per_op_node_dyn"] = d.node_dyn_w / gops * 1e3
+    else:
+        for column in ("socket_dyn_w", "node_dyn_w", "pj_per_byte_dyn", "pj_per_byte_node_dyn", "pj_per_op_dyn", "pj_per_op_node_dyn"):
+            d[column] = math.nan
     return d
+
+
+# ------------------------------------------------- the node at rest (B2)
+IDLE_LABELS = ("u_idle",)
+
+
+def is_idle_note(notes: pd.Series) -> pd.Series:
+    """Idle records by label: ``u_idle`` and the ``u_idle_r*`` of the first design, not the ``u_idle_load_*`` reads."""
+
+    return notes.str.startswith("u_idle") & ~notes.str.startswith("u_idle_load")
+IDLE_LOAD_PREFIX = "u_idle_load_"
+
+
+def idle_samples(unc: pd.DataFrame) -> pd.DataFrame:
+    """Accepted samples of the idle records (``uidle``: the counters over windows with no work)."""
+
+    if unc is None or unc.empty or "node_power_w" not in unc:
+        return pd.DataFrame()
+    return unc[unc.notes.isin(IDLE_LABELS) & unc.accepted & unc.node_power_w.notna()]
+
+
+def idle_floor(unc: pd.DataFrame) -> pd.DataFrame:
+    """The static floor per memory mode: power of each socket and of the node at rest, in watts.
+
+    ``socket_w`` is the package plus DRAM power of socket 0 (the computing socket of every counted
+    record), ``node_w`` of both sockets, ``wall_w`` the BMC's input power (empty where the BMC
+    log is missing).  Medians over the idle samples; ``ts_over_perf`` is turbostat's package
+    power over perf's where both ran in the same record.
+    """
+
+    d = idle_samples(unc)
+    if d.empty:
+        return pd.DataFrame(columns=["socket_w", "node_w"])
+    d = d.assign(socket_w=d.pkg_power_w_s0 + d.ram_power_w_s0, ts_over_perf=d.ts_pkg_power_w / d.pkg_power_w)
+    for column, source in (("bg_served_gbs", "served_bytes"), ("bg_far_gbs", "far_bytes")):
+        d[column] = d[source] / d.elapsed_seconds / 1e9 if source in d else math.nan
+    out = d.groupby("memory_mode").agg(
+        pkg_w_s0=("pkg_power_w_s0", "median"), pkg_w_s1=("pkg_power_w_s1", "median"),
+        ram_w_s0=("ram_power_w_s0", "median"), ram_w_s1=("ram_power_w_s1", "median"),
+        socket_w=("socket_w", "median"), node_w=("node_power_w", "median"),
+        uncore_ghz_s0=("uncore_ghz_s0", "median"), uncore_ghz_s1=("uncore_ghz_s1", "median"),
+        wall_w=("ipmi_sys_power_w", "median"), bmc_cpu_w=("ipmi_cpu_power_w", "median"), bmc_mem_w=("ipmi_mem_power_w", "median"),
+        background_gbs=("ctrl_bandwidth_gbs", "median"), bg_served_gbs=("bg_served_gbs", "median"), bg_far_gbs=("bg_far_gbs", "median"),
+        ts_over_perf=("ts_over_perf", "median"),
+        n_samples=("node_power_w", "size"), window_s=("elapsed_seconds", "median"),
+        campaign=("campaign_id", _ids),
+    )
+    out["non_rapl_w"] = out.wall_w - out.node_w
+    return out
+
+
+def idle_load_table(unc: pd.DataFrame) -> pd.DataFrame:
+    """The 14-core reads of ``uidle`` (below the power limit): RAPL against the BMC, per tier.
+
+    One row per record label: RAPL package and DRAM power of both sockets over the window against
+    the BMC's CPU and memory rails, and the node's RAPL power against the BMC's input power; the
+    DRAM rise over the idle floor says which traffic the RAPL "ram" domain sees.
+    """
+
+    if unc is None or unc.empty or "node_power_w" not in unc:
+        return pd.DataFrame()
+    d = unc[unc.notes.str.startswith(IDLE_LOAD_PREFIX) & unc.accepted & unc.node_power_w.notna()].copy()
+    if d.empty:
+        return pd.DataFrame()
+    floor = idle_floor(unc)
+    d["rapl_pkg_w"] = d.pkg_power_w_s0 + d.pkg_power_w_s1
+    d["rapl_ram_w"] = d.ram_power_w_s0 + d.ram_power_w_s1
+    d["ram_over_idle_w"] = d.rapl_ram_w - d.memory_mode.map(floor.ram_w_s0 + floor.ram_w_s1)
+    out = d.groupby(["memory_mode", "notes"]).agg(
+        gbs=("bandwidth_gbs", "median"), ctrl_gbs=("ctrl_bandwidth_gbs", "median"), rapl_pkg_w=("rapl_pkg_w", "median"),
+        bmc_cpu_w=("ipmi_cpu_power_w", "median"), rapl_ram_w=("rapl_ram_w", "median"), bmc_mem_w=("ipmi_mem_power_w", "median"),
+        ram_over_idle_w=("ram_over_idle_w", "median"), node_w=("node_power_w", "median"), wall_w=("ipmi_sys_power_w", "median"),
+        uncore_ghz_s0=("uncore_ghz_s0", "median"), n_samples=("node_power_w", "size"), listings=("ipmi_readings", "median"),
+    ).reset_index()
+    out["bmc_cpu_over_rapl"] = out.bmc_cpu_w / out.rapl_pkg_w
+    out["bmc_mem_over_rapl"] = out.bmc_mem_w / out.rapl_ram_w
+    return out
 
 
 def controller_table(unc: pd.DataFrame) -> pd.DataFrame:
@@ -1674,7 +1771,7 @@ def controller_table(unc: pd.DataFrame) -> pd.DataFrame:
     d = unc[unc.notes.isin(U1_STREAMS) & unc.ctrl_bytes.notna() & unc.modeled_bytes.gt(0)]
     if d.empty:
         return pd.DataFrame()
-    d = energy_scopes(_sample_ratios(d)).assign(kernel=lambda f: f.notes.map(U1_STREAMS))
+    d = energy_scopes(_sample_ratios(d), idle_floor(unc)).assign(kernel=lambda f: f.notes.map(U1_STREAMS))
     out = d.groupby(["memory_target", "kernel", "threads"]).agg(
         gbs=("bandwidth_gbs", "median"),
         ctrl_gbs=("ctrl_bandwidth_gbs", "median"),
@@ -1686,6 +1783,8 @@ def controller_table(unc: pd.DataFrame) -> pd.DataFrame:
         node_w=("node_w", "median"),
         pj_per_byte=("pj_per_byte", "median"),
         pj_per_byte_node=("pj_per_byte_node", "median"),
+        pj_per_byte_dyn=("pj_per_byte_dyn", "median"),
+        pj_per_byte_node_dyn=("pj_per_byte_node_dyn", "median"),
         intervals=("uncore_intervals", "median"),
         n_samples=("ctrl_bytes", "size"),
         campaign=("campaign_id", _ids),
@@ -1826,16 +1925,16 @@ def power_table(unc: pd.DataFrame) -> pd.DataFrame:
     d = unc[(unc.notes.isin(U1_STREAMS) | unc.notes.eq("u1_isa")) & unc.pkg_power_w.notna()]
     if d.empty:
         return pd.DataFrame()
-    d = energy_scopes(_sample_ratios(d))
+    d = energy_scopes(_sample_ratios(d), idle_floor(unc))
     from hwbench.plotting import PATH_LABELS
 
     paths = [PATH_LABELS.get(KERNEL_PATHS.get((b, t), ""), b) for b, t in zip(d.benchmark, d["dtype"])]
     d["kernel"] = d.notes.map(U1_STREAMS).fillna(pd.Series(paths, index=d.index))
     d["memory_target"] = d.memory_target.where(d.notes.ne("u1_isa"), "registers")
     streams = d.memory_target.ne("registers")
-    for column in ("pj_per_byte", "pj_per_byte_node"):
+    for column in ("pj_per_byte", "pj_per_byte_node", "pj_per_byte_dyn", "pj_per_byte_node_dyn"):
         d[column] = d[column].where(streams)
-    for column in ("pj_per_op", "pj_per_op_node"):
+    for column in ("pj_per_op", "pj_per_op_node", "pj_per_op_dyn", "pj_per_op_node_dyn"):
         d[column] = d[column].where(~streams)
     out = d.groupby(["memory_target", "kernel", "threads"]).agg(
         gbs=("bandwidth_gbs", "median"),
@@ -1851,8 +1950,12 @@ def power_table(unc: pd.DataFrame) -> pd.DataFrame:
         thermal_limited=("pcu_thermal_limit_frac", "median"),
         pj_per_byte=("pj_per_byte", "median"),
         pj_per_byte_node=("pj_per_byte_node", "median"),
+        pj_per_byte_dyn=("pj_per_byte_dyn", "median"),
+        pj_per_byte_node_dyn=("pj_per_byte_node_dyn", "median"),
         pj_per_op=("pj_per_op", "median"),
         pj_per_op_node=("pj_per_op_node", "median"),
+        pj_per_op_dyn=("pj_per_op_dyn", "median"),
+        pj_per_op_node_dyn=("pj_per_op_node_dyn", "median"),
         n_samples=("pkg_power_w", "size"),
     ).reset_index()
     return out
@@ -1948,7 +2051,7 @@ def gemm_controller_table(unc: pd.DataFrame) -> pd.DataFrame:
     d = unc[unc.notes.eq("u4_gemm") & unc.ctrl_bytes.notna()]
     if d.empty:
         return pd.DataFrame()
-    d = energy_scopes(_sample_ratios(d))
+    d = energy_scopes(_sample_ratios(d), idle_floor(unc))
     d["intensity_ctrl"] = d.operations / d.ctrl_bytes
     d["ctrl_read_over_modeled"] = (d.ctrl_ddr_read_bytes + d.ctrl_hbm_read_bytes) / d.modeled_bytes
     d["ctrl_write_over_modeled"] = (d.ctrl_ddr_write_bytes + d.ctrl_hbm_write_bytes) / d.modeled_bytes
@@ -2168,6 +2271,14 @@ def counted_gemm_frame(unc: pd.DataFrame, labels=COUNTED_GEMM_LABELS, shape: str
         d = d[d["shape"].eq(shape)]
     d["power_w"] = d.pkg_power_w + d.ram_power_w
     d["node_w"] = d["node_power_w"] if "node_power_w" in d else math.nan
+    # A configuration that a later launch measured with the cache's served bytes is taken from that
+    # launch only (the cores' line counts over-count prefill batches by up to 2x).
+    point = ["memory_mode", "memory_target", "dtype", "layout", "shape", "m", "working_set_bytes"]
+    served = d.bytes_source.eq("uncore_cas")
+    d = d[served | ~served.groupby([d[c] for c in point], dropna=False).transform("any")]
+    floors = idle_floor(unc)
+    d["power_dyn_w"] = d.power_w - d.memory_mode.map(floors.socket_w) if len(floors) else math.nan
+    d["node_dyn_w"] = d.node_w - d.memory_mode.map(floors.node_w) if len(floors) else math.nan
     keys = ["memory_mode", "config", "memory_target", "dtype", "layout", "shape", "n", "k", "m", "working_set_bytes"]
     out = d.groupby(keys, dropna=False).agg(
         gops=("performance_gops", "median"),
@@ -2178,6 +2289,8 @@ def counted_gemm_frame(unc: pd.DataFrame, labels=COUNTED_GEMM_LABELS, shape: str
         bytes_source=("bytes_source", "first"),
         power_w=("power_w", "median"),
         node_w=("node_w", "median"),
+        power_dyn_w=("power_dyn_w", "median"),
+        node_dyn_w=("node_dyn_w", "median"),
         power_source=("power_source", "first"),
         cv_percent=("performance_gops", _cv),
         n_samples=("accepted", "size"),
@@ -2187,6 +2300,8 @@ def counted_gemm_frame(unc: pd.DataFrame, labels=COUNTED_GEMM_LABELS, shape: str
     out["measured_over_modeled"] = out.intensity_modeled / out.intensity
     out["j_per_op"] = out.power_w / (out.gops * 1e9)
     out["j_per_op_node"] = out.node_w / (out.gops * 1e9)
+    out["j_per_op_dyn"] = out.power_dyn_w / (out.gops * 1e9)
+    out["j_per_op_node_dyn"] = out.node_dyn_w / (out.gops * 1e9)
     out["pool_gib"] = out.working_set_bytes / 2**30
     out["pool_x"] = out.working_set_bytes / ONCHIP_BYTES
     out["status"] = "counted"
@@ -2320,7 +2435,7 @@ def turbostat_validation(unc: pd.DataFrame) -> pd.DataFrame:
     differ in kind (an instantaneous ratio against counted ticks).
     """
 
-    d = unc[unc.memory_mode.eq("flat") & unc.ts_pkg_power_w.notna() & unc.pkg_power_w.notna()].copy()
+    d = unc[unc.memory_mode.eq("flat") & unc.socket_scope.eq("single") & unc.ts_pkg_power_w.notna() & unc.pkg_power_w.notna()].copy()
     if d.empty:
         return pd.DataFrame()
     d["pkg_ratio"] = d.ts_pkg_power_w / d.pkg_power_w
@@ -2343,13 +2458,17 @@ def _cache_frame(unc: pd.DataFrame, labels) -> pd.DataFrame:
     d = _with_measured(d)
     d["kernel"] = d.benchmark.map(BANDWIDTH_KERNELS)
     d["working_set_gib"] = (d.working_set_bytes / 2**30).round(1)
-    d = energy_scopes(d)
+    d = energy_scopes(d, idle_floor(unc))
     d["power_w"] = d.socket_w
     if "nm_hit_rate" not in d:
         d["nm_hit_rate"] = math.nan
     if "far_bytes" not in d:
         d["far_bytes"] = math.nan
     d["far_gbs"] = d.far_bytes / d.elapsed_seconds / 1e9
+    ddr = d.ctrl_ddr_read_bytes + d.ctrl_ddr_write_bytes if "ctrl_ddr_read_bytes" in d else math.nan
+    d["ddr_gbs"] = ddr / d.elapsed_seconds / 1e9
+    d["served_over_counted"] = (d.measured_bytes / d.counted_bytes).where(d.bytes_source.eq("uncore_cas"))
+    d["served_over_modeled"] = (d.measured_bytes / d.modeled_bytes).where(d.bytes_source.eq("uncore_cas"))
     return d
 
 
@@ -2360,6 +2479,9 @@ def _cache_agg(d: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
         bytes_source=("bytes_source", "first"),
         hit_rate=("nm_hit_rate", "median"),
         far_gbs=("far_gbs", "median"),
+        ddr_gbs=("ddr_gbs", "median"),
+        served_over_counted=("served_over_counted", "median"),
+        served_over_modeled=("served_over_modeled", "median"),
         core_ghz=("ghz_effective", "median"),
         uncore_ghz=("uncore_ghz", "median"),
         pkg_w=("pkg_power_w", "median"),
@@ -2367,6 +2489,8 @@ def _cache_agg(d: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
         node_w=("node_w", "median"),
         pj_per_byte=("pj_per_byte", "median"),
         pj_per_byte_node=("pj_per_byte_node", "median"),
+        pj_per_byte_dyn=("pj_per_byte_dyn", "median"),
+        pj_per_byte_node_dyn=("pj_per_byte_node_dyn", "median"),
         power_source=("power_source", "first"),
         cv_percent=("bandwidth_gbs", _cv),
         n_samples=("accepted", "size"),
@@ -2394,13 +2518,88 @@ def cache_capacity_table(unc: pd.DataFrame) -> pd.DataFrame:
     """Cache-mode streams at 56 cores over the working set (part ``ucapacity``, U3).
 
     One row per kernel and working set: rate, measured traffic, hit rate and far (DDR)
-    traffic when the perf session counted them, clocks, power and energy per byte.
+    traffic when the perf session counted them, clocks, power and energy per byte.  When a launch
+    counted the tags (``ucapacity`` with the Cache event set) only that launch is used: ``hit_rate``
+    is the share of tag lookups that hit, ``far_gbs`` the DDR read rate (each read a fill),
+    ``ddr_gbs`` the DDR traffic in both directions and ``served_over_counted`` the bytes the cache
+    served over the cores' own DRAM line counts.
     """
 
     d = _cache_frame(unc, ["u3_read_capacity", "u3_triad_capacity", "u3_triad_nt_capacity"])
     if d.empty:
         return pd.DataFrame()
-    return _cache_agg(d, ["kernel", "working_set_gib"])
+    # Launches that counted the memory-side cache's tags are not pooled with the earlier turbostat-only
+    # launch: the hit rate, and with it the rate, differs between launches (page placement).
+    counted = d[d.nm_hit_rate.notna()]
+    return _cache_agg(counted if len(counted) else d, ["kernel", "working_set_gib"])
+
+
+def cache_latency_counted(unc: pd.DataFrame, sizes=None) -> pd.DataFrame:
+    """The far-latency chase in Cache mode with the memory-side cache's counters (part ``ucachelat``, R2/C7).
+
+    One row per working set: the one-core dependent-load latency, the hit rate of the chase's own lookups
+    and the DDR fill rate.  A one-core chase moves well under 1 GB/s, so the idle node's background
+    traffic (``idle_floor``: ``bg_served_gbs``, ``bg_far_gbs``) is subtracted from the cache's served and far
+    bytes before the hit rate is formed.
+    """
+
+    d = unc[unc.memory_mode.eq("cache") & unc.notes.eq("u3_latency_far") & unc.accepted & unc.served_bytes.notna()] if len(unc) else unc
+    if d is None or d.empty:
+        return pd.DataFrame()
+    floor = idle_floor(unc)
+    bg_served = float(floor.bg_served_gbs.get("cache", 0.0)) if len(floor) else 0.0
+    bg_far = float(floor.bg_far_gbs.get("cache", 0.0)) if len(floor) else 0.0
+    d = d.assign(
+        gib=(d.working_set_bytes / 2**30).round(0),
+        served_net=d.served_bytes - bg_served * 1e9 * d.elapsed_seconds, far_net=d.far_bytes - bg_far * 1e9 * d.elapsed_seconds)
+    d["hit_net"] = 1 - d.far_net / d.served_net
+    d["served_gbs"] = d.served_net / d.elapsed_seconds / 1e9
+    d["raw_hit"] = d.nm_hit_rate
+    return d.groupby("gib").agg(
+        latency_ns=("latency_ns", "median"), hit_rate=("hit_net", "median"), raw_hit_rate=("raw_hit", "median"),
+        served_gbs=("served_gbs", "median"), n_samples=("accepted", "size"), campaign=("campaign_id", _ids)).reset_index()
+
+
+def cache_launch_spread(unc: pd.DataFrame, sizes=(8.0, 32.0, 56.0)) -> pd.DataFrame:
+    """Read and Triad at 56 cores on the Cache node, launch by launch (parts ``ucacherep`` and ``ucapacity``, C2).
+
+    One row per launch, kernel and working set: the rate and, where the launch counted the memory-side
+    cache's traffic, the hit rate.  The turbostat-only launch of 2026-10-20 has no hit rate.
+    """
+
+    d = unc[unc.memory_mode.eq("cache") & unc.accepted & unc.notes.isin(
+        ["u3_rep_read", "u3_rep_triad", "u3_read_capacity", "u3_triad_capacity"])].copy()
+    if d.empty:
+        return pd.DataFrame()
+    d["gib"] = (d.working_set_bytes / 2**30).round(0)
+    d["kernel"] = d.notes.str.replace("u3_rep_", "", regex=False).str.replace("u3_", "", regex=False).str.replace("_capacity", "", regex=False)
+    d = d[d.gib.isin(sizes) & d.kernel.isin(["read", "triad"])]
+    return d.groupby(["kernel", "gib", "campaign_id"]).agg(
+        gbs=("bandwidth_gbs", "median"), hit_rate=("nm_hit_rate", "median"), n_samples=("accepted", "size")).reset_index()
+
+
+def cache_gemm_table(unc: pd.DataFrame) -> pd.DataFrame:
+    """The 14336x4096 GEMM in Cache mode with the memory-side cache's tag counters (part ``ugemm``, C3).
+
+    One row per pool (16 GiB resident, 96 GiB spilled), precision and batch size M: the rate, the hit
+    rate, the DDR fill rate (``far_gbs``), the bytes the cache served over the modeled bytes and over
+    the cores' own DRAM line counts (the ratio that decides which bytes place a Cache point on the
+    roofline), and the package power.
+    """
+
+    d = unc[unc.memory_mode.eq("cache") & unc.notes.eq("u4_gemm") & unc.accepted & unc.served_bytes.notna()] if len(unc) else unc
+    if d is None or d.empty:
+        return pd.DataFrame()
+    d = _with_measured(d)
+    d["pool_gib"] = (d.working_set_bytes / 2**30).round(0)
+    d["far_gbs"] = d.far_bytes / d.elapsed_seconds / 1e9
+    d["served_over_modeled"] = d.served_bytes / d.modeled_bytes
+    d["served_over_counted"] = d.served_bytes / d.counted_bytes
+    return d.groupby(["pool_gib", "dtype", "m"]).agg(
+        gbs=("bandwidth_gbs", "median"), hit_rate=("nm_hit_rate", "median"), far_gbs=("far_gbs", "median"),
+        served_over_modeled=("served_over_modeled", "median"), served_over_counted=("served_over_counted", "median"),
+        pkg_w=("pkg_power_w", "median"), n_samples=("accepted", "size"), campaign=("campaign_id", _ids),
+    ).reset_index()
 
 
 def mode_power_comparison(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame) -> pd.DataFrame:
@@ -2463,7 +2662,7 @@ def decode_table_measured(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theor
     for tier, c in read.items():
         rows.append(dict(tier=tier, precision="—", layout="read-only kernel", pool="—", gbs=c.gbs, modeled_gbs=math.nan,
                          bytes_source=c.note.removeprefix("bytes measured (").rstrip(")") if c.note else "modeled",
-                         power_w=math.nan, node_w=math.nan, read_gbs=c.gbs))
+                         power_w=math.nan, node_w=math.nan, power_dyn_w=math.nan, node_dyn_w=math.nan, read_gbs=c.gbs))
     m1 = counted[counted.m.eq(1)]
     for r in m1.itertuples():
         tier = (f"Flat {r.memory_target.upper()}" if r.memory_mode == "flat" else f"Cache, {r.pool_gib:.0f} GiB")
@@ -2471,12 +2670,15 @@ def decode_table_measured(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theor
             continue
         pool = f"{r.pool_x:.0f}× on-chip" if r.memory_mode == "flat" else f"{r.pool_gib:.0f} GiB"
         rows.append(dict(tier=tier, precision=r.dtype, layout=r.layout, pool=pool, gbs=r.measured_gbs, modeled_gbs=r.gbs,
-                         bytes_source=r.bytes_source, power_w=r.power_w, node_w=r.node_w, read_gbs=read[tier].gbs))
+                         bytes_source=r.bytes_source, power_w=r.power_w, node_w=r.node_w, power_dyn_w=r.power_dyn_w,
+                         node_dyn_w=r.node_dyn_w, read_gbs=read[tier].gbs))
     out = pd.DataFrame(rows)
     out["of_read_ceiling"] = out.gbs / out.read_gbs
     out["tokens_per_s"] = [g / model_gb.get(p, model_gb["bf16"]) for g, p in zip(out.gbs, out.precision)]
     out["j_per_token"] = out.power_w / out.tokens_per_s
     out["j_per_token_node"] = out.node_w / out.tokens_per_s
+    out["j_per_token_dyn"] = out.power_dyn_w / out.tokens_per_s
+    out["j_per_token_node_dyn"] = out.node_dyn_w / out.tokens_per_s
     order = {t: i for i, t in enumerate(read)}
     out["_o"] = out.tier.map(order)
     return out.sort_values(["_o", "layout", "precision"], key=lambda c: c if c.name == "_o" else c.map(lambda v: (v != "read-only kernel", v))).drop(columns="_o").reset_index(drop=True)
@@ -2509,7 +2711,8 @@ def energy_table(unc: pd.DataFrame, theory: Theory, shape: str = "14336x4096") -
     """
 
     cols = ["kind", "tier", "precision", "layout", "x", "intensity", "gops", "socket_w", "node_w", "pj_per_op",
-            "pj_per_op_node", "j_per_token", "j_per_token_node", "bytes_source", "power_source", "n_samples", "campaign"]
+            "pj_per_op_node", "pj_per_op_dyn", "pj_per_op_node_dyn", "j_per_token", "j_per_token_node", "j_per_token_dyn",
+            "j_per_token_node_dyn", "bytes_source", "power_source", "n_samples", "campaign"]
     rows = []
     cg = counted_gemm_frame(unc, shape=shape)
     ops_per_token = 2 * theory.model_parameters()
@@ -2518,34 +2721,104 @@ def energy_table(unc: pd.DataFrame, theory: Theory, shape: str = "14336x4096") -
         rows.append(dict(
             kind="gemm", tier=tier, precision=r.dtype, layout=r.layout, x=r.m, intensity=r.intensity, gops=r.gops,
             socket_w=r.power_w, node_w=r.node_w, pj_per_op=r.j_per_op * 1e12, pj_per_op_node=r.j_per_op_node * 1e12,
+            pj_per_op_dyn=r.j_per_op_dyn * 1e12, pj_per_op_node_dyn=r.j_per_op_node_dyn * 1e12,
             j_per_token=r.j_per_op * ops_per_token, j_per_token_node=r.j_per_op_node * ops_per_token,
+            j_per_token_dyn=r.j_per_op_dyn * ops_per_token, j_per_token_node_dyn=r.j_per_op_node_dyn * ops_per_token,
             bytes_source=r.bytes_source, power_source=r.power_source, n_samples=r.n_samples, campaign=r.campaign_id))
     d = unc[unc.benchmark.eq("roofline_sweep") & unc.notes.eq(COUNTED_SWEEP_LABEL) & unc.accepted]
     if len(d):
-        d = energy_scopes(_with_measured(d))
+        d = energy_scopes(_with_measured(d), idle_floor(unc))
         d["tier"] = [_tier_label(m, t, w / 2**30) for m, t, w in zip(d.memory_mode, d.memory_target, d.working_set_bytes)]
         g = d.groupby(["tier", "k"]).agg(
             intensity=("intensity_measured", "median"), gops=("performance_gops", "median"), socket_w=("socket_w", "median"),
             node_w=("node_w", "median"), pj_per_op=("pj_per_op", "median"), pj_per_op_node=("pj_per_op_node", "median"),
+            pj_per_op_dyn=("pj_per_op_dyn", "median"), pj_per_op_node_dyn=("pj_per_op_node_dyn", "median"),
             bytes_source=("bytes_source", "first"), power_source=("power_source", "first"), n_samples=("k", "size"),
             campaign=("campaign_id", _ids)).reset_index()
         for r in g.itertuples():
             rows.append(dict(kind="sweep", tier=r.tier, precision="fp64", layout="—", x=r.k, **{c: getattr(r, c) for c in (
-                "intensity", "gops", "socket_w", "node_w", "pj_per_op", "pj_per_op_node", "bytes_source", "power_source", "n_samples", "campaign")}))
+                "intensity", "gops", "socket_w", "node_w", "pj_per_op", "pj_per_op_node", "pj_per_op_dyn", "pj_per_op_node_dyn",
+                "bytes_source", "power_source", "n_samples", "campaign")}))
     d = unc[unc.notes.eq("u1_isa") & unc.threads.eq(56) & unc.accepted & unc.pkg_power_w.notna()]
     if len(d):
         from hwbench.plotting import PATH_LABELS
 
-        d = energy_scopes(d)
+        d = energy_scopes(d, idle_floor(unc))
         d["path"] = [PATH_LABELS.get(KERNEL_PATHS.get((b, t), ""), b) for b, t in zip(d.benchmark, d["dtype"])]
         d["tier"] = d.memory_mode.map({"flat": "Flat", "cache": "Cache"})
         g = d.groupby(["tier", "path", "dtype"]).agg(
             gops=("performance_gops", "median"), socket_w=("socket_w", "median"), node_w=("node_w", "median"),
-            pj_per_op=("pj_per_op", "median"), pj_per_op_node=("pj_per_op_node", "median"), power_source=("power_source", "first"),
-            n_samples=("path", "size"), campaign=("campaign_id", _ids)).reset_index()
+            pj_per_op=("pj_per_op", "median"), pj_per_op_node=("pj_per_op_node", "median"),
+            pj_per_op_dyn=("pj_per_op_dyn", "median"), pj_per_op_node_dyn=("pj_per_op_node_dyn", "median"),
+            power_source=("power_source", "first"), n_samples=("path", "size"), campaign=("campaign_id", _ids)).reset_index()
         for r in g.itertuples():
             rows.append(dict(kind="peak", tier=r.tier, precision=r.dtype, layout=r.path, x=math.nan, intensity=math.nan, gops=r.gops,
                              socket_w=r.socket_w, node_w=r.node_w, pj_per_op=r.pj_per_op, pj_per_op_node=r.pj_per_op_node,
-                             bytes_source="—", power_source=r.power_source, n_samples=r.n_samples, campaign=r.campaign))
+                             pj_per_op_dyn=r.pj_per_op_dyn, pj_per_op_node_dyn=r.pj_per_op_node_dyn, bytes_source="—", power_source=r.power_source, n_samples=r.n_samples, campaign=r.campaign))
     return pd.DataFrame(rows, columns=cols)
+
+
+# ------------------------------------------------- both sockets at once (B4)
+DUAL_PREFIX = "u5_dual_"
+
+
+def dual_energy(unc: pd.DataFrame, theory: Theory) -> pd.DataFrame:
+    """Two sockets streaming at once against one socket alone, from the same launch (part ``udual``).
+
+    One row per case: ``dual`` is the aggregate of two synchronized processes of 56 cores, one per
+    socket on its own memory, ``single`` the same work on socket 0 alone.  ``scaling`` is the dual rate
+    over twice the single rate (the efficiency of ``dual_efficiency``).  Power is at the node RAPL
+    scope (``node_w``) and at the wall (the BMC's input power over the record's whole span, ``wall_w``,
+    whole watts); ``socket_w`` is the single run's computing socket (package plus DRAM), the figure
+    that one would double.  For the decode GEMM (M = 1, 14336x4096) the rate is the weight stream:
+    ``j_per_token_*`` is the energy of one Llama-3.1-8B token if every weight streamed at that rate,
+    the two sockets serving independent streams (tokens per second add), at each scope; ``_dyn``
+    subtracts the idle floor of the node.
+    """
+
+    d = unc[unc.notes.str.startswith(DUAL_PREFIX) & unc.accepted & unc.node_power_w.notna()] if len(unc) else unc
+    if d is None or d.empty:
+        return pd.DataFrame()
+    floors = idle_floor(unc)
+    params = theory.model_parameters()
+    model_gb = {"bf16": params * 2 / 1e9, "int8": params / 1e9}
+    rows = []
+    controls = d[d.socket_scope.eq("single") & d.notes.str.endswith("_control")]
+    for (_, control_notes), c in controls.groupby(["memory_mode", "notes"]):
+        case = control_notes.removeprefix(DUAL_PREFIX).removesuffix("_control")
+        dual = d[d.socket_scope.eq("dual") & d.notes.eq(f"{DUAL_PREFIX}{case}") & d.memory_mode.eq(c.memory_mode.iloc[0])]
+        if dual.empty:
+            continue
+        mode = c.memory_mode.iloc[0]
+        gemm = c.benchmark.iloc[0] == "onednn_gemm_sweep"
+        peak = c.benchmark.iloc[0] in ("amx_peak", "int8_amx_peak")
+        column = "performance_gops" if peak else "bandwidth_gbs"
+        precision = c["dtype"].iloc[0] if (gemm or peak) else ""
+        row = dict(
+            memory_mode=mode, case=case, kind="amx peak" if peak else "decode GEMM" if gemm else "read", precision=precision,
+            unit="Gop/s" if peak else "GB/s", rate_single=c[column].median(), rate_dual=dual[column].median(),
+            node_w_single=c.node_power_w.median(), node_w_dual=dual.node_power_w.median(),
+            wall_w_single=c.ipmi_record_sys_power_w.median(), wall_w_dual=dual.ipmi_record_sys_power_w.median(),
+            socket_w_single=(c.pkg_power_w + c.ram_power_w).median(), uncore_ghz_s1_single=c.uncore_ghz_s1.median(),
+            uncore_ghz_s1_dual=dual.uncore_ghz_s1.median(), overlap=dual.overlap_fraction.min(), n_samples=len(dual),
+            campaign=_ids(dual.campaign_id),
+        )
+        floor = floors.node_w.get(mode, math.nan) if len(floors) else math.nan
+        row["scaling"] = row["rate_dual"] / (2 * row["rate_single"])
+        row["node_power_ratio"] = row["node_w_dual"] / row["node_w_single"]
+        row["wall_power_ratio"] = row["wall_w_dual"] / row["wall_w_single"]
+        row["per_watt_gain_node"] = (row["rate_dual"] / row["node_w_dual"]) / (row["rate_single"] / row["node_w_single"])
+        row["per_watt_gain_wall"] = (row["rate_dual"] / row["wall_w_dual"]) / (row["rate_single"] / row["wall_w_single"])
+        if gemm:
+            tok_single, tok_dual = row["rate_single"] / model_gb[precision], row["rate_dual"] / model_gb[precision]
+            row.update(
+                tokens_single=tok_single, tokens_dual=tok_dual,
+                j_per_token_socket_single=row["socket_w_single"] / tok_single,
+                j_per_token_node_single=row["node_w_single"] / tok_single, j_per_token_node_dual=row["node_w_dual"] / tok_dual,
+                j_per_token_wall_single=row["wall_w_single"] / tok_single, j_per_token_wall_dual=row["wall_w_dual"] / tok_dual,
+                j_per_token_node_dyn_single=(row["node_w_single"] - floor) / tok_single,
+                j_per_token_node_dyn_dual=(row["node_w_dual"] - floor) / tok_dual,
+            )
+        rows.append(row)
+    return pd.DataFrame(rows).sort_values(["memory_mode", "kind", "precision", "case"]).reset_index(drop=True)
 

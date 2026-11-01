@@ -11,7 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from hwbench import disasm, turbostat, uncore
+from hwbench import disasm, ipmi, turbostat, uncore
 
 FIELDS = [
     "timestamp",
@@ -107,9 +107,18 @@ FIELDS = [
     # and the node's RAPL power (both sockets, package plus DRAM).
     *uncore.SOCKET_FIELDS,
     "node_power_w",
+    # Cache mode (event set "cache"): what the memory-side cache's tag counters say.
+    *uncore.CACHE_FIELDS,
     # Privileged turbostat (hwbench.turbostat), both modes; fills the power and clock
     # columns above where no perf session ran, and says which source they came from.
     *turbostat.FIELDS,
+    # The BMC's wall power (hwbench.ipmi), over samples long enough to hold two listings.
+    *ipmi.FIELDS,
+    *ipmi.RECORD_FIELDS,
+    # Which sessions ran beside the record: the perf event set ("base", "cache" or empty) and whether
+    # the campaign logged the BMC.
+    "uncore_event_set",
+    "ipmi_logged",
     "power_source",
 ]
 
@@ -124,6 +133,24 @@ TURBOSTAT_FALLBACK = {
     "uncore_ghz": "ts_uncore_ghz",
     **{f"{name}_s{socket}": f"ts_{name}_s{socket}" for name in ("pkg_power_w", "ram_power_w", "uncore_ghz") for socket in (0, 1)},
 }
+
+
+def _ipmi_fields(row: dict[str, Any], record: dict[str, Any], readings: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """The BMC's power over one sample, from the campaign-level log, on the wall clock of the record."""
+
+    offset = record.get("realtime_offset_ns")
+    if not readings or offset is None or row.get("start_ns") is None or row.get("end_ns") is None:
+        return {}
+    return ipmi.window_fields(readings, (row["start_ns"] + offset) / 1e9, (row["end_ns"] + offset) / 1e9)
+
+
+def _ipmi_record_fields(span: tuple[int, int] | None, record: dict[str, Any], readings: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """The BMC's power over the whole record (all its samples, back to back), for windows too short for a listing pair."""
+
+    offset = record.get("realtime_offset_ns")
+    if not readings or offset is None or span is None:
+        return {}
+    return ipmi.record_fields(readings, (span[0] + offset) / 1e9, (span[1] + offset) / 1e9)
 
 
 def _power_source(row: dict[str, Any]) -> dict[str, Any]:
@@ -349,6 +376,8 @@ def rows_from_record(
         source_file=str(source),
         requested_seconds=_requested_seconds(record),
         launch_method=_launch_method(record, campaign),
+        uncore_event_set=(record.get("uncore") or {}).get("event_set"),
+        ipmi_logged=bool((campaign or {}).get("_ipmi")),
         node=(record.get("hostname") or "").split(".", 1)[0] or None,
         memory_mode_verified=(
             None
@@ -393,6 +422,8 @@ def rows_from_record(
     uncore_windows = uncore.windows(record.get("uncore"), r) if "samples" in r else [None] * len(samples)
     turbo_windows = turbostat.windows(record.get("turbostat"), r) if "samples" in r else [None] * len(samples)
     rows = []
+    stamps = [(x["start_ns"], x["end_ns"]) for x in samples if x.get("start_ns") is not None and x.get("end_ns") is not None]
+    record_span = (min(a for a, _ in stamps), max(b for _, b in stamps)) if stamps else None
     for i, sample in enumerate(samples):
         row = dict(
             base,
@@ -418,8 +449,10 @@ def rows_from_record(
             )
             row.update(_clock_fields(row, row.get("counter_threads") or row.get("threads")))
             row.update(_counted_fields(row))
-            row.update(uncore.sample_fields(uncore_windows[i], elapsed, socket, ms))
+            row.update(uncore.sample_fields(uncore_windows[i], elapsed, socket, ms, cache_mode=mode == "cache"))
             row.update(turbostat.sample_fields(turbo_windows[i], elapsed, socket))
+            row.update(_ipmi_fields(row, record, (campaign or {}).get("_ipmi")))
+            row.update(_ipmi_record_fields(record_span, record, (campaign or {}).get("_ipmi")))
             row.update(_power_source(row))
             if r.get("benchmark") == "pointer_chase" and loads <= 0:
                 errors.append("invalid_load_count")
@@ -479,6 +512,8 @@ SYSTEM_RATES = (
     "ts_system_power_w", "ts_uncore_ghz", "ts_pkg_temp_c", "ts_intervals", "ts_coverage",
     *uncore.SOCKET_FIELDS,
     *[f for f in turbostat.FIELDS if f.endswith(("_s0", "_s1"))],
+    *ipmi.FIELDS,
+    *ipmi.RECORD_FIELDS,
 )
 SYSTEM_RATES = tuple(f for f in SYSTEM_RATES if f not in SYSTEM_TOTALS)
 
@@ -490,7 +525,8 @@ def _merge_counters(row, members, scope):
     whole node, so a session that ran beside one participant is one measurement of both
     processes' window and is not summed: with a single session its values are used (totals
     rescaled from the participant's window to the aggregate's); with a session beside each
-    participant the mean of the two is.  In a ``dual`` aggregate both sockets compute, so the
+    participant the mean of the two is.  The same holds column by column for the BMC's power
+    (``ipmi_*``), which every participant carries over its own window.  In a ``dual`` aggregate both sockets compute, so the
     "computing socket" power columns are the two sockets' sum and the clocks and PCU limit
     fractions their mean; elsewhere they stay those of the session's computing socket.
     """
@@ -499,7 +535,7 @@ def _merge_counters(row, members, scope):
         values = [m.get(name) for m in members]
         row[name] = sum(values) if all(v is not None for v in values) else None
     row.update(_counted_fields(row))
-    carriers = [m for m in members if any(m.get(n) is not None for n in ("pkg_power_w", "ts_pkg_power_w", "ctrl_bytes"))]
+    carriers = [m for m in members if any(m.get(n) is not None for n in ("pkg_power_w", "ts_pkg_power_w", "ctrl_bytes", "ipmi_sys_power_w"))]
     for name in SYSTEM_TOTALS + SYSTEM_RATES:
         row[name] = None
     row["power_source"] = None
@@ -509,7 +545,7 @@ def _merge_counters(row, members, scope):
 
     def mean(name, scale=lambda m: 1.0):
         values = [m[name] * scale(m) for m in carriers if m.get(name) is not None]
-        return sum(values) / len(values) if len(values) == len(carriers) else None
+        return sum(values) / len(values) if values else None
 
     def rescale(m):
         return elapsed / m["elapsed_seconds"] if elapsed and m.get("elapsed_seconds") else 1.0
@@ -528,13 +564,14 @@ def _merge_counters(row, members, scope):
     else:
         row["ctrl_bandwidth_gbs"] = None
     if scope == "dual":
-        both = {n: [row.get(f"{n}_s{s}") for s in (0, 1)] for n in ("pkg_power_w", "ram_power_w", "uncore_ghz", "pcu_power_limit_frac")}
-        for n in ("pkg_power_w", "ram_power_w"):
-            if None not in both[n]:
-                row[n] = sum(both[n])
-        for n in ("uncore_ghz", "pcu_power_limit_frac"):
-            if None not in both[n]:
-                row[n] = sum(both[n]) / 2
+        for prefix in ("", "ts_"):
+            both = {n: [row.get(f"{prefix}{n}_s{s}") for s in (0, 1)] for n in ("pkg_power_w", "ram_power_w", "uncore_ghz", "pcu_power_limit_frac")}
+            for n in ("pkg_power_w", "ram_power_w"):
+                if None not in both[n]:
+                    row[prefix + n] = sum(both[n])
+            for n in ("uncore_ghz", "pcu_power_limit_frac"):
+                if None not in both[n]:
+                    row[prefix + n] = sum(both[n]) / 2
 
 
 def _aggregate(rows, scope, component):
@@ -658,6 +695,7 @@ def main(argv=None):
     args = p.parse_args(argv)
     rows = []
     audit = []
+    ipmi_logs: dict[Path, list] = {}
     for root in args.input:
         for path in sorted(root.rglob("*.json")):
             try:
@@ -677,6 +715,11 @@ def main(argv=None):
                     campaign_meta = json.loads(meta_path.read_text())
                 topology = json.loads((campaign / "system/topology.json").read_text())
                 campaign_meta["topology_mode"] = topology.get("memory_mode")
+                if campaign not in ipmi_logs:
+                    ipmi_logs[campaign] = ipmi.read_log(campaign / "ipmi.log.gz") or ipmi.read_log(campaign / "ipmi.log")
+                readings = ipmi_logs[campaign]
+                if readings:
+                    campaign_meta["_ipmi"] = readings
                 record["_expected_host"] = topology["hostname"]
                 record["_campaign_id"] = campaign.name
                 meta = campaign / "system/build_metadata.json"

@@ -89,7 +89,7 @@ MODEL_SPECS = _model_specs()
 
 
 def load_measurements(path):
-    frame = pd.read_csv(path)
+    frame = pd.read_csv(path, low_memory=False)
     for col in NUMERIC:
         if col in frame:
             frame[col] = pd.to_numeric(frame[col], errors="coerce")

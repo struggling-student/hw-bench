@@ -157,3 +157,62 @@ def test_the_new_energy_claims_hold(evidence):
     found = {c.id: c for c in claims.uncore_coupling(flat, cache) + claims.energy_flat_vs_cache(both, theory)}
     assert set(found) == {"idle_socket_uncore_coupling", "energy_flat_vs_cache"}
     assert all(c.holds for c in found.values())
+
+
+def test_idle_floor_of_both_nodes_and_the_bmc_rails(evidence):
+    flat, cache, _ = evidence
+    floor = report.idle_floor(pd.concat([flat, cache], ignore_index=True))
+    assert set(floor.index) == {"flat", "cache"} and (floor.n_samples >= 5).all()
+    # Both nodes rest in the same state: uncores at 0.8 GHz, within 3% of each other, turbostat = perf to 0.1%.
+    assert (floor.uncore_ghz_s0 < 0.85).all() and abs(floor.node_w.max() / floor.node_w.min() - 1) < 0.03
+    assert ((floor.ts_over_perf - 1).abs() < 0.001).all() and (floor.wall_w > floor.node_w).all()
+    loads = report.idle_load_table(pd.concat([flat, cache], ignore_index=True))
+    assert loads.bmc_cpu_over_rapl.sub(1).abs().max() < 0.02 and loads.bmc_mem_over_rapl.sub(1).abs().max() < 0.02
+    # RAPL "ram" is the DDR DIMMs: an HBM read leaves it at the floor, a DDR read does not.
+    assert loads[loads.notes.str.endswith("hbm")].ram_over_idle_w.abs().max() < 2
+    assert loads[loads.notes.str.endswith(("ddr", "96g"))].ram_over_idle_w.min() > 20
+
+
+def test_dynamic_energy_is_the_total_minus_the_floor(evidence):
+    flat, _, _ = evidence
+    floor = report.idle_floor(flat).iloc[0]
+    pt = report.power_table(flat)
+    row = pt[(pt.memory_target == "hbm") & (pt.kernel == "read") & (pt.threads == 56)].iloc[0]
+    assert row.pj_per_byte_dyn == pytest.approx(row.pj_per_byte * (row.pkg_w + row.ram_w - floor.socket_w) / (row.pkg_w + row.ram_w), rel=0.03)
+    assert row.pj_per_byte_node_dyn < row.pj_per_byte_node
+
+
+def test_two_sockets_at_once_scale_and_cost_less_than_twice_the_power(evidence):
+    flat, cache, theory = evidence
+    for frame, mode in ((flat, "flat"), (cache, "cache")):
+        t = report.dual_energy(frame, theory)
+        assert len(t) == 7 and set(t.memory_mode) == {mode}
+        assert t.scaling.between(0.93, 1.07).all() and t.node_power_ratio.between(1.1, 1.5).all()
+        assert (t.per_watt_gain_node > 1.3).all()
+        decode = t[t.kind == "decode GEMM"]
+        # With both sockets working the node's energy per token is the computing-socket figure of one.
+        assert ((decode.j_per_token_node_dual / decode.j_per_token_socket_single) - 1).abs().max() < 0.07
+
+
+def test_cache_counters_follow_the_probe_identities(evidence):
+    _, cache, _ = evidence
+    cc = report.cache_capacity_table(cache)
+    assert cc.campaign.str.contains("ucapacity-20261031").all() and cc.hit_rate.notna().all()
+    # Hit rate falls with the working set and is the same for every kernel; the served bytes are the cores' own DRAM lines.
+    for _, part in cc.groupby("kernel"):
+        assert part.sort_values("working_set_gib").hit_rate.is_monotonic_decreasing
+    spread = cc.pivot(index="working_set_gib", columns="kernel", values="hit_rate")
+    assert (spread.max(axis=1) - spread.min(axis=1)).max() < 0.02
+    assert abs(cc.served_over_counted.median() - 1) < 0.02 and cc.served_over_modeled.between(0.98, 1.02).all()
+    gt = report.cache_gemm_table(cache)
+    assert (gt.groupby("pool_gib").hit_rate.median() < [0.9, 0.35]).all()
+
+
+def test_the_cache_tag_session_is_validation_only(evidence):
+    probe = report.load_session_probe(ROOT)
+    assert probe.uncore_event_set.eq("cache").any()
+    flat, cache, _ = evidence
+    # No rate, latency or power figure comes from a launch that ran the tag-event session.
+    assert not cache.uncore_event_set.eq("cache").any() and not flat.uncore_event_set.eq("cache").any()
+    found = {c.id: c for c in claims.cache_session_claims(probe, cache)}
+    assert set(found) == {"cache_tag_session_cost", "cache_hit_rate_from_cas"} and all(c.holds for c in found.values())

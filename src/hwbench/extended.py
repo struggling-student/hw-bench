@@ -72,6 +72,28 @@ def uncore_ids(policy: dict) -> dict[str, list[str]]:
     return {mode: list(ids) for mode, ids in policy.get("uncore_campaigns", {}).items()}
 
 
+def session_probe_ids(policy: dict) -> dict[str, list[str]]:
+    """Cache-node launches that compare the counter sessions (2026-10-31), kept out of every rate and power figure.
+
+    The perf session with the memory-side cache's tag events reads 96 more uncore counters per socket
+    by interrupting core 0: a one-core chase reads 415 ns instead of 160-172, Cache-mode Triad runs at
+    half rate, and the node never reaches its idle state.  Launches that ran it, and the controls that
+    isolate it (turbostat only, the BMC logger only, the base event set), are listed here: they validate
+    the hit rate derived from the base counters against the tags (claim ``cache_hit_rate_from_cas``) and
+    document the effect (claim ``cache_tag_session_cost``).
+    """
+
+    return {mode: list(ids) for mode, ids in policy.get("session_probe_campaigns", {}).items()}
+
+
+def select_session_probe(df: pd.DataFrame, policy: dict) -> pd.DataFrame:
+    """Steady, accepted rows of the tag-probe launches."""
+
+    ids = {c for campaigns in session_probe_ids(policy).values() for c in campaigns}
+    selected = df[df.phase.eq("steady") & df.campaign_id.isin(ids)]
+    return selected[selected.accepted].copy()
+
+
 def select_uncore(df: pd.DataFrame, policy: dict, include_rejected: bool = False) -> pd.DataFrame:
     """Steady, accepted rows of the uncore campaigns."""
 

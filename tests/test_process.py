@@ -278,3 +278,11 @@ def test_aggregate_without_a_session_carries_no_power_and_two_sessions_average()
     for row, watts in zip(rows, (400.0, 420.0)):
         row.update(pkg_power_w=watts, power_source="perf")
     assert _aggregate_dual(rows)[0]["pkg_power_w"] == 410.0
+
+
+def test_dual_aggregate_turbostat_columns_follow_the_same_sum_as_perf():
+    rows = _dual_rows()
+    rows[0].update(ts_pkg_power_w=300.0, ts_pkg_power_w_s0=300.0, ts_pkg_power_w_s1=280.0, ts_ram_power_w=20.0, ts_ram_power_w_s0=20.0,
+                   ts_ram_power_w_s1=19.0, ts_uncore_ghz_s0=2.0, ts_uncore_ghz_s1=1.6, ts_uncore_ghz=2.0)
+    aggregate = _aggregate_dual(rows)[0]
+    assert aggregate["ts_pkg_power_w"] == 580.0 and aggregate["ts_ram_power_w"] == 39.0 and aggregate["ts_uncore_ghz"] == 1.8
