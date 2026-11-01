@@ -198,3 +198,108 @@ three repeats (`report.data_pattern_counters`, notebook 06):
   nothing (0.1%).
 * For the thesis: the read ceiling of 527–543 GB/s is the random-data value under the package power
   limit. Constants would reach about 575–590 GB/s on this node, as McCalpin's figure does.
+
+## E7 — how high can one socket go? (2026-11-01)
+
+Campaign `flat-streamgap_e7-20261101T100644Z`, script `scripts/streamgap_e7.sh`, kernel `stream_gap --kernel mix`.
+Flat node, outside Slurm, 56 threads on cores 0–55, memory on HBM node 2 and DDR node 0, 357.9M elements per
+array (the 8 GiB Triad of the thesis), constants unless stated, 300 (HBM) and 150 (DDR) iterations per launch,
+three launches of every configuration in rotated order. Reference: the 4-line non-temporal Triad of E4.
+All 80 kernel variants were checked on a small array first and all outputs element by element; no failures.
+Tables: `python3 scripts/streamgap_summary.py data/raw/streamgap/flat-streamgap_e7-20261101T100644Z`.
+Medians over iterations are the sustained rate; "best" is STREAM's convention (best iteration).
+
+**Result: no kernel change moves either tier by more than the noise.** The limit is the memory path, not the loop.
+
+| One-factor change from the reference (HBM, median of iterations) | GB/s | vs reference |
+| --- | ---: | ---: |
+| reference (Triad, 4 lines, non-temporal, 56 cores) | 639.5 | — |
+| 8 lines per iteration | 642.6 | +0.5% |
+| 1 / 2 / 16 lines per iteration | 629.9 / 626.5 / 633.1 | −1.5 / −2.0 / −1.0% |
+| array stagger of 1–1031 lines (6 values) | 642–649 | +0.4 to +1.5% |
+| ymm instead of zmm (4 / 8 lines) | 623.9 / 622.4 | −2.4 / −2.7% |
+| ordinary instead of non-temporal stores | 623.8 | −2.5% |
+| 52 cores (close / spread) | 638.6 / 642.4 | −0.1 / +0.5% |
+| 48 / 42 / 36 / 28 cores (close) | 608.6 / 592.4 / 521.0 / 444.5 | −4.8 / −7.4 / −18.5 / −30.5% |
+| thesis data / random data | 567.6 / 576.7 | −11.3 / −9.8% |
+
+* **Read:write mix.** With the same per-array size, 1 read stream per write (Copy) sustains 654.6 GB/s,
+  2 (Triad) 640–650, 3 reads 629.5 and 4 reads 597.8; read-only streams, E6, 527–587. More writes
+  per read gives a higher total, so the HBM limit is not a pure read limit; a write-only stream was not run.
+* **Cores.** From 52 cores up the rate is flat; below that it falls in proportion. Fewer cores do not buy
+  a faster uncore clock back: the rate is limited by the concurrency the cores supply, and the uncore
+  clock was not read in this campaign. 56 cores is the right count for both tiers on HBM.
+* **Data** is the one lever that matters (−10 to −11%), and it is the power-limited uncore clock of E6.
+  A constant-data figure is a best case; model weights behave like the thesis or random data.
+* **Best-of convention.** The best iteration of the same launches is 724–788 GB/s (best Triad 759 with
+  a 67-line stagger; Copy 789). The vendored `stream.c` (GCC) gives 670–678 on this node in the same campaign,
+  so best-of figures of the new kernel are 7–13% above the unmodified STREAM, while its sustained median
+  (640–650) is 5–6% below STREAM's best-of.
+* **Run-to-run level.** The reference median here is 640 GB/s against 673 in E4 (same kernel, constants):
+  5% between days on the same node, which is the size of every difference above except cores < 52,
+  data, and read-heavy mixes.
+
+DDR (socket 0, 8 GiB per array):
+
+| | GB/s | vs reference |
+| --- | ---: | ---: |
+| reference | 234.1 | — |
+| 28 / 36 / 42 cores | 237.3 / 236.0 / 235.2 | +1.4 / +0.8 / +0.5% |
+| every unroll, stagger, width, store, data pattern | 231.9–233.6 | −0.0 to −0.9% |
+| Copy (1 read per write) / 3 reads / 4 reads | 228.0 / 234.9 / 233.9 | −2.6 / +0.4 / −0.1% |
+| vendored `stream.c`, best Triad | 237.7–238.2 | |
+
+DDR Triad stops at about 237 GB/s from 28 cores on, which is 77% of the 307.2 GB/s computed peak, and the
+vendored STREAM gets the same number. The read-only kernel reaches 261 GB/s (85%). A 2:1 read:write mix
+costs about 10% on DDR from bus turnaround; nothing in the kernel changes it. DDR is at its practical
+ceiling.
+
+What E7 does not say: why the HBM sustained rate stays at 640–655 GB/s and whether any software setting
+can lift it (the uncore clock and power were not recorded here; E6 says the 350 W package limit sets the
+uncore clock, which sets HBM bandwidth). The "up to 1 TB/s" vendor figure has not been approached by
+any kernel here or in the published STREAM scaling curve (700 GB/s with streaming stores).
+
+## E7c — the uncore clock and power behind the E7 plateau (2026-11-01)
+
+Campaign `flat-streamgap_e7c-20261101T103151Z`, script `scripts/streamgap_e7c.sh`, table with
+`python3 scripts/streamgap_e7c_summary.py data/raw/streamgap/flat-streamgap_e7c-20261101T103151Z`. The main E7
+configurations again (3 launches each, rotated), with the system-wide `sudo perf stat` session of E6 beside every
+launch; medians over the kernel phase (`uncore.kernel_phase(..., write_cap=None)`, which keeps kernels that write).
+"ctrl" is the HBM or DDR controllers' read plus write on socket 0. Outputs verified element by element.
+
+| HBM, socket 0 | kernel GB/s | ctrl GB/s (read / write) | package W | uncore GHz | clipped | ctrl GB/s per uncore GHz |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Copy (1 read per write) | 657 | 640 (314 / 326) | 351 | 1.74 | 100% | 368 |
+| Triad with 4 reads per write | 602 | 590 (472 / 118) | 353 | 1.65 | 100% | 357 |
+| Triad, constants (56 cores) | 641 | 621 (412 / 209) | 352 | 1.68 | 100% | 370 |
+| Triad, 52 / 48 / 42 cores | 638 / 618 / 597 | 616 / 595 / 549 | 351–352 | 1.76 / 1.83 / 1.91 | 100% | 349 / 326 / 288 |
+| Triad, 36 / 28 cores | 525 / 452 | 503 / 440 | 350–351 | 2.02 / 2.17 | 100% | 249 / 203 |
+| Triad, thesis data | 576 | 568 (376 / 191) | 352 | 1.53 | 100% | 371 |
+| Triad, ymm / ordinary stores | 635 / 637 | 623 / 590 | 351–352 | 1.68 / 1.65 | 100% | 372 / 358 |
+| Read-only, constants | 580 | 576 | 351 | 1.64 | 100% | 352 |
+
+* **The package is at its 350 W limit in every HBM launch** (the PCU clips for power in 100% of cycles). No kernel
+  variant frees power: ymm vectors, ordinary stores and a different mix leave package power at 350–353 W and the
+  uncore clock at 1.65–1.74 GHz.
+* **At 52 cores and more, HBM bandwidth is proportional to the uncore clock**: 350–372 GB/s of controller traffic per
+  GHz for every mix, vector width, store type and data pattern. The data effect of E5/E6 is therefore the same
+  mechanism in Triad: the thesis data cost 0.15 GHz of uncore clock (1.53 against 1.68 GHz) and 9% of controller
+  traffic, which is the 9% by the proportion.
+* **Fewer cores raise the uncore clock** (2.17 GHz at 28 cores, 2.02 at 36) as expected from the power budget, but the
+  rate still falls: below about 50 cores the cores cannot keep enough lines in flight (203–249 GB/s per GHz), so the
+  limit changes from the uncore clock to the cores' concurrency. 52–56 cores sit at the crossing of the two, which is why
+  no core count beat 56 in E7.
+* **Extrapolation, not measured**: at 370 GB/s per GHz the uncore's 2.5 GHz maximum would give about 925 GB/s, near
+  the vendor 1 TB/s. That needs the clock without the power limit, which no user setting here reaches.
+  The rate would also have to stay clock-proportional above 1.8 GHz with all cores, which the 48–52-core points
+  (326–349 per GHz) suggest it does not do fully.
+* **DDR** is at the same 350 W package limit (clipped in 17–100% of cycles, depending on the launch) but is DIMM-limited: 28 cores give the
+  same 233 GB/s of controller traffic as 56 cores at an uncore clock of 2.45 GHz against 2.13, and with 17% clipping against
+  100%. The DRAM draws 72–73 W at 230 GB/s; Copy moves the same total (229) with half of it as writes.
+* **Counter against kernel**: the controllers' total is 2–4% below the kernel's counted bytes for Triad and Copy
+  (621 against 641 GB/s), against 1% in E6 for the read kernel; the cause (the phase edges, the 100 ms intervals or
+  writes absorbed in the memory) was not separated, and it does not change a ratio between configurations.
+
+Conclusion for the thesis: on this node the sustained HBM Triad is bound by the package power limit through the uncore
+clock, about 640 GB/s with constants and about 570 GB/s with weight-like data, and DDR Triad is bound by the DIMMs at
+233–238 GB/s. Neither is a kernel limit.
