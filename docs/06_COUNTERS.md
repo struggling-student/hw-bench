@@ -128,23 +128,48 @@ sudo -n turbostat --quiet -c 0,56 --interval 0.1 --num_iterations 50 \
   `unc_m_tagchk.*`; encodings in `perf list --details` on the nodes) takes over, after the
   identification probe staged for hbm13 (`data/probes/uncore-cache-20261020/README.md`).
 
-**Still unavailable.** The HBM-cache (M2M near-memory tag) hit rate (review item U3) and the
-controller traffic in Cache mode: both need perf on the Cache node. The administrators have said
-that perf is available there now; this is **not verified**, because hbm13 can only be reached
-through Slurm (its host key is not in `known_hosts`). The identification probe
-(`data/probes/uncore-cache-20261020/probe.sh`) is the first thing to run, and it checks the
-package and the sudoers rule before it counts anything.
+## perf on the Cache node (verified 2026-10-31)
+
+`perf-5.14.0-427.13.1.el9_4` is installed on `cresco8-hbm13` (the package of the Flat node), with the
+same sudoers rule; the probe job of 2026-10-31 (`data/probes/uncore-cache-20261031/`, run through Slurm
+with `scripts/submit_cache_probe.sh`) ran all ten of its `sudo -n perf stat` sessions. What it found,
+and what follows from it:
+
+* **The memory-side cache is counted at the HBM channel controllers, not the M2M agents.** The M2M tag
+  events (`unc_m2m_tag_hit.*`, `unc_m2m_tag_miss`) and `unc_m_tagchk.*` on `uncore_imc` read zero on every
+  instance; `uncore_type_14` event 0xd3 (umask 1, 2, 4: hit, clean miss, dirty miss) counts lookups on all 32
+  controllers per socket. `unc_m2m_imc_reads.all` counts only on `uncore_m2m_0..3` (the DDR side) and equals the
+  DDR CAS reads.
+* **The base counters already give everything.** Every lookup reads one 64-byte line (data and tag) from HBM,
+  so the cache's *served bytes* are the HBM read CAS bytes (lookups × 64 B = CAS × 32 B to 0.02%), every miss
+  is one DDR read, so the *far traffic* is the DDR read bytes, and the *hit rate* is one minus their ratio. A
+  dirty miss is also one DDR write (the victim read at the lookup). `process.py` fills `served_bytes`,
+  `nm_hit_bytes`, `far_bytes`, `nm_hit_rate` and `nm_fill_bytes` from them for Cache-mode records
+  (`uncore.sample_fields(..., cache_mode=True)`).
+* **The tag-event session is not used for measurements.** Reading its 96 extra counters per socket takes core 0
+  (where perf's counter reads run) from the benchmark: a one-core chase of 1 GiB reads 415 ns instead of 160–172,
+  Cache-mode Triad at 8 GiB 236 against 492 GB/s, a barrier-synchronised kernel waits for its slowest thread, the
+  barrier-free read kernel loses 1%, and the node never reaches its resting state (1.4 GHz uncore, 361 W instead
+  of 0.8 GHz, 316 W). The base event set, the BMC logger and turbostat alone are clean (factorial in
+  `session_probe_campaigns`, claim `cache_tag_session_cost`). The tag-event launches validate the hit rate derived
+  from the base counters to 0.6 points in the median (claim `cache_hit_rate_from_cas`) and are kept for that
+  and as the record of the effect; **production Cache runs use `HW_BENCH_CACHE_UNCORE=base`**. The event set
+  named `cache` (`uncore.EVENT_SETS["cache"]`) is the base set plus the three tag events, for validation only.
+* **Submitting.** `submit_cresco8.sh` forwards `HW_BENCH_CACHE_UNCORE` and `HW_BENCH_IPMI` to the Slurm job and to the
+  Flat tmux run (they were silently dropped before: `--export=ALL` exports the remote login shell, not the
+  submitting one). Pin a Cache node with `HW_BENCH_CACHE_NODE`: hbm01 has no sudoers rule and a job that lands there
+  stops at the first `sudo`.
 
 ## Energy scopes
 
 Every energy figure of the notebooks says which of these it is. All include the idle floor
-(nothing is subtracted, because no idle record has been measured yet).
+unless they are the `_dyn` columns, which subtract the floor measured by `uidle` (below).
 
 | Scope | Power | Bytes or work | Columns |
 | --- | --- | --- | --- |
 | **Computing socket** | package plus DRAM RAPL power of the socket that runs the benchmark | bytes the memory controllers of its memory socket moved (`ctrl_bytes_memory_socket`; Cache: the measured bytes) or the operations | `pj_per_byte`, `pj_per_op`, `j_per_op`, `j_per_token` |
 | **Node (RAPL)** | package plus DRAM RAPL power of both sockets (`node_power_w`) | every controller's bytes (all traffic the sample caused) or the operations | `pj_per_byte_node`, `pj_per_op_node`, `j_per_op_node`, `j_per_token_node` |
-| Node (wall) | BMC "Sys Power" (`ipmitool sensor`) | as above | **not measured yet** |
+| Node (wall) | BMC "Sys Power" (`ipmitool sensor`, whole watts, every few seconds) | as above | `ipmi_*`; `j_per_token_wall_*` of `dual_energy` |
 
 Before 2026-10-31 the pJ/op of the compute peaks counted the package only, the GEMM J/op and the
 pJ/B counted package plus DRAM, and the Flat pJ/B divided one socket's power by both sockets'
@@ -162,12 +187,29 @@ section 11). The old `other_pkg_w` label "idle reference" was therefore wrong; t
 other socket's power in the same window. The floor is the lowest state observed, not a measured
 idle.
 
-**ipmitool.** `sudo -n ipmitool sensor` works on both nodes and reports Sys, CPU and Mem power in
-whole watts; one full listing takes about 6 s and the sudoers rule allows only the full listing, so
-it cannot be sampled per record. It is not used by the pipeline yet; the planned use is a
-campaign-level background log joined to records of at least 12 s, for the wall scope and for
-checking that RAPL "ram" covers only the DDR DIMMs (docs/MEASUREMENT_GAPS_PLAN_2026-10-31.md,
-B0 and B2).
+**ipmitool (wall scope, since 2026-10-31).** `sudo -n ipmitool sensor` works on both nodes and reports Sys, CPU and
+Mem power in whole watts; one full listing takes about 6 s (25–30 s with both sockets loaded) and the sudoers rule
+allows only the full listing, so it is a campaign-level background log, not a per-record counter: with
+`HW_BENCH_IPMI=1`, `scripts/run_all.sh` runs `python3 -m hwbench.ipmi log` beside the campaign (`ipmi.log.gz`, one
+JSON line per listing with its CLOCK_REALTIME span), and `process.py` joins it on the wall clock of each record
+(`realtime_offset_ns`). A sample takes the listings that lie entirely inside it (`ipmi_sys_power_w`,
+`ipmi_cpu_power_w`, `ipmi_mem_power_w`, `ipmi_readings`; two listings, so windows of about 12 s and more);
+`ipmi_record_*` are the same means over a record's whole span, one listing enough, for the 10 s windows of
+`udual`. The logger is harmless to the benchmarks (Triad 489 against 492 GB/s, chase 167 against 156–158 ns).
+`uidle` measured what the rails are: the BMC's CPU power equals RAPL package power of both sockets
+(1.000–1.008×), its Mem power equals RAPL DRAM (1.001–1.004×), a 14-core HBM read raises RAPL DRAM by 0.4 W and a DDR
+read by 28–45 W: RAPL "ram" is the DDR DIMMs only (claim `rapl_dram_is_ddr`). The wall figure is about 85 W above RAPL at rest.
+
+## The node at rest (since 2026-10-31)
+
+Part `uidle` (both nodes): one record of five 60 s windows with the counters enabled and nothing running (`hardware --kind
+idle`). Both nodes rest in the same state: Flat 310 W of RAPL power (socket 0 136 + 21 W, socket 1 134 + 19 W,
+uncores at 0.8 GHz, 0.6 GB/s of background traffic, 400 W at the wall) and Cache 315 W (400 W; the 3-record design of
+the first launch gave 312 and 315 W), turbostat and perf
+agreeing to 0.01%. `report.idle_floor` is that floor; every energy table also gives the energy *dynamic*
+(`_dyn` columns: the computing socket's floor, or the node's, subtracted from the power). The floor is the same
+state the loaded runs started from, so the dynamic node energy contains what the idle socket draws above its own floor
+(claim `idle_socket_uncore_coupling`).
 
 ## In the analysis
 

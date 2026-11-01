@@ -1,9 +1,9 @@
 # Status of the analysis
 
 The single place that says what is finished, what is running and what is left. Last updated
-**2026-10-31**, after Phase A (analysis only) of the [measurement-gaps plan](MEASUREMENT_GAPS_PLAN_2026-10-31.md)
-on top of the counted re-runs of 2026-10-20 (measured-intensity roofline) and the Cache-mode
-campaigns with turbostat (hbm13).
+**2026-10-31**, after Phases A and B of the [measurement-gaps plan](MEASUREMENT_GAPS_PLAN_2026-10-31.md): the
+analysis-only Phase A and the cluster runs of Phase B (Cache probe, idle baseline, Cache counted re-runs,
+two-socket energy), on top of the counted re-runs of 2026-10-20 (measured-intensity roofline).
 Item IDs (C1–C10, M1–M3, R1–R3, U1–U4) refer to the [2026-10-16 review](archive/REVIEW_2026-10-16.md); the
 history of the first review is in [archive/STATUS_2026-10-12.md](archive/STATUS_2026-10-12.md) (historical, not
 maintained). The process documents are in [archive/](archive/).
@@ -16,7 +16,7 @@ maintained). The process documents are in [archive/](archive/).
 | Running | Nothing. |
 | Counted re-runs (2026-10-20) | Flat (hbm14, perf): `flat-ugemmconv-20261020T201733Z` (78 records), `flat-uatlas-20261020T204045Z` (64), `flat-usweep-20261020T210357Z` (30). Cache (hbm13, turbostat; traffic from the cores' DRAM lines): `cache-ustreams-20261020T201649Z` + its resume `cache-ustreams-20261020T202516Z`, `cache-ucapacity-20261020T201654Z`, `cache-ugemmconv-20261020T201700Z`, `cache-uatlas-20261020T201706Z`, `cache-usweep-20261020T201711Z`. turbostat against perf: `flat-usmoke-20261020T201307Z`. All in `uncore_campaigns`. |
 | Last campaigns | Privileged uncore counters on the Flat node: `flat-ustreams-20261019T205225Z` (U1, 36 records), `flat-uremote-20261019T205814Z` (U2, 14), `flat-ugemm-20261019T210858Z` (U4, 16), `flat-uloaded-20261019T211812Z` (R3 with counters, 22) and `flat-streamgap_e6-20261019T212743Z` (data pattern, 24 launches); all valid, in notebook 06 (`uncore_campaigns`, `data_pattern_campaign` in `configs/analysis.json`). The proof run `flat-usmoke-20261019T204741Z` is not in the analysis. |
-| Measurement-gaps plan | **Phase A done** (analysis only, no cluster time): per-socket power, clock and controller-byte columns (A1), the idle socket's uncore coupling (A2), one energy definition at two RAPL scopes (A3), the serving socket of remote HBM (A4), Flat against Cache energy (A5), correctness fixes (A6), documentation (A7). **Phase B** (probe on hbm13, idle baseline, Cache counted re-runs, two-socket energy) is not started; each submission needs your go-ahead. |
+| Measurement-gaps plan | **Phases A and B done** except the optional B5 (not run). A: per-socket columns, the idle socket's uncore coupling, one energy definition at two RAPL scopes, the serving socket of remote HBM, Flat against Cache energy, correctness fixes. B: **B0** code (ipmitool logger and join, `idle` kind, parts `uidle` and `udual`, export forwarding, probe launcher); **B1** perf on hbm13 verified and the memory-side cache counted (`data/probes/uncore-cache-20261031/`); **B2** the static floor on both nodes; **B3** the Cache counted re-runs (`ucapacity`, `ugemm`, `ucachelat`, `ucacherep` ×3, and `uatlas`, triggered by served bytes differing from the cores' counts for prefill GEMMs); **B4** two sockets at once on both nodes. Findings in the table below. |
 | Tests | All pass (`pytest`); all seven notebooks execute. |
 | Open | **perf on the Cache node hbm13 is reported installed by the administrators but not verified** (the node is reachable only through Slurm): the hit rate (U3) and Cache controller traffic wait for the Phase B probe; the decisions that are yours. |
 
@@ -55,7 +55,11 @@ without a decision. The run recipe of every campaign part is in
 | Energy scopes (A3) | **Done** (notebooks 00, 06) | One definition (package plus DRAM, idle floor included) at the computing socket and at the node; pJ/op now includes DRAM (+7–9%), node figures are about 1.5× the computing-socket ones. Claims `energy_per_byte`, `energy_per_op`, `decode_energy`, `cache_resident_power`, `cache_spilled_energy`, `gemm_power_limited` give both. No wall scope and no static floor yet |
 | Remote HBM and the serving socket (A4) | **Done** (notebooks 03, 06) | At 56 threads socket 1 draws about 345 W at its top uncore clock (2.50 GHz) and is not clipped for power (0% of PCU cycles) while socket 0 is clipped in all of them; no causation claimed. Claim `remote_duplicate_reads` |
 | Flat against Cache energy (A5) | **Done** (notebook 06 section 12) | Compute peaks cost the same in both modes (1.007–1.025×); a decode token costs 18.2 J on Flat HBM, 1.21× that on resident Cache, 1.61× on Flat DDR, 2.97× spilled (computing socket); prefill is within 15% across all four. Cache bytes are still `pmu_ocr`. Claim `energy_flat_vs_cache`, figure `energy_roofline` |
-| Cache hit rate (U3) | **Blocked on the Phase B probe** | perf on hbm13 is unverified; the identification probe is staged (`data/probes/uncore-cache-20261020/`) |
+| Cache hit rate and traffic in Cache mode (U3) | **Done** (notebook 06 sections 10, 14) | The hit rate falls 92% (8 GiB) → 45% (64 GiB, the capacity) → 12% (128 GiB), the same for read, Triad and non-temporal Triad, and follows the DDR fills; the rate follows the hit rate; DRAM power follows DDR traffic (0.22 W per GB/s). The base counters give served bytes (HBM read CAS), far traffic (DDR read CAS) and the hit rate; served bytes equal the cores' own DRAM line counts to 1% for streams (claims `cache_hit_rate_curve`, `cache_dram_power_onset`). Four launches within two hours agree to 2 hit-rate points; the launch of 2026-10-20 ran 3.5× faster at 56 GiB, which on the counted relation is a hit rate near 89% (inferred): the between-campaign spread is a page-placement difference (`cache_launch_spread`) |
+| Spilled GEMM and far latency in Cache mode (C3, R2/C7) | **Done** | At 96 GiB the decode GEMM and the streams hit the same 25%; the kernels differ in the DDR fill rate they reach (read 73, BF16 GEMM 99, INT8 113, Triad 130 GB/s), which orders their rates (`cache_spilled_gemm_counted`) |
+| Static floor and wall power (B2) | **Done** | Both nodes rest at 310–315 W of RAPL power (about 400 W at the wall, uncores 0.8 GHz); BMC CPU power = RAPL package (1.000–1.008×), BMC memory power = RAPL DRAM (1.001–1.004×); RAPL "ram" is the DDR DIMMs only. Energy tables carry `_dyn` columns (claims `idle_floor`, `rapl_dram_is_ddr`) |
+| Two sockets at once (B4) | **Done** | Scaling 0.983–1.033 (Flat), 0.950–1.053 (Cache, spilled pools noisy); node RAPL power 1.20–1.37× one socket for 2× the throughput, so 1.4–1.7× the throughput per node watt; a decode token costs 18.5 J on Flat HBM at the node with both sockets working, equal to the computing-socket figure of one (claim `dual_energy`) |
+| Cost of counting the memory-side cache | **Found and avoided** | The perf session with the cache's tag events slows core 0: a chase reads 415 ns instead of 160, Cache-mode Triad runs at half rate, the node never rests (361 W). The base counters give the same quantities; every figure uses them (claim `cache_tag_session_cost`) |
 
 ## Items of the 2026-10-16 review
 
@@ -87,23 +91,21 @@ without a decision. The run recipe of every campaign part is in
 
 ## What is left
 
-**Phase B of the [measurement-gaps plan](MEASUREMENT_GAPS_PLAN_2026-10-31.md)** (about 2.5 h of node
-time, 4–5 submissions, each on your go-ahead): B0 code (forward `HW_BENCH_CACHE_UNCORE` through
-`submit_cresco8.sh`, the `idle` kind, an ipmitool logger, `uidle` and `udual` parts), B1 the Cache probe,
-B2 the idle baseline, B3 the Cache counted re-runs, B4 two-socket energy. Phase A's A6 fix to the
-two-process aggregates (`process._merge_counters`) is already in, which B4 requires.
+Nothing blocked. **Not run**: the optional B5 of the measurement-gaps plan (the remote-HBM issuing agent with CHA
+opcode events, which would close the last "not inferred" item of U2; dynamic memory energy at fixed cores, only if the
+floor-subtracted pJ/B proves ambiguous, which it does not). **Open, not blocked**: the Cache points of the parts that
+were not re-run with the Cache counters (`ustreams`, `ugemmconv`, `usweep`) still place their intensity with the cores'
+DRAM lines, which agree with the cache's served bytes to 1% for streams and decode-sized GEMMs but not for prefill
+batches; `ugemmconv` (47 records, about 25 min of hbm13) would put them on served bytes; and real model weights for
+the data-pattern effect.
 
-**Blocked on perf on hbm13** (`perf-5.14.0-427.13.1.el9_4`, the package of the Flat node; reported
-installed, unverified): U3, the Cache-mode hit rate (M2M near-memory tag events) and Cache controller
-traffic. Then: run `data/probes/uncore-cache-20261020/probe.sh` under `srun -w cresco8-hbm13`, add
-the confirmed tag events as `EVENT_SETS["cache"]` with served/far/hit-rate fields in
-`hwbench.uncore`, and submit the Cache parts with `HW_BENCH_CACHE_UNCORE=cache`
-(`ucapacity`, `ucachelat`, `ucacherep` ×3, `ugemm`, `uremote`, `uloaded`); the measured-axis code
-already prefers served bytes over the cores' line counts. Also open, not blocked: which agent issues the duplicated
-remote-HBM reads (CHA opcode events were not in the session), and real model weights for the
-data-pattern effect.
+**Decisions that are yours**: the cluster directories of failed or superseded runs (below); removing the
+staged source copies; whether to carry the data pattern into the thesis text where the HBM read ceiling is quoted
+(random data 527 GB/s, constants 576, now explained by the power limit, [STREAMGAP.md](STREAMGAP.md) E6).
 
-**Decisions that are yours**: removing stray cluster
-directories from earlier mistyped submissions; whether to carry the data pattern into the thesis text
-where the HBM read ceiling is quoted (random data 527 GB/s, constants 576, now explained by the power
-limit, [STREAMGAP.md](STREAMGAP.md) E6).
+Stray cluster directories left by this phase (all ours, none used): `cache-probe-20261031T180303Z` (landed on hbm01,
+stopped at the first `sudo`), the first attempts of 2026-10-31T18:13–18:15 that died on the full `/lpor1`
+(`cache-uidle-20261031T181345Z` and the `ucapacity`, `ugemm`, `ucachelat`, `ucacherep` directories of that minute),
+and `cache-ucacherep-20261031T181525Z`–`T181546Z`. `/lpor1` (96 GB) was full for a few minutes while staging: the notebooks
+(41 MB each) were being copied with every staged source tree, 2.2 GB in all; they were removed from the staged
+copies and are no longer staged.

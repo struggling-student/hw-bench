@@ -54,6 +54,16 @@ Each invocation stages the source in a unique directory and runs one *part* as i
 | `smoke` | seconds of every kernel; proves build, counters and the INT8 probe, not a result |
 | `memory`, `compute`, `sweep`, `memory-sweep`, `concurrency` | the October-11 thesis parts, kept so those campaigns stay reproducible |
 
+**Privileged-counter parts** (`ustreams`, `uremote`, `ugemm`, `uloaded`, `ucapacity`, `ucachelat`, `ucacherep`, `ugemmconv`, `uatlas`, `usweep`, `uidle`, `udual`, `usmoke`; the list is in `scripts/run_campaign.py`) run the perf and turbostat sessions of `06_COUNTERS.md` beside every record. Settings that matter for them, all forwarded by `submit_cresco8.sh` to the Slurm job and to the Flat tmux run:
+
+| Variable | Use |
+| --- | --- |
+| `HW_BENCH_CACHE_NODE=cresco8-hbm13` | the Cache node with the sudoers rule (hbm01 has none: the job stops at the first `sudo`); reachable only through Slurm |
+| `HW_BENCH_CACHE_UNCORE=base` | the perf event set on the Cache node (empty: turbostat only). Use `base`: the `cache` set, which also counts the tag lookups, slows core 0 and is for validation only |
+| `HW_BENCH_IPMI=1` | the campaign-level BMC logger (`ipmi.log.gz`, wall power) |
+
+`scripts/submit_cache_probe.sh` stages the source and submits `slurm/cache_probe.sbatch` (node check and the event probe of `data/probes/uncore-cache-*/`). Staging excludes the notebooks (41 MB each in every staged copy filled the 96 GB `/lpor1` once). Records need five samples per configuration (`minimum_samples`): a part that measures a quantity once per record, like `uidle`, takes its five windows inside one record.
+
 Cache jobs request one hour by default (`HW_BENCH_TIME`). A job that runs out of time leaves a campaign without `COMPLETED`; submit the remainder with `HW_BENCH_RESUME=<interrupted campaign id>` — the new campaign skips records the old one holds and declares `resumes` in its metadata, and validation accepts the interrupted campaign only on that basis. An existing failed record is never overwritten.
 
 ## Retrieval
