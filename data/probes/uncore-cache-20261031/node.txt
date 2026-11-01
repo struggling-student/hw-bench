@@ -1,0 +1,64 @@
+== host
+cresco8-hbm13.portici.enea.it
+5.14.0-427.13.1.el9_4.x86_64
+Sat Oct 31 06:05:03 PM UTC 2026
+== sudo
+    !visiblepw, always_set_home, match_group_by_gid, always_query_group_plugin, env_reset, env_keep="COLORS DISPLAY HOSTNAME HISTSIZE KDEDIR LS_COLORS", env_keep+="MAIL PS1 PS2 QTDIR USERNAME LANG LC_ADDRESS LC_CTYPE", env_keep+="LC_COLLATE LC_IDENTIFICATION LC_MEASUREMENT LC_MESSAGES", env_keep+="LC_MONETARY LC_NAME LC_NUMERIC LC_PAPER LC_TELEPHONE", env_keep+="LC_TIME LC_ALL LANGUAGE LINGUAS _XKB_CHARSET XAUTHORITY", secure_path=/sbin\:/bin\:/usr/sbin\:/usr/bin
+
+User <user> may run the following commands on cresco8-hbm13:
+    (root) NOPASSWD: /usr/bin/perf stat*, /usr/bin/ipmitool sensor, /usr/bin/turbostat
+== numa
+available: 2 nodes (0-1)
+node 0 cpus: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55
+node 0 size: 515190 MB
+node 0 free: 507107 MB
+node 1 cpus: 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111
+node 1 size: 516076 MB
+node 1 free: 512973 MB
+node distances:
+node   0   1 
+  0:  10  26 
+  1:  26  10 
+== paranoid
+cat: /proc/sys/kernel/perf_event_paranoid: Cannot allocate memory
+== pmus
+power uncore_cha_0 uncore_imc_0 uncore_imc_1 uncore_imc_2 uncore_imc_3 uncore_imc_4 uncore_imc_5 uncore_imc_6 uncore_imc_7 uncore_imc_free_running_0 uncore_imc_free_running_1 uncore_imc_free_running_2 uncore_imc_free_running_3 uncore_m2m_0 uncore_m2m_1 uncore_m2m_2 uncore_m2m_3 uncore_m2m_14 uncore_m2m_15 uncore_m2m_16 uncore_m2m_17 uncore_m3upi_0 uncore_m3upi_1 uncore_m3upi_2 uncore_m3upi_3 uncore_pcu uncore_type_14_0 uncore_type_14_1 uncore_type_14_2 uncore_type_14_3 uncore_type_14_4 uncore_type_14_5 uncore_type_14_6 uncore_type_14_7 uncore_type_14_8 uncore_type_14_9 uncore_type_14_10 uncore_type_14_11 uncore_type_14_12 uncore_type_14_13 uncore_type_14_14 uncore_type_14_15 uncore_type_14_16 uncore_type_14_17 uncore_type_14_18 uncore_type_14_19 uncore_type_14_20 uncore_type_14_21 uncore_type_14_22 uncore_type_14_23 uncore_type_14_24 uncore_type_14_25 uncore_type_14_26 uncore_type_14_27 uncore_type_14_28 uncore_type_14_29 uncore_type_14_30 uncore_type_14_31 uncore_upi_0 uncore_upi_1 uncore_upi_2 uncore_upi_3 
+== rapl
+/sys/class/powercap/intel-rapl:0/constraint_0_name long_term
+/sys/class/powercap/intel-rapl:0/constraint_1_name short_term
+/sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw 350000000
+/sys/class/powercap/intel-rapl:0/constraint_1_power_limit_uw 420000000
+/sys/class/powercap/intel-rapl:0/constraint_0_time_window_us 999424
+/sys/class/powercap/intel-rapl:0/constraint_1_time_window_us 11712
+== uncore freq
+/sys/devices/system/cpu/intel_uncore_frequency/package_00_die_00 min=800000 max=2500000 init_max=2500000
+/sys/devices/system/cpu/intel_uncore_frequency/package_01_die_00 min=800000 max=2500000 init_max=2500000
+== hmat
+/sys/devices/system/node/node0/memory_side_cache/index1 size=68719476736 line=64 indexing=0 write=0
+== turbostat
+Package	Bzy_MHz	PkgWatt	RAMWatt	UncMHz
+-	808	341.81	42.94	1500
+0	800	174.86	21.83	1600
+0	800
+0	800
+0	800
+0	800
+0	800
+== ipmitool
+Host Power               | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na        
+Sys Power                | 400.000    | Watts      | ok    | na        | na        | na        | na        | na        | na        
+CPU Power                | 300.000    | Watts      | ok    | na        | na        | na        | na        | na        | na        
+Mem Power                | 43.000     | Watts      | ok    | na        | na        | na        | na        | na        | na        
+Riser 1 Power            | 15.000     | Watts      | ok    | na        | na        | na        | na        | na        | na        
+Chassis Power            | 2950.000   | Watts      | ok    | na        | na        | na        | na        | na        | na        
+PSU Power                | 165.000    | Watts      | ok    | na        | na        | na        | na        | na        | na        
+CPU 1 Overtemp           | 0x0        | discrete   | 0x0180| na        | na        | na        | na        | na        | na        
+CPU 1 Temp               | 41.000     | degrees C  | ok    | na        | na        | na        | na        | na        | na        
+CPU 2 Overtemp           | 0x0        | discrete   | 0x0180| na        | na        | na        | na        | na        | na        
+CPU 2 Temp               | 39.000     | degrees C  | ok    | na        | na        | na        | na        | na        | na        
+PCIe 1 OverTemp          | 0x0        | discrete   | 0x0180| na        | na        | na        | na        | na        | na        
+== clocks idle 2s (imc dclk, hbm clk)
+S0,1,19347583518,,imc_clk,16133375925,100.00,,
+S0,1,51517013275,,hbm_clk,64475299892,100.00,,
+S1,1,19240904797,,imc_clk,16045963782,100.00,,
+S1,1,51243620242,,hbm_clk,64134839888,100.00,,
