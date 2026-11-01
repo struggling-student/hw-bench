@@ -40,7 +40,7 @@ from typing import Any
 
 PERF = "/usr/bin/perf"
 # Reading the counters takes perf about 1.3 ms per interval, partly on CPU 0 and 56.
-INTERVAL_MS = {"base": 100}
+INTERVAL_MS = {"base": 100, "cache": 100}
 # Intervals closer than this to a sample edge are not attributed to it (anchor error).
 EDGE_MARGIN_NS = 5_000_000
 # Single-instance events whose run time locates the disable on perf's clock.
@@ -68,7 +68,26 @@ BASE_EVENTS: dict[str, str] = {
 # The CHA occupancy method (TOR occupancy / inserts of demand-read misses) was tried on the
 # node and left out: filtered to the chasing core it gives about 31 ns against the 141 ns
 # the chase measures (2026-10-19, docs/06_COUNTERS.md), so it does not measure latency here.
-EVENT_SETS: dict[str, dict[str, str]] = {"base": BASE_EVENTS}
+# Cache mode (hbm13, probe of 2026-10-31, data/probes/uncore-cache-20261031/): the memory-side cache's
+# tag lookups are counted by the HBM channel controllers, not by the M2M agents.  Every M2M tag event
+# (unc_m2m_tag_hit.*, unc_m2m_tag_miss) read zero on all eight instances per socket, and
+# unc_m_tagchk.* on uncore_imc read zero; `uncore_type_14` event 0xd3 counts lookups by outcome on
+# all 32 controllers per socket.  Each lookup reads one 64-byte line (data and tag together) from
+# HBM, so hits + misses x 64 B equals the HBM read CAS x 32 B to 0.02%; a clean miss is one DDR read
+# (fill) and a dirty miss one more DDR write (the victim read at the lookup is written back).
+# The tag events are therefore not needed: the base counters give the same served bytes, far
+# traffic and hit rate (``sample_fields(..., cache_mode=True)``), and they are the production set,
+# because reading the 96 extra tag counters per socket takes core 0 about as long as the benchmark
+# there (probe of 2026-10-31: a one-core chase reads 415 ns with the tag events against 160-172 ns
+# without, Cache-mode Triad at 8 GiB 236 against 514 GB/s, the barrier-free read kernel -4%).
+# The "cache" set is kept to validate the identities above (``session_probe_campaigns``).
+CACHE_EVENTS: dict[str, str] = {
+    "hbm_tag_hit": "uncore_type_14/event=0xd3,umask=0x1,name=hbm_tag_hit/",
+    "hbm_tag_miss_clean": "uncore_type_14/event=0xd3,umask=0x2,name=hbm_tag_miss_clean/",
+    "hbm_tag_miss_dirty": "uncore_type_14/event=0xd3,umask=0x4,name=hbm_tag_miss_dirty/",
+}
+EVENT_SETS: dict[str, dict[str, str]] = {"base": BASE_EVENTS, "cache": {**BASE_EVENTS, **CACHE_EVENTS}}
+LINE_BYTES = 64
 # perf prints the energy events by their own name.
 PRINTED = {"power/energy-pkg/": "energy_pkg_j", "power/energy-ram/": "energy_ram_j"}
 
@@ -312,14 +331,20 @@ def windows(uncore: dict[str, Any] | None, result: dict[str, Any]) -> list[dict[
 
 
 def sample_fields(window: dict[str, Any] | None, elapsed: float | None,
-                  compute_socket: int | None, memory_socket: int | None) -> dict[str, Any]:
+                  compute_socket: int | None, memory_socket: int | None, cache_mode: bool = False) -> dict[str, Any]:
     """Controller bytes, power and clocks of one sample, as measurement columns.
 
     Rates come from the intervals inside the sample (``window['seconds']`` of them); byte
     and energy totals are those rates times the sample's ``elapsed`` time.  Bytes and
     energy are summed over both sockets (all traffic the sample caused, wherever it
     landed); the uncore clock and the PCU limit fractions are those of the socket that
-    computes, or socket 0 when the process spans both.  The ``*_s0`` / ``*_s1`` columns
+    computes, or socket 0 when the process spans both.  In Cache mode (``cache_mode``) the
+    memory-side cache's columns are added from the base counters (``served_bytes`` = HBM read
+    bytes, ``far_bytes`` = DDR read bytes, ``nm_hit_rate`` = 1 - far/served); with the Cache event
+    set (tag-lookup events, a validation set: its reads slow core 0) they come from the tags
+    instead.  The columns are (``CACHE_FIELDS``): ``served_bytes`` (every tag lookup, 64 B,
+    both sockets), ``nm_hit_bytes``, ``nm_hit_rate`` (hits over lookups), ``far_bytes`` (the DDR
+    reads, each one a fill) and ``nm_fill_bytes`` (HBM write bytes).  The ``*_s0`` / ``*_s1`` columns
     give power, clock, PCU limit and controller bytes per socket, so the socket that does
     not compute (its uncore clock follows the busy one) stays visible.
     """
@@ -356,6 +381,28 @@ def sample_fields(window: dict[str, Any] | None, elapsed: float | None,
         value = total(name)
         if value is not None:
             out[name] = value * scale
+    hit, clean, dirty = total("hbm_tag_hit"), total("hbm_tag_miss_clean"), total("hbm_tag_miss_dirty")
+    if cache_mode and None in (hit, clean, dirty) and None not in ddr and None not in hbm:
+        # Base counters only: every lookup reads one 64-byte line from HBM (32 B per CAS, probe of
+        # 2026-10-31), every miss is one DDR read, so the cache's served bytes are the HBM read bytes,
+        # its far traffic the DDR read bytes and its hit rate one minus their ratio.
+        served = hbm[0] * HBM_CAS_BYTES
+        far = ddr[0] * DDR_CAS_BYTES
+        out.update(served_bytes=served * scale, far_bytes=far * scale, nm_hit_bytes=max(served - far, 0.0) * scale,
+                   nm_fill_bytes=hbm[1] * HBM_CAS_BYTES * scale)
+        if served > 0:
+            out["nm_hit_rate"] = 1 - far / served
+    if None not in (hit, clean, dirty):
+        lookups = hit + clean + dirty
+        out["served_bytes"] = lookups * LINE_BYTES * scale
+        out["nm_hit_bytes"] = hit * LINE_BYTES * scale
+        if lookups > 0:
+            out["nm_hit_rate"] = hit / lookups
+        # Far traffic is the DDR reads (every one is a fill); the fills land as HBM writes.
+        if ddr[0] is not None:
+            out["far_bytes"] = ddr[0] * DDR_CAS_BYTES * scale
+        if hbm[1] is not None:
+            out["nm_fill_bytes"] = hbm[1] * HBM_CAS_BYTES * scale
     for sock, c in counts.items():
         suffix = f"_s{sock}"
         if "energy_pkg_j" in c:
@@ -389,6 +436,8 @@ def sample_fields(window: dict[str, Any] | None, elapsed: float | None,
     return out
 
 
+#: Columns of the Cache-mode event set (``EVENT_SETS["cache"]``), empty for the base set.
+CACHE_FIELDS = ["served_bytes", "nm_hit_bytes", "far_bytes", "nm_hit_rate", "nm_fill_bytes"]
 #: Per-socket columns of ``sample_fields`` (socket 0 and 1).
 SOCKET_FIELDS = [
     f"{name}_s{socket}"
