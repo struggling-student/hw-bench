@@ -171,15 +171,21 @@ table(report.ridge_table(ext, thesis, unc), 1)
 say_claims(claims.decode_bound(ext, thesis, theory, unc), ['decode_bound', 'decode_far_below_ridge'])
 """),
     md("""
-**Table 5 — what a decode step streams, in measured bytes.** The 14336×4096 projection at M = 1 against the read ceiling of its tier, both from counted runs. *GB/s* is the measured traffic (*bytes*: `uncore_cas` = every controller channel on Flat, the served bytes of the memory-side cache in Cache mode; `pmu_ocr` = the cores' DRAM line counts, used in Cache mode while its node has no `perf`); *modeled GB/s* is the tensor-size convention beside it. Flat rows use a pool of 16× the on-chip capacity; Cache rows the 16 GiB (resident) and 96 GiB (spilled) pools. *Tokens/s* is the Llama-3.1-8B bound if every weight streamed at this rate (8.03 billion weights, 2 bytes in BF16, 1 in INT8; read-only rows use BF16); it is optimistic for the whole model, since the 4096×4096 projections stream slower. *J/token* is the computing socket's package and DRAM energy per token at that rate (RAPL; turbostat on the Cache node) and *J/token, node* that of both sockets: the other socket draws 130–230 W while this one computes, because its uncore clock follows (notebook 06, section 11). Both include the idle floor.
+**Table 5 — what a decode step streams, in measured bytes.** The 14336×4096 projection at M = 1 against the read ceiling of its tier, both from counted runs. *GB/s* is the measured traffic (*bytes*: `uncore_cas` = every controller channel on Flat, the served bytes of the memory-side cache in Cache mode; `pmu_ocr` = the cores' DRAM line counts, used in Cache mode while its node has no `perf`); *modeled GB/s* is the tensor-size convention beside it. Flat rows use a pool of 16× the on-chip capacity; Cache rows the 16 GiB (resident) and 96 GiB (spilled) pools. *Tokens/s* is the Llama-3.1-8B bound if every weight streamed at this rate (8.03 billion weights, 2 bytes in BF16, 1 in INT8; read-only rows use BF16); it is optimistic for the whole model, since the 4096×4096 projections stream slower. *J/token* is the computing socket's package and DRAM energy per token at that rate (RAPL; turbostat on the Cache node) and *J/token, node* that of both sockets: the other socket draws 130–230 W while this one computes, because its uncore clock follows (notebook 06, section 11). Both include the idle floor; the *dynamic* columns subtract the floor measured at rest (notebook 06, section 13).
 """),
     code("""
 dt = report.decode_table_measured(ext, thesis, theory, unc)
 table(dt.rename(columns={'gbs': 'GB/s', 'modeled_gbs': 'modeled GB/s', 'counted_gbs': 'counted GB/s', 'bytes_source': 'bytes', 'power_w': 'W', 'node_w': 'node W',
                          'read_gbs': 'read ceiling GB/s', 'of_read_ceiling': 'of read ceiling', 'tokens_per_s': 'tokens/s bound', 'j_per_token': 'J/token',
-                         'j_per_token_node': 'J/token, node'}), 2)
+                         'j_per_token_node': 'J/token, node', 'j_per_token_dyn': 'J/token, dynamic', 'j_per_token_node_dyn': 'J/token, node, dynamic'}), 2)
 say_claims(claims.decode_bound(ext, thesis, theory, unc), ['decode_achieved'])
 say_claims(claims.decode_energy(ext, thesis, theory, unc))
+dual_rows = report.dual_energy(unc, theory)
+if len(dual_rows):
+    # The node when both sockets stream (part udual, notebook 03): its energy per token equals the computing-socket figure above.
+    table(dual_rows[dual_rows.kind.eq('decode GEMM')][['memory_mode', 'case', 'tokens_single', 'tokens_dual', 'j_per_token_socket_single', 'j_per_token_node_single', 'j_per_token_node_dual',
+          'j_per_token_wall_dual']].rename(columns={'tokens_single': 'tokens/s, one socket', 'tokens_dual': 'tokens/s, two sockets', 'j_per_token_socket_single': 'J/token, computing socket',
+          'j_per_token_node_single': 'J/token, node, one socket', 'j_per_token_node_dual': 'J/token, node, two sockets', 'j_per_token_wall_dual': 'J/token, wall, two sockets'}), 2)
 """),
     md("""
 ## 5. GEMM efficiency against batch size
@@ -362,6 +368,16 @@ table(cs[['memory_mode', 'quantity', 'working_set_gib', 'campaigns', 'same_node_
 say_claims(claims.xcheck(ext, thesis), ['campaign_spread'])
 """),
     md("""
+**What the Cache spread is.** On 2026-10-31 the Cache capacity points were repeated four times in two hours on hbm13 with the privileged counters on the memory-side cache (parts `ucacherep` ×3 and `ucapacity`, notebook 06 section 10). The hit rate repeats to about 2 points and the rate to a few percent within the day, while the launch of 2026-10-20 ran 3.5× faster at 56 GiB: the between-campaign spread of Cache mode is a hit-rate difference, set by the node's page placement.
+"""),
+    code("""
+ucache1 = report.load_uncore(mode='cache')
+launch = report.cache_launch_spread(ucache1)
+if len(launch):
+    table(launch.pivot_table(index=['kernel', 'gib'], columns='campaign_id', values=['gbs', 'hit_rate']).round(3).reset_index(), 3)
+    say_claims(claims.cache_counters(report.load_uncore(mode='flat'), ucache1, flat_far=report.flat_latency_far(ext)), ['cache_launch_spread'])
+"""),
+    md("""
 **How the total uncertainty of the master Table 1 is built.** *Spread* is half the one-run min–max range relative to the median; *sustained* is the median without the first window; *repeat*, *between* and *cross-run* are the three ranges above (*campaigns* counts those behind *between*); *basis* says which quantity the cross-run term comes from; *total* is the spread plus the largest of the three.
 """),
     code("""
@@ -463,6 +479,16 @@ table(flat_far, 1)
 say_claims(claims.latency(ext, theory, ROOT), ['latency_order', 'cache_latency_far', 'latency_translation'])
 """),
     md("""
+**The miss rate behind the far latency (counted).** The same chase, repeated on 2026-10-31 with the privileged counters on the memory-side cache (part `ucachelat`, notebook 06 section 10): the hit rate of its own lookups falls from 84% at 16 GiB to 11% at 128 GiB, and the latency is a straight line of the miss rate.
+"""),
+    code("""
+ucache = report.load_uncore(mode='cache')
+latc = report.cache_latency_counted(ucache)
+if len(latc):
+    table(latc[['gib', 'latency_ns', 'hit_rate', 'raw_hit_rate', 'served_gbs', 'n_samples']], 3)
+    say_claims(claims.cache_latency_claims(latc, flat_far), None)
+"""),
+    md("""
 **Latency under load.** One core chases a 1 GiB cycle while the other cores of the socket stream the same tier (read-only, 8 GiB), in one synchronized window; the chase alone, in the same launch, is the idle level. This is the load-latency curve of each tier: where the streaming cores approach the bandwidth ceiling, a dependent load waits in the queues.
 """),
     code("""
@@ -537,6 +563,16 @@ table(cap.pivot_table(index='working_set_gib', columns='kernel', values='gbs').r
 """),
     code("""
 say_claims(claims.cache_mode(ext, thesis))
+"""),
+    md("""
+**The hit rate behind the curve (counted).** The decline before the capacity is the hit rate of the memory-side cache, now counted (part `ucapacity` and its repeats, privileged counters on the Cache node, 2026-10-31; the figure and tables are in notebook 06, section 10): it falls from 92% at 8 GiB to 45% at the capacity and 12% at 128 GiB, the same for every kernel, and the rate follows it.
+"""),
+    code("""
+ucache = report.load_uncore(mode='cache')
+ccap = report.cache_capacity_table(ucache)
+if len(ccap):
+    table(ccap.pivot_table(index='working_set_gib', columns='kernel', values=['hit_rate', 'far_gbs']).round(3).reset_index(), 3)
+    say_claims(claims.cache_counters(report.load_uncore(mode='flat'), ucache, flat_far=report.flat_latency_far(ext)), ['cache_hit_rate_curve', 'cache_launch_spread'])
 """),
     md("""
 Cache-mode bandwidth must be quoted with its working-set size. A model whose weights are larger than a few tens of GiB should not expect HBM-class bandwidth in Cache mode.
@@ -646,6 +682,18 @@ table(de.drop(columns=['label', 'metric']))
 say(f"**Result.** Across {len(de)} paired measurements the two-process rate is {de.efficiency.min():.3f}–{de.efficiency.max():.3f}× the sum of isolated sockets "
     f"(median {de.efficiency.median():.3f}); the shared window overlapped by at least {de.overlap_min.min():.1%}.")
 say_claims(claims.sockets(ext, thesis))
+"""),
+    md("""
+**Power and energy of two sockets at once.** Part `udual` (both nodes, 2026-10-31) repeats seven of these pairs in 10 s windows with the privileged counters beside participant 0 (the session counts both sockets), and the same work on socket 0 alone from the same launch: Flat and Cache reads, the decode GEMM (14336×4096, M = 1, BF16 and INT8, converged pools) and the AMX BF16 peak. *Node* is RAPL package plus DRAM of both sockets; *wall* is the BMC's input power over the record (whole watts, one to seven listings). The energy per token assumes both sockets serve independent streams.
+"""),
+    code("""
+unc_flat3, unc_cache3 = report.load_uncore(mode='flat'), report.load_uncore(mode='cache')
+dual = pd.concat([report.dual_energy(f, theory) for f in (unc_flat3, unc_cache3) if len(f)], ignore_index=True)
+table(dual[['memory_mode', 'case', 'unit', 'rate_single', 'rate_dual', 'scaling', 'node_w_single', 'node_w_dual', 'node_power_ratio', 'wall_w_single', 'wall_w_dual',
+            'per_watt_gain_node', 'per_watt_gain_wall']], 3)
+table(dual[dual.kind.eq('decode GEMM')][['memory_mode', 'case', 'tokens_single', 'tokens_dual', 'j_per_token_socket_single', 'j_per_token_node_single', 'j_per_token_node_dual',
+      'j_per_token_wall_single', 'j_per_token_wall_dual', 'j_per_token_node_dyn_single', 'j_per_token_node_dyn_dual']], 2)
+say_claims(claims.dual_energy(unc_flat3, unc_cache3, theory), None)
 """),
     md("""
 ## 3. One process spanning both sockets
@@ -1071,11 +1119,11 @@ say_claims(U1, ['first_window_uncore'])
     md("""
 ## 4. Energy
 
-Energy at the two scopes defined above: per byte the controllers moved for the streams (*pj_per_byte* is the computing socket, *pj_per_byte_node* the node), and per operation for the compute peaks at 56 cores (*pj_per_op*, *pj_per_op_node*; the GEMM figures of the other notebooks use the same package-plus-DRAM definition). Both include the idle floor, and the node figure includes what the other socket draws while the computing one runs (section 11).
+Energy at the two scopes defined above: per byte the controllers moved for the streams (*pj_per_byte* is the computing socket, *pj_per_byte_node* the node), and per operation for the compute peaks at 56 cores (*pj_per_op*, *pj_per_op_node*; the GEMM figures of the other notebooks use the same package-plus-DRAM definition). Both include the idle floor, and the node figure includes what the other socket draws while the computing one runs (section 11). Since the idle baseline (section 13) the floor is measured, and the same energies are given *dynamic* (`_dyn`: the floor of the computing socket, or of the whole node, subtracted from the power).
 """),
     code("""
-table(pt[pt.memory_target.ne('registers')][['memory_target', 'kernel', 'threads', 'gbs', 'pkg_w', 'ram_w', 'node_w', 'pj_per_byte', 'pj_per_byte_node']], 1)
-table(pt[pt.memory_target.eq('registers')][['kernel', 'threads', 'gops', 'core_ghz', 'uncore_ghz', 'pkg_w', 'ram_w', 'other_pkg_w', 'node_w', 'power_limited', 'pj_per_op', 'pj_per_op_node']], 2)
+table(pt[pt.memory_target.ne('registers')][['memory_target', 'kernel', 'threads', 'gbs', 'pkg_w', 'ram_w', 'node_w', 'pj_per_byte', 'pj_per_byte_node', 'pj_per_byte_dyn', 'pj_per_byte_node_dyn']], 1)
+table(pt[pt.memory_target.eq('registers')][['kernel', 'threads', 'gops', 'core_ghz', 'uncore_ghz', 'pkg_w', 'ram_w', 'other_pkg_w', 'node_w', 'power_limited', 'pj_per_op', 'pj_per_op_node', 'pj_per_op_dyn', 'pj_per_op_node_dyn']], 2)
 say_claims(U1, ['energy_per_byte', 'energy_per_op'])
 """),
     md("""
@@ -1144,7 +1192,7 @@ say_claims(claims.turbostat_matches_perf(unc), None)
     md("""
 ## 10. Cache mode: power, clocks and traffic (hbm13)
 
-**Conditions.** Cache mode on `cresco8-hbm13`, socket 0, the streams of section 1 at 1 to 56 cores with the data resident in the HBM cache (8 GiB) and spilled to DDR (96 GiB), and read, Triad and non-temporal Triad at 56 cores from 8 to 128 GiB. Power and clocks come from turbostat; the traffic is the cores' DRAM line counts (`pmu_ocr`) until `perf` is installed on the node, when the memory-side cache's own tag events take over. hbm13 is not the reference Cache node of the other notebooks (hbm01), and Cache-mode rates differ by up to 16% between launches on one node (notebook 01).
+**Conditions.** Cache mode on `cresco8-hbm13`, socket 0, the streams of section 1 at 1 to 56 cores with the data resident in the HBM cache (8 GiB) and spilled to DDR (96 GiB), and read, Triad and non-temporal Triad at 56 cores from 8 to 128 GiB. Power and clocks come from turbostat, and from perf's RAPL and CHA counters where it ran. Since 2026-10-31 perf works on the node (`data/probes/uncore-cache-20261031/`): the capacity curve (part `ucapacity`), the decode GEMM (`ugemm`), the repeats (`ucacherep`), the far-latency chase (`ucachelat`) and the atlas GEMM points (`uatlas`) ran with the **base event set**, from which the memory-side cache's served bytes (the HBM read CAS), far traffic (the DDR read CAS) and hit rate follow; counting the tag lookups themselves with perf perturbs the benchmark (section 14). The streams of section 1 and the GEMM points of the parts that were not re-run (`ustreams`, `ugemmconv`, `usweep`) still count their traffic with the cores' own DRAM lines (`pmu_ocr`), which agree with the cache's served bytes to 1% for streams and decode-sized GEMMs but not for prefill batches. hbm13 is not the reference Cache node of the other notebooks (hbm01), and Cache-mode rates differ between campaigns on one node by up to 16% (notebook 01) and, near the capacity, by a factor of three between days, while launches within a day repeat to 2 hit-rate points (the hit rate follows the node's page placement, claim `cache_launch_spread`).
 """),
     code("""
 cmp = report.mode_power_comparison(unc, ucache)
@@ -1156,7 +1204,10 @@ cc = report.cache_capacity_table(ucache)
 if len(cc):
     table(cc, 2)
     figure(plotting.cache_capacity_counters_figure(cc), 'cache_capacity_counters')
-say_claims(claims.cache_counters(unc, ucache), None)
+gt = report.cache_gemm_table(ucache)
+if len(gt):
+    table(gt, 3)
+say_claims(claims.cache_counters(unc, ucache, flat_far=report.flat_latency_far(ext)), None)
 """),
     md("""
 ## 11. The socket that runs nothing is not idle
@@ -1188,9 +1239,37 @@ table(et[et.kind.eq('peak')][['tier', 'layout', 'gops', 'socket_w', 'node_w', 'p
 say_claims(claims.energy_flat_vs_cache(both, theory), None)
 """),
     md("""
-## 13. Still not measured
+## 13. The node at rest: the static floor and the BMC (B2)
 
-* **The HBM-cache hit rate (U3).** It needs the memory-side cache's tag events, which need `perf` on the Cache node; the conflict-miss explanation of the Cache curve and the ordering of the spilled kernels stay inferred until then.
+**Conditions.** Part `uidle` on both nodes: one record of five 60 s windows in which the benchmark does nothing but hold the counters enabled (`hardware --kind idle`), perf (base events) plus turbostat on both nodes, with a campaign-level `ipmitool sensor` logger beside every record (a listing takes about 6 s and reports whole watts, so a window of 60 s holds about eight). Then one 14-core read per tier (five 30 s windows): below the power limit, so the BMC's rails can be set against RAPL's without clipping. The *floor* of the energy tables is the median over the idle samples.
+"""),
+    code("""
+both_modes = pd.concat([unc, ucache], ignore_index=True)
+floor = report.idle_floor(both_modes)
+table(floor.reset_index(), 2)
+table(report.idle_load_table(both_modes), 2)
+say_claims(claims.idle_baseline(unc, ucache), None)
+"""),
+    md("""
+## 14. What counting the memory-side cache costs, and what does not
+
+The first Cache launches of 2026-10-31 used a perf session that also counted the cache's tag lookups (event set `cache`: three more HBM-controller events, 96 more counters per socket). They read 1 GiB chases at 400–415 ns where the turbostat-only smoke of 2026-10-20 read 156 ns, Cache-mode Triad at half rate, and left the node at 1.4 GHz and 361 W at rest. A factorial on the same node (`ucacherep` and `usmoke`: tag events, base events, the BMC logger alone, turbostat alone) isolates the tag session; everything in sections 10 to 13 was re-run with the base events. The tag launches (`session_probe_campaigns`) are kept as the validation of the hit rate derived from the base counters.
+"""),
+    code("""
+probe = report.load_session_probe()
+if len(probe):
+    p = probe.assign(session=probe.uncore_event_set.fillna('none').astype(str) + ' · BMC logger ' + probe.ipmi_logged.map({True: 'on', False: 'off'}), gib=(probe.working_set_bytes / 2**30).round(0))
+    reps = p[p.notes.str.startswith('u3_rep_') & p.gib.isin([8, 32, 56])].groupby(['session', 'notes', 'gib']).bandwidth_gbs.median().unstack(['notes', 'gib'])
+    table(reps.reset_index(), 0)
+    table(p[p.notes.eq('usmoke_chase') & p.socket_scope.eq('concurrent_tier_component')].groupby('session').latency_ns.median().reset_index(), 0)
+    table(p[report.is_idle_note(p.notes)].groupby('session')[['node_power_w', 'uncore_ghz_s0', 'ts_bzy_mhz_s0']].median().reset_index(), 2)
+    say_claims(claims.cache_session_claims(probe, ucache), None)
+"""),
+    md("""
+## 15. Still not measured
+
+* **Cache-mode bytes of the parts that were not re-run with the tag counters.** `ustreams`, `ugemmconv`, `usweep` and the streams of the capacity part of 2026-10-20 count their traffic with the cores' DRAM lines (`pmu_ocr`); the tag counters agree with those lines to 1% for streams and decode-sized GEMMs, but not for prefill batches (M ≥ 256), which only `uatlas` has in served bytes.
+* **Which agent issues the duplicated remote-HBM reads (U2).** The CHA opcode events were not in any session (part B5 of the plan, optional).
 * **Latency at the caching agents.** The CHA's TOR occupancy over inserts, filtered to the chasing core, gives about 31 ns where the chase measures 141 ns (`data/probes/uncore-20261019/`); it is not a latency here and is not used.
 """),
 ]
