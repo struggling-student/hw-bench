@@ -2,6 +2,10 @@
 
 ## Execution rules
 
+The new [bandwidth configuration study](BANDWIDTH_CONFIGURATION_STUDY.md) uses its
+own exclusive Slurm submission and retrieval scripts for Flat mode. The table below
+describes the legacy campaign workflow; the study does not use its direct-SSH path.
+
 The two memory configurations are run differently, on purpose.
 
 | | Flat mode | Cache mode |

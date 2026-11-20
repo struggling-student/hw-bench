@@ -3,14 +3,14 @@
 Question: the thesis kernel measures 554 GB/s of HBM Triad on one socket (Flat, 56 cores), 21% below
 the 700 GB/s of McCalpin's STREAM scaling curve (IXPUG ISC 2023, slides 4–5). Why?
 
-Short answer: the node is not different. The unmodified `stream.c` reproduces the published figure
-(678–711 GB/s). The 21% is three properties of how the thesis kernel is measured, none of them a
-property of the hardware: a data pattern that costs about 12%, a loop that is not unrolled (about
-6%), and a median of one-second windows where STREAM reports the best of many short iterations
-(about 9%). The data effect is not specific to Triad: read-only HBM moves by the same kind of amount (E5), and the thesis pattern behaves like random data. E6 measured the mechanism with the privileged counters that became available on 2026-10-19: the package is at its 350 W power limit whatever the data, random data leaves less of it for the uncore (mesh) clock, and HBM bandwidth follows that clock. DDR shows no dependence.
+The unmodified STREAM source reaches 678–711 GB/s with selected builds on the CRESCO8 Flat host. This places the published 700 GB/s Triad within the observed best-iteration range. Data pattern, loop form, compiler/store choice and measurement convention change the rates. The controls explain how one host produces both the thesis sustained rate and the published vicinity. The precise published build, array sizes, initialization and timing details are incomplete.
+
+Intel's series overview says “Up to 1TB/s BW” in the HBM entry adjacent to per-socket capacity. This rounded 1,000 GB/s product reference has no benchmark procedure in that entry. McCalpin calculates 1,638.4 GB/s at the stack interface from four × 128 B × 3.2 GT/s. CRESCO8's pin rate was not measured. HMAT's 869 GB/s is a firmware descriptor. The rates below measure or model CPU-accessed traffic under a particular stream and time window. [Intel series overview](https://www.intel.com/content/www/us/en/developer/articles/technical/xeon-scalable-processor-max-series.html) · [McCalpin, slide 3](https://www.ixpug.org/images/docs/ISC23/McCalpin_SPR_BW_limits_2023-05-24_final.pdf)
+
+E6 and E7c observe active package power clipping and a strong association between HBM bandwidth and uncore frequency at high core count. Fewer cores can run the uncore faster while delivering less bandwidth. These results constrain the explanation. They do not identify the bandwidth at an independently controlled PL1 or clock. See the [final synthesis](FINAL_RESEARCH_SUMMARY.md#why-sustained-hbm-bandwidth-is-lower-than-the-advertised-figure).
 
 Campaigns `flat-streamgap-20261016T132035Z` (E0–E3), `flat-streamgap_e4-20261016T132755Z` (E4) and `flat-streamgap_e5-20261016T135914Z` (E5),
-both on the Flat node, outside Slurm, idle node, 56 threads on cores 0–55, `numactl --membind=2`,
+all on the Flat node, outside Slurm, idle node, 56 threads on cores 0–55, `numactl --membind=2`,
 three launches of every configuration run in rotation. Code: `benchmarks/streamgap/stream_gap.c`,
 `scripts/streamgap.sh`, `scripts/streamgap_e4.sh`, `scripts/streamgap_e5.sh`, `scripts/streamgap_submit.sh`; tables with
 `python3 scripts/streamgap_summary.py data/raw/streamgap/<campaign>`. This is separate from the
@@ -20,19 +20,18 @@ All outputs were verified element by element.
 
 ## What the publications say
 
-* The 700 GB/s is the 56-core point of a STREAM scaling curve; the companion TACC application deck
-  (Wang, McCalpin et al., IXPUG ISC 2023, slide 3) reports Copy 1371.4 and Triad 1371.8 GB/s on two
+* The 700 GB/s is the 56-core point of a STREAM scaling curve. The [companion TACC deck](https://www.ixpug.org/images/docs/ISC23/McCalpin_Apps_HBM_2023-05-24_final.pdf)
+  (Wang, McCalpin et al., slides 2–3) reports Copy 1371.4 and Triad 1371.8 GB/s on two
   sockets, so Copy equals Triad, and states that streaming stores were used but change the result by
   about 3%. Its HBM node had the DDR5 DIMMs removed (HBM-only), which this node does not.
-* Compiler, flags, array size and affinity are still not stated.
+* The TACC report leaves the compiler flags, array size and affinity unspecified. Intel separately recommends streaming stores and software prefetch for its large-array STREAM recipe. That recipe is context for compiler sensitivity. [Intel tuning guide, §7.2.2](https://cdrdv2-public.intel.com/782255/354227-intel-xeon-cpu-max-series-configuration-and-tuning-guide-1.pdf)
 * With streaming stores, 700 GB/s is about 467 GB/s of reads and 233 GB/s of writes. That is below
   McCalpin's read limit of 575–590 GB/s, so the published Triad does not contradict the read limit
   (an earlier wording here said it exceeded it; that holds only if stores also read).
 
 ## E0 — node state
 
-Transparent huge pages `always` and in use (473 MB of 480 MB resident in a test run), so huge pages
-are not the cause. Governor `schedutil` (`acpi-cpufreq`, 0.8–1.9 GHz). Uncore frequency range
+Transparent huge pages were set to `always` and in use, accounting for 473 MB of 480 MB resident in a test run. Governor `schedutil` (`acpi-cpufreq`, 0.8–1.9 GHz). Uncore frequency range
 0.8–2.5 GHz, dynamic. The current uncore frequency, RAPL energy and MSRs are root-only and
 `perf_event_paranoid` is 2, so neither power nor uncore clock could be observed during a run.
 Intel `icx` 2025.3 and GCC 11.4.1 are available.
@@ -142,10 +141,7 @@ From the thesis 554 GB/s to the published 700 GB/s, in one harness on one node:
 | *unmodified STREAM, GCC / icx streaming stores* | | *678–688 / 704–711* |
 
 * **Data.** Only the initial values differ between the two columns; the kernel, size, placement and
-  verification are the same, and the effect holds for every loop (−7% to −12%). The mechanism is not
-  measured. Data-dependent power (signal toggling on the HBM interface, floating-point activity)
-  under a power limit fits, and so does the modest ±8% iteration scatter, but RAPL and the uncore
-  clock are not readable here (E0). Treat it as an observed dependence on the data.
+  verification are the same, and the effect holds for every loop (−7% to −12%). The early runs did not have power or uncore counters. E6 and E7c add them. Interface and mesh switching remain possible contributors.
 * **Loop.** The compiler loop of the thesis kernel is the slowest shape; 4 lines per iteration
   recover 6%. It is a kernel property, not a hardware one.
 * **Convention.** The thesis reports the median of five one-second windows. STREAM reports the best
@@ -153,15 +149,11 @@ From the thesis 554 GB/s to the published 700 GB/s, in one harness on one node:
 
 What this does and does not change:
 
-* The thesis Triad of 554 GB/s is a correct sustained figure for that kernel and data, and the
-  platform is not slower than the one McCalpin measured. It should not be called a failure to
-  reproduce the published Triad: with STREAM's own method the node reaches it.
+* The thesis Triad of 554 GB/s is a correct sustained figure for that kernel and data, and the same host reaches the published vicinity with STREAM and its own timing statistic.
 * The thesis read-only ceiling (543 GB/s, used for every LLM statement) is a high-entropy-data
   figure: with random data the same kernel reaches 527–528 GB/s here, with constants or zeros 575–595.
   The published 555 GB/s lies between them and its data are unknown, so the agreement within 2.1% is
-  real but it does not say that the ceiling is data independent; it is not. Model weights are not
-  constants, so the thesis ceiling is the better one for a decode bound, but that was not checked
-  against real weights, and a statement of the HBM read ceiling should carry the data pattern.
+  real but it does not say that the ceiling is data independent; it is not. The benchmark used synthetic data. Real-weight throughput remains outside this comparison.
 * Because the effect is on reads as well as writes, it is not a store or a write-allocate
   property; the straightforward reading is a data-dependent limit on the whole memory path.
 * Not tested: other constants and partially random data (how the effect scales with entropy), real
@@ -187,17 +179,9 @@ three repeats (`report.data_pattern_counters`, notebook 06):
 | HBM | random | 526 | 531 | 1.53 | 352 | 100% |
 | DDR | all four | 261.2–261.4 | 258.7–258.9 | 1.99–2.02 | 350 | 100% |
 
-* **The mechanism.** All launches hold the package at PL1 (350 W). With random or the thesis data the
-  same power buys a 1.53 GHz uncore; with constants or zeros 1.64–1.66 GHz, and HBM bandwidth moves in
-  proportion: every HBM launch delivers 343–355 GB/s per uncore GHz whatever its data, including the
-  campaign's first launch after idle (565 GB/s at 362 W, the first-window effect of notebook 01). So
-  random-looking data costs more energy per byte (data-dependent switching on the HBM interface and
-  mesh is the likely consumer, not separated here), and under the power limit that lowers the clock
-  that sets HBM bandwidth.
-* **DDR** is at the same power limit but its bandwidth is set by the DIMMs: the pattern changes
-  nothing (0.1%).
-* For the thesis: the read ceiling of 527–543 GB/s is the random-data value under the package power
-  limit. Constants would reach about 575–590 GB/s on this node, as McCalpin's figure does.
+* **HBM.** The package was near the recorded 350 W PL1 and the PCU flagged power clipping for all four patterns. The uncore ran at 1.53 GHz for varied/random data and 1.64–1.66 GHz for constants/zeros. Controller and useful bandwidth both shift, so a software byte-model artifact cannot account for the pattern effect. Package energy per useful byte changes. This is consistent with changes in package power allocation at the clipped operating point. The counters do not isolate HBM interface, mesh, controller or core power.
+* **DDR control.** The same intervention changes throughput by about 0.1% despite active package clipping. That makes the HBM pattern effect specific to the observed path and operating regime.
+* **Scope.** These runs reproduce read throughput of roughly 527 GB/s for varied/random input and 572–587 GB/s for constants/zeros in the E6 harness. Quote the pattern, kernel and timing when using a rate.
 
 ## E7 — how high can one socket go? (2026-11-01)
 
@@ -209,7 +193,7 @@ All 80 kernel variants were checked on a small array first and all outputs eleme
 Tables: `python3 scripts/streamgap_summary.py data/raw/streamgap/flat-streamgap_e7-20261101T100644Z`.
 Medians over iterations are the sustained rate; "best" is STREAM's convention (best iteration).
 
-**Result: no kernel change moves either tier by more than the noise.** The limit is the memory path, not the loop.
+**Result.** Most unroll, alignment, width and store variants change the sustained rate by less than the roughly 5% cross-day shift. Core count, input pattern and read/write mix still matter.
 
 | One-factor change from the reference (HBM, median of iterations) | GB/s | vs reference |
 | --- | ---: | ---: |
@@ -226,11 +210,9 @@ Medians over iterations are the sustained rate; "best" is STREAM's convention (b
 * **Read:write mix.** With the same per-array size, 1 read stream per write (Copy) sustains 654.6 GB/s,
   2 (Triad) 640–650, 3 reads 629.5 and 4 reads 597.8; read-only streams, E6, 527–587. More writes
   per read gives a higher total, so the HBM limit is not a pure read limit; a write-only stream was not run.
-* **Cores.** From 52 cores up the rate is flat; below that it falls in proportion. Fewer cores do not buy
-  a faster uncore clock back: the rate is limited by the concurrency the cores supply, and the uncore
-  clock was not read in this campaign. 56 cores is the right count for both tiers on HBM.
+* **Cores.** From 52 cores up the rate is flat; below that it falls in proportion. E7 has no clock telemetry. E7c measures higher uncore frequency at fewer cores despite the lower throughput, consistent with lower request concurrency.
 * **Data** is the one lever that matters (−10 to −11%), and it is the power-limited uncore clock of E6.
-  A constant-data figure is a best case; model weights behave like the thesis or random data.
+  The constant-input comparison is specific to these synthetic patterns.
 * **Best-of convention.** The best iteration of the same launches is 724–788 GB/s (best Triad 759 with
   a 67-line stagger; Copy 789). The vendored `stream.c` (GCC) gives 670–678 on this node in the same campaign,
   so best-of figures of the new kernel are 7–13% above the unmodified STREAM, while its sustained median
@@ -239,7 +221,7 @@ Medians over iterations are the sustained rate; "best" is STREAM's convention (b
   5% between days on the same node, which is the size of every difference above except cores < 52,
   data, and read-heavy mixes.
 
-DDR (socket 0, 8 GiB per array):
+DDR (socket 0, roughly 8 GiB total for Triad):
 
 | | GB/s | vs reference |
 | --- | ---: | ---: |
@@ -250,14 +232,9 @@ DDR (socket 0, 8 GiB per array):
 | vendored `stream.c`, best Triad | 237.7–238.2 | |
 
 DDR Triad stops at about 237 GB/s from 28 cores on, which is 77% of the 307.2 GB/s computed peak, and the
-vendored STREAM gets the same number. The read-only kernel reaches 261 GB/s (85%). A 2:1 read:write mix
-costs about 10% on DDR from bus turnaround; nothing in the kernel changes it. DDR is at its practical
-ceiling.
+vendored STREAM gets the same number. The read-only kernel reaches 261 GB/s (85%). The Triad rate is about 10% below the read-only rate. The different direction mix is consistent with channel turnaround costs. The counters do not isolate the cost of switching directions.
 
-What E7 does not say: why the HBM sustained rate stays at 640–655 GB/s and whether any software setting
-can lift it (the uncore clock and power were not recorded here; E6 says the 350 W package limit sets the
-uncore clock, which sets HBM bandwidth). The "up to 1 TB/s" vendor figure has not been approached by
-any kernel here or in the published STREAM scaling curve (700 GB/s with streaming stores).
+E7 establishes a range of sustained rates for the tested loops. Its clock and counter diagnostics are in E7c.
 
 ## E7c — the uncore clock and power behind the E7 plateau (2026-11-01)
 
@@ -278,28 +255,9 @@ launch; medians over the kernel phase (`uncore.kernel_phase(..., write_cap=None)
 | Triad, ymm / ordinary stores | 635 / 637 | 623 / 590 | 351–352 | 1.68 / 1.65 | 100% | 372 / 358 |
 | Read-only, constants | 580 | 576 | 351 | 1.64 | 100% | 352 |
 
-* **The package is at its 350 W limit in every HBM launch** (the PCU clips for power in 100% of cycles). No kernel
-  variant frees power: ymm vectors, ordinary stores and a different mix leave package power at 350–353 W and the
-  uncore clock at 1.65–1.74 GHz.
-* **At 52 cores and more, HBM bandwidth is proportional to the uncore clock**: 350–372 GB/s of controller traffic per
-  GHz for every mix, vector width, store type and data pattern. The data effect of E5/E6 is therefore the same
-  mechanism in Triad: the thesis data cost 0.15 GHz of uncore clock (1.53 against 1.68 GHz) and 9% of controller
-  traffic, which is the 9% by the proportion.
-* **Fewer cores raise the uncore clock** (2.17 GHz at 28 cores, 2.02 at 36) as expected from the power budget, but the
-  rate still falls: below about 50 cores the cores cannot keep enough lines in flight (203–249 GB/s per GHz), so the
-  limit changes from the uncore clock to the cores' concurrency. 52–56 cores sit at the crossing of the two, which is why
-  no core count beat 56 in E7.
-* **Extrapolation, not measured**: at 370 GB/s per GHz the uncore's 2.5 GHz maximum would give about 925 GB/s, near
-  the vendor 1 TB/s. That needs the clock without the power limit, which no user setting here reaches.
-  The rate would also have to stay clock-proportional above 1.8 GHz with all cores, which the 48–52-core points
-  (326–349 per GHz) suggest it does not do fully.
-* **DDR** is at the same 350 W package limit (clipped in 17–100% of cycles, depending on the launch) but is DIMM-limited: 28 cores give the
-  same 233 GB/s of controller traffic as 56 cores at an uncore clock of 2.45 GHz against 2.13, and with 17% clipping against
-  100%. The DRAM draws 72–73 W at 230 GB/s; Copy moves the same total (229) with half of it as writes.
-* **Counter against kernel**: the controllers' total is 2–4% below the kernel's counted bytes for Triad and Copy
-  (621 against 641 GB/s), against 1% in E6 for the read kernel; the cause (the phase edges, the 100 ms intervals or
-  writes absorbed in the memory) was not separated, and it does not change a ratio between configurations.
+* **Clipping.** The PCU reports frequency clipping for power throughout the retained HBM phases, at 350–353 W. For the tested 52–56-core configurations, normalized controller rates are roughly 349–376 GB/s per uncore GHz. Clock and rate track each other under several interventions, with read/write mix and request concurrency still varying across configurations.
+* **Core-count control.** At 28 and 36 cores the uncore rises to 2.17 and 2.02 GHz, while controller traffic falls to 440 and 503 GB/s. This is consistent with a request-concurrency constraint at smaller core counts. McCalpin's offcore occupancy measurements independently support limited concurrency and increased queueing latency in a related configuration.
+* **DDR control.** Triad controller rates are about 233 GB/s at 28 cores and 231 GB/s at 56, with 2.45 and 2.13 GHz uncore and 17% and 100% clipping, respectively. DDR is close to the observed mixed-stream plateau across these operating points.
+* **Counter scope.** For non-temporal Triad/Copy the controller sum is typically a few percent below modeled kernel bytes. Ordinary-store HBM drops from 637 useful to 590 CAS GB/s, about 7%. The exact attribution to phase boundaries, caching and write traffic remains unresolved. Compare like byte bases.
 
-Conclusion for the thesis: on this node the sustained HBM Triad is bound by the package power limit through the uncore
-clock, about 640 GB/s with constants and about 570 GB/s with weight-like data, and DDR Triad is bound by the DIMMs at
-233–238 GB/s. Neither is a kernel limit.
+A clock-proportional calculation at 2.5 GHz would assume the same concurrency and traffic efficiency outside the measured 52–56-core regime. There is no calibrated basis for using it as a forecast or for assigning the entire gap to PL1. The conclusion for CRESCO8 is a constrained CPU-to-HBM operating point with measurable pattern, traffic-mix and timing sensitivity. The later exclusive Slurm [bandwidth search](BANDWIDTH_CONFIGURATION_STUDY.md) reinforces placement effects and reports a separate power regime.

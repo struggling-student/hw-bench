@@ -1,111 +1,13 @@
-# Status of the analysis
+# Characterization status
 
-The single place that says what is finished, what is running and what is left. Last updated
-**2026-10-31**, after Phases A and B of the [measurement-gaps plan](MEASUREMENT_GAPS_PLAN_2026-10-31.md): the
-analysis-only Phase A and the cluster runs of Phase B (Cache probe, idle baseline, Cache counted re-runs,
-two-socket energy), on top of the counted re-runs of 2026-10-20 (measured-intensity roofline).
-Item IDs (C1–C10, M1–M3, R1–R3, U1–U4) refer to the [2026-10-16 review](archive/REVIEW_2026-10-16.md); the
-history of the first review is in [archive/STATUS_2026-10-12.md](archive/STATUS_2026-10-12.md) (historical, not
-maintained). The process documents are in [archive/](archive/).
+The archived campaigns are sufficient for the scoped hardware chapter. Start with the [final research summary](FINAL_RESEARCH_SUMMARY.md), [claims matrix](SCIENTIFIC_CLAIMS.md), [figure and table selection](THESIS_FIGURES_AND_TABLES.md), [gap plan](EXPERIMENTAL_GAP_PLAN.md) and [readiness assessment](FINAL_READINESS.md).
 
-## Where the work stands
-
-| | |
+| Evidence | State |
 | --- | --- |
-| Branch | `develop` is ahead of `main` by the counted re-runs (code, data, analysis; not pushed). |
-| Running | Nothing. |
-| Counted re-runs (2026-10-20) | Flat (hbm14, perf): `flat-ugemmconv-20261020T201733Z` (78 records), `flat-uatlas-20261020T204045Z` (64), `flat-usweep-20261020T210357Z` (30). Cache (hbm13, turbostat; traffic from the cores' DRAM lines): `cache-ustreams-20261020T201649Z` + its resume `cache-ustreams-20261020T202516Z`, `cache-ucapacity-20261020T201654Z`, `cache-ugemmconv-20261020T201700Z`, `cache-uatlas-20261020T201706Z`, `cache-usweep-20261020T201711Z`. turbostat against perf: `flat-usmoke-20261020T201307Z`. All in `uncore_campaigns`. |
-| Last campaigns | Privileged uncore counters on the Flat node: `flat-ustreams-20261019T205225Z` (U1, 36 records), `flat-uremote-20261019T205814Z` (U2, 14), `flat-ugemm-20261019T210858Z` (U4, 16), `flat-uloaded-20261019T211812Z` (R3 with counters, 22) and `flat-streamgap_e6-20261019T212743Z` (data pattern, 24 launches); all valid, in notebook 06 (`uncore_campaigns`, `data_pattern_campaign` in `configs/analysis.json`). The proof run `flat-usmoke-20261019T204741Z` is not in the analysis. |
-| Measurement-gaps plan | **Phases A and B done** except the optional B5 (not run). A: per-socket columns, the idle socket's uncore coupling, one energy definition at two RAPL scopes, the serving socket of remote HBM, Flat against Cache energy, correctness fixes. B: **B0** code (ipmitool logger and join, `idle` kind, parts `uidle` and `udual`, export forwarding, probe launcher); **B1** perf on hbm13 verified and the memory-side cache counted (`data/probes/uncore-cache-20261031/`); **B2** the static floor on both nodes; **B3** the Cache counted re-runs (`ucapacity`, `ugemm`, `ucachelat`, `ucacherep` ×3, and `uatlas`, triggered by served bytes differing from the cores' counts for prefill GEMMs); **B4** two sockets at once on both nodes. Findings in the table below. |
-| Tests | All pass (`pytest`); all seven notebooks execute. |
-| Open | **perf on the Cache node hbm13 is reported installed by the administrators but not verified** (the node is reachable only through Slurm): the hit rate (U3) and Cache controller traffic wait for the Phase B probe; the decisions that are yours. |
+| October baseline and follow-ups | Primary, extended and counted runs selected by [analysis policy](../configs/analysis.json). The validation report and selection audit retain warnings, superseded sources and exclusions. |
+| October 31 Cache and energy campaigns | Complete. Base controller events give effective lookup bytes and DDR fills. Kept comparison launches document the intrusive tag-event session. Idle and dual-socket energy controls are present. |
+| STREAMGAP E0–E7c | Complete. Raw controls and scripts support the throughput, data pattern, timing, traffic and power comparisons in [STREAMGAP](STREAMGAP.md). |
+| November Flat read search | Complete. `flat-bandwidth-search-20261101T112108Z` contains 342 accepted launches across 114 configurations in one exclusive allocation. [Study notes](BANDWIDTH_CONFIGURATION_STUDY.md) and [notebook 07](../notebooks/07_bandwidth_configuration.ipynb) describe the observed ranges. |
+| Additional cluster measurements | None blocking under the final thesis scope. Optional follow-ups are in the gap plan. |
 
-## If the work is interrupted: how to resume
-
-Nothing is in flight. For any new cluster run: `ssh -O check cresco8` (reconnect locally with
-`ssh cresco8` if the master is down), source the private environment file,
-`scripts/submit_cresco8.sh flat|cache <part>`, wait for `COMPLETED` in the campaign's result
-directory, list the campaign under `extended_campaigns` in `configs/analysis.json`,
-`bash scripts/fetch_results.sh` (it scrubs; delete the `data/processed/platform_*.json` copies it
-leaves, they are not versioned), `bash scripts/make_analysis.sh`, `pytest`, and commit data and
-analysis separately. Restore the SVGs whose PNG did not change (their random ids differ on every
-export). If a claim fails, the notebook stops: report the numbers rather than loosen the check
-without a decision. The run recipe of every campaign part is in
-[archive/05_FOLLOW_UP_RUNS.md](archive/05_FOLLOW_UP_RUNS.md).
-
-## Coverage of the hardware characterization
-
-| Area | State | Evidence |
-| --- | --- | --- |
-| Compute peaks, six paths (AVX-512 FP64/FP32/BF16, VNNI, AMX BF16/INT8) | **Done** | 94–99% of the per-cycle peak at the measured clock; three launches within 0.25%; chain sweep for AVX-512 BF16 |
-| Flat DDR and HBM bandwidth (read, Triad, NT Triad, copy), 1 and 2 sockets, core scaling with clock | **Done** | Seven Flat launches of HBM read agree within 3%; sustained HBM value excludes the fast first window (C4) |
-| Comparison with published Xeon Max 9480 results (M3) | **Done** | HBM read-only within 2.1% of McCalpin 2023 (Flat, one socket); DDR 11–17% higher; HBM Triad 21% lower, explained: unmodified STREAM reproduces the published figure, the gap is data pattern (12%), loop unrolling (6%) and median against best-of (9%), see [STREAMGAP.md](STREAMGAP.md); loaded latency and concurrency within 7% of the published counter values; two-socket result of Reguly 2023 is another mode and is not compared like for like. Methods text, notebook 01, claims `literature_*` |
-| Traffic model (counted against modeled bytes) | **Done** | Per-core offcore-response counters: 0.989–1.003 for streams and sweep; no read-for-ownership |
-| Memory hierarchy (L1, L2, L3, memory), idle latency | **Done** | L1 re-measured after the clock-read fix |
-| Latency under load (R3) | **Done** | One core chasing beside 1–55 streaming cores: HBM 139 to 209 ns at 549 GB/s, DDR 116 to 373 ns at 262 GB/s; the chase does not slow the streams. Claim `loaded_latency`, notebook 02 |
-| Cache mode against working set (8–128 GiB) | **Done, qualified** | Between-campaign spread up to 16% on one node (C2); spilled regime is pattern-dependent and its ordering unexplained (C3). Far latency: Flat DDR rises only 4 ns from 16 to 128 GiB against 65 ns in Cache mode, so the rise is the memory-side cache, not translation (R2); the hit rate behind it is not measured |
-| NUMA: remote memory, two processes, one spanning process | **Done** | Remote HBM repeat with thread sweep; dual efficiency 0.984–1.017 |
-| FP64 intensity sweep | **Done** | 12 chains reach the plateau; audited against the copy ceiling |
-| oneDNN GEMM at Llama-3.1-8B shapes | **Done** | Pool convergence, call floor, prepacked layout; converged M-sweep (R1) for the headline, judged in counted bytes (within 2.9% of the 64× pool), 1.8–3.3% of weights still on chip at small M, so modeled small-M rates are that much high |
-| Decode-relevant summary (M1) | **Done** | Table 5 of notebook 00; HBM beats DDR by 1.43× (BF16) and 1.55× (INT8) for a decode GEMM, not the 2.07× of the read kernel |
-| Controller-level traffic, clock-drop cause, energy, remote-HBM mechanism (Flat) | **Done** (notebook 06) | Controller bytes 0.987–1.010 of the model from 14 cores (U1); counting costs at most 0.8%; the clock drop is the 350 W package limit; the fast first HBM window is the uncore clock riding the RAPL budget; HBM 679 pJ/B against DDR 1623 at full bandwidth; remote HBM at 56 threads reads every line about twice (U2); GEMM controller bytes equal the cores' counts at M ≤ 64, BF16 M = 256 reads the weights about 1.3 times (U4); loaded concurrency on counted bytes (R3); the HBM data-pattern effect is power-limited uncore clock (E6) |
-| Measured intensity (roofline, bands, decode table) | **Done** (Flat: controller bytes; Cache: the cores' DRAM lines) | Notebooks 00 and 05 place every achieved point at measured intensity with a hollow modeled twin; at M ≤ 64 the controllers see 0.94–0.99× the modeled bytes, from M = 128 plain BF16 re-reads the weights (1.2–3.7×), so prefill spans 181–486 op/B measured against 237–1792 modeled (claim `measured_intensity_gemm`); Table 5 in measured GB/s with energy per token (`decode_energy`) |
-| Cache-mode power and clocks | **Done** (turbostat, hbm13) | turbostat matches perf's RAPL to 0.3% (`turbostat_matches_perf`); resident Cache costs the energy per byte of Flat HBM, spilled 2.1–3.3× Flat DDR; DRAM power shows DDR traffic from 32 GiB (`cache_*`, notebook 06 section 10) |
-| The socket that runs nothing (A2) | **Done** (notebook 06 section 11) | Socket 1 draws 131–235 W while socket 0 computes: its package power follows its own uncore clock (R² 0.94 on Flat and on Cache), and that clock follows socket 0's (correlation 0.93–0.95). Lowest state seen about 134 W; a socket's activity induces 25–75 W (median per workload family) on the other, up to 100 W. Claim `idle_socket_uncore_coupling`, figure `uncore_coupling`. The floor is the lowest state observed, not a measured idle |
-| Energy scopes (A3) | **Done** (notebooks 00, 06) | One definition (package plus DRAM, idle floor included) at the computing socket and at the node; pJ/op now includes DRAM (+7–9%), node figures are about 1.5× the computing-socket ones. Claims `energy_per_byte`, `energy_per_op`, `decode_energy`, `cache_resident_power`, `cache_spilled_energy`, `gemm_power_limited` give both. No wall scope and no static floor yet |
-| Remote HBM and the serving socket (A4) | **Done** (notebooks 03, 06) | At 56 threads socket 1 draws about 345 W at its top uncore clock (2.50 GHz) and is not clipped for power (0% of PCU cycles) while socket 0 is clipped in all of them; no causation claimed. Claim `remote_duplicate_reads` |
-| Flat against Cache energy (A5) | **Done** (notebook 06 section 12) | Compute peaks cost the same in both modes (1.007–1.025×); a decode token costs 18.2 J on Flat HBM, 1.21× that on resident Cache, 1.61× on Flat DDR, 2.97× spilled (computing socket); prefill is within 15% across all four. Cache bytes are still `pmu_ocr`. Claim `energy_flat_vs_cache`, figure `energy_roofline` |
-| Cache hit rate and traffic in Cache mode (U3) | **Done** (notebook 06 sections 10, 14) | The hit rate falls 92% (8 GiB) → 45% (64 GiB, the capacity) → 12% (128 GiB), the same for read, Triad and non-temporal Triad, and follows the DDR fills; the rate follows the hit rate; DRAM power follows DDR traffic (0.22 W per GB/s). The base counters give served bytes (HBM read CAS), far traffic (DDR read CAS) and the hit rate; served bytes equal the cores' own DRAM line counts to 1% for streams (claims `cache_hit_rate_curve`, `cache_dram_power_onset`). Four launches within two hours agree to 2 hit-rate points; the launch of 2026-10-20 ran 3.5× faster at 56 GiB, which on the counted relation is a hit rate near 89% (inferred): the between-campaign spread is a page-placement difference (`cache_launch_spread`) |
-| Spilled GEMM and far latency in Cache mode (C3, R2/C7) | **Done** | At 96 GiB the decode GEMM and the streams hit the same 25%; the kernels differ in the DDR fill rate they reach (read 73, BF16 GEMM 99, INT8 113, Triad 130 GB/s), which orders their rates (`cache_spilled_gemm_counted`) |
-| Static floor and wall power (B2) | **Done** | Both nodes rest at 310–315 W of RAPL power (about 400 W at the wall, uncores 0.8 GHz); BMC CPU power = RAPL package (1.000–1.008×), BMC memory power = RAPL DRAM (1.001–1.004×); RAPL "ram" is the DDR DIMMs only. Energy tables carry `_dyn` columns (claims `idle_floor`, `rapl_dram_is_ddr`) |
-| Two sockets at once (B4) | **Done** | Scaling 0.983–1.033 (Flat), 0.950–1.053 (Cache, spilled pools noisy); node RAPL power 1.20–1.37× one socket for 2× the throughput, so 1.4–1.7× the throughput per node watt; a decode token costs 18.5 J on Flat HBM at the node with both sockets working, equal to the computing-socket figure of one (claim `dual_energy`) |
-| Cost of counting the memory-side cache | **Found and avoided** | The perf session with the cache's tag events slows core 0: a chase reads 415 ns instead of 160, Cache-mode Triad runs at half rate, the node never rests (361 W). The base counters give the same quantities; every figure uses them (claim `cache_tag_session_cost`) |
-
-## Items of the 2026-10-16 review
-
-| Item | State | Where |
-| --- | --- | --- |
-| C1 GEMM points from a too-small pool in the headline | Done | `report.headline_gemm_points`, claims `first_sweep_small_m_bias`, `gemm_converged_sweep` |
-| C2 Cache uncertainty, node attribution | Done | claim `campaign_spread` |
-| C3 Spilled Cache from GEMM weight streams | Done | claim `cache_spilled_gemm` |
-| C4 HBM first-window transient | Done | claim `hbm_first_window`, notebook 01 decomposition table |
-| C5 One ceiling per purpose | Done (read-only for LLM statements, copy for the sweep, ERT in the atlas). `thesis/knees.csv` is still Triad-based, labelled | claim `ridge_points` |
-| C6 Stale statements | Done | tests |
-| C7 Far latency vs translation | **Done** (was qualified): controlled by R2 | claims `latency_translation`, `cache_latency_far` |
-| C8 Cache claims skip fill-in sizes | Done | claim `cache_below_flat_ddr` |
-| C9 Call-floor wording | Done | claim `gemm_call_floor` |
-| C10 Labels | **Done**: the dotted line reads "nn.Linear, plain weights", the x-axis says "modeled" | `plotting.roofline_figure` |
-| M1 Decode table | Done | `report.decode_table`, claim `decode_achieved` |
-| M2 Between-campaign uncertainty | Done | `report.campaign_spread`, notebook 01 |
-| M3 Comparison with published Xeon Max 9480 results | **Done** | `configs/literature.toml`, `report.literature_table`, methods text |
-| R1 Converged GEMM M-sweep | Done, judged in counted bytes (your decision of 2026-10-16); the 64× rerun was declined | part `gemmconv` |
-| R2 Flat far-latency control | **Done** | part `flatfar` |
-| R3 Loaded latency | **Done**, with no kernel change (the existing chase and read kernels in the synchronized-pair mechanism) | part `loadedlat` |
-
-## Simplification done
-
-* Seven duplicated figures cut (33 to 27 PNGs including the new load-latency figure): `atlas_flat_2s`, `triad_core_scaling`, `ops_per_cycle`, the notebook-04 `gemm_*_m_sweep` pair, `local_remote_bandwidth` and `span_bandwidth`; their tables stay.
-* Master Table 1 shows median [min–max] and one total uncertainty with a basis footnote; the decomposition (spread, sustained, repeat, between, cross-run) is in notebook 01.
-* Master `compute_efficiency` is titled "per core, mean over 56 cores"; Table 3 keeps the memory rows only (the compute rows were duplicated by that figure and by Table 1).
-* Process documents moved to `docs/archive/`; this file and the limitations in `04` stay.
-
-## What is left
-
-Nothing blocked. **Not run**: the optional B5 of the measurement-gaps plan (the remote-HBM issuing agent with CHA
-opcode events, which would close the last "not inferred" item of U2; dynamic memory energy at fixed cores, only if the
-floor-subtracted pJ/B proves ambiguous, which it does not). **Open, not blocked**: the Cache points of the parts that
-were not re-run with the Cache counters (`ustreams`, `ugemmconv`, `usweep`) still place their intensity with the cores'
-DRAM lines, which agree with the cache's served bytes to 1% for streams and decode-sized GEMMs but not for prefill
-batches; `ugemmconv` (47 records, about 25 min of hbm13) would put them on served bytes; and real model weights for
-the data-pattern effect.
-
-**Decisions that are yours**: the cluster directories of failed or superseded runs (below); removing the
-staged source copies; whether to carry the data pattern into the thesis text where the HBM read ceiling is quoted
-(random data 527 GB/s, constants 576, now explained by the power limit, [STREAMGAP.md](STREAMGAP.md) E6).
-
-Stray cluster directories left by this phase (all ours, none used): `cache-probe-20261031T180303Z` (landed on hbm01,
-stopped at the first `sudo`), the first attempts of 2026-10-31T18:13–18:15 that died on the full `/lpor1`
-(`cache-uidle-20261031T181345Z` and the `ucapacity`, `ugemm`, `ucachelat`, `ucacherep` directories of that minute),
-and `cache-ucacherep-20261031T181525Z`–`T181546Z`. `/lpor1` (96 GB) was full for a few minutes while staging: the notebooks
-(41 MB each) were being copied with every staged source tree, 2.2 GB in all; they were removed from the staged
-copies and are no longer staged.
+The [October 31 plan](MEASUREMENT_GAPS_PLAN_2026-10-31.md), [earlier reviews](archive/) and [validation history](VALIDATION.md) document the development sequence and earlier failed or superseded attempts.

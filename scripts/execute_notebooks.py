@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Execute each canonical notebook in an independent kernel, then normalize output IDs."""
 
+import argparse
 from pathlib import Path
 
 import nbformat
@@ -8,7 +9,10 @@ from nbconvert.preprocessors import ExecutePreprocessor
 from normalize_notebook import normalize_string
 
 ROOT = Path(__file__).resolve().parents[1]
-for path in sorted((ROOT / "notebooks").glob("[0-9][0-9]_*.ipynb")):
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("paths", nargs="*", type=Path, help="Notebook paths; default: all")
+args = parser.parse_args()
+for path in args.paths or sorted((ROOT / "notebooks").glob("[0-9][0-9]_*.ipynb")):
     notebook = nbformat.read(path, as_version=4)
     executor = ExecutePreprocessor(timeout=600, kernel_name="python3")
     executor.preprocess(notebook, {"metadata": {"path": str(ROOT)}})

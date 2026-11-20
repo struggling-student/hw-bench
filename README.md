@@ -6,9 +6,9 @@
 [![Plotly](https://img.shields.io/badge/Charts-Plotly-3F4F75?logo=plotly&logoColor=white)](https://plotly.com/python/)
 [![pytest](https://img.shields.io/badge/Tests-pytest-0A9EDC?logo=pytest&logoColor=white)](https://pytest.org/)
 
-Reproducible hardware characterization of Intel Xeon CPU Max 9480 nodes on CRESCO8: two sockets × 56 cores, SMT off, 64 GiB HBM2e and 8-channel DDR5-4800 per socket. The primary result is a **measured roofline** for Flat and Cache memory modes, for FP64, FP32, BF16 and INT8, on one and two sockets, with achieved library GEMMs at representative projection shapes placed on it.
+Hardware characterization of Intel Xeon CPU Max 9480 on CRESCO8. The [final research summary](docs/FINAL_RESEARCH_SUMMARY.md) gives the thesis findings, and the [evidence matrix](docs/SCIENTIFIC_CLAIMS.md) links each claim to its campaigns. The [figure and table selection](docs/THESIS_FIGURES_AND_TABLES.md) is reproduced by the master notebook.
 
-Read the executed notebooks in order ([index](notebooks/README.md)):
+The supporting notebooks cover the full experimental record.
 
 0. [Master analysis](notebooks/00_master_analysis.ipynb): findings only
 1. [Platform and methodology](notebooks/01_platform_and_methodology.ipynb)
@@ -16,8 +16,10 @@ Read the executed notebooks in order ([index](notebooks/README.md)):
 3. [NUMA and socket scaling](notebooks/03_numa_and_socket_scaling.ipynb)
 4. [Compute throughput](notebooks/04_compute_throughput.ipynb)
 5. [Roofline atlas](notebooks/05_roofline_atlas.ipynb)
+6. [Memory controllers, power and clocks](notebooks/06_uncore_power_and_clocks.ipynb)
+7. [Bandwidth configuration for inference](notebooks/07_bandwidth_configuration.ipynb): completed November core-split, placement and capacity search
 
-Every figure cell displays an interactive Plotly figure and saves **SVG and PNG** copies under `figures/<notebook-stem>/`. Numerical exports of the October thesis selection are under `data/processed/thesis/`.
+Every figure cell displays an interactive Plotly figure and saves **SVG and PNG** copies under `figures/<notebook-stem>/`. Principal numerical exports and the historical October tables are under `data/processed/thesis/`.
 
 ## What is measured
 
@@ -32,6 +34,10 @@ Every figure cell displays an interactive Plotly figure and saves **SVG and PNG*
 
 ## Execution rules
 
+The new [bandwidth configuration study](docs/BANDWIDTH_CONFIGURATION_STUDY.md) uses
+exclusive Slurm allocations for its Flat-mode search. The following describes the
+legacy campaigns and their recorded execution methods.
+
 Flat-mode campaigns run on **one dedicated node, over SSH, outside Slurm**, with an idle check before and a job/load watch around every record. Cache-mode campaigns run only in **exclusive Slurm allocations on other nodes**; the versioned submission template excludes the Flat node and a test fails if that exclusion is ever removed. See [Run and retrieve](docs/02_RUN_AND_RETRIEVE.md). Site values live in a private environment file outside the repository.
 
 ## Reproduce locally
@@ -43,13 +49,13 @@ python3 -m venv .venv
 bash scripts/make_analysis.sh
 ```
 
-Analysis needs Python 3.11 or newer (`tomllib`); the cluster-side scripts run on the system Python 3.9. Raw campaigns must first be present under `data/raw/cache/` and `data/raw/flat/`; the selected campaign IDs are pinned in `configs/analysis.json` (`primary_campaigns`, `benchmark_campaigns`, `supersede` for the October thesis selection; `extended_campaigns` for the later parts, `uncore_campaigns` for the privileged-counter parts and `data_pattern_campaign` for STREAMGAP E6). No SSH connection is needed for analysis. Static export requires Kaleido and a compatible Chrome/Chromium.
+Analysis needs Python 3.11 or newer (`tomllib`); the cluster-side scripts run on the system Python 3.9. The build reads local archives in `data/raw/`, including the separate STREAMGAP and November study campaigns. The selected campaign IDs are pinned in `configs/analysis.json` (`primary_campaigns`, `benchmark_campaigns`, `supersede` for the October thesis selection; `extended_campaigns` for the later parts, `uncore_campaigns` for the privileged-counter parts and `data_pattern_campaign` for STREAMGAP E6). Notebook 07 uses `configs/bandwidth_search.json`. No SSH connection is needed for analysis. Static export requires Kaleido and a compatible Chrome/Chromium.
 
 ## Evidence and interpretation
 
 Raw measurements remain unchanged. Normalization retains each sample's source, campaign, node, launch method, socket, placement, implementation, shape, timing window, effective clock and acceptance decision. The analysis selects declared campaigns and accepted steady samples; it never silently chooses the best socket or latest run.
 
-Flat DDR/HBM rates use explicit placement. Cache rates describe the effective memory system at a stated working set. Bandwidth and intensity use modeled bytes; on the Flat node a privileged `perf stat` session counts the memory controllers, UPI, power and clocks for the campaigns of notebook 06, where controller bytes agree with the model to 2%. Cache mode has no such counters. Theoretical peaks are in [`configs/theory.toml`](configs/theory.toml) with their source and whether they are vendor figures or derivations; measured peaks, theoretical peaks and library-achieved rates are always distinguished by line style.
+Flat DDR/HBM rates use explicit placement. Cache rates describe the effective memory system at a stated working set. The principal Rooflines use Flat controller traffic. The matched Cache atlas reports lookup traffic from the base controller events, with DDR fills tracked separately. The theory configuration records per-cycle, SKU and vendor reference values with their sources. [Methods and data](docs/03_METHODS_AND_DATA.md)
 
 ## Documentation
 

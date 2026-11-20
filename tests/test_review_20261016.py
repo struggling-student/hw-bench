@@ -120,7 +120,7 @@ def test_far_latency_is_controlled_for_translation(evidence):
     assert c["latency_translation"].holds
     far = c["cache_latency_far"].text
     assert "flatfar" in far and "upper bound" not in far and "not measured" in far
-    assert "not the page tables" in c["latency_translation"].text
+    assert "Translation alone is unlikely" in c["latency_translation"].text
 
 
 # ------------------------------------------------------------------ C8

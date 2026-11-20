@@ -329,6 +329,7 @@ int main(int argc, char **argv) {
   try {
     std::string kind = "triad";
     std::size_t bytes = 8ULL << 30;
+    std::size_t read_chunk_bytes = 0;
     double seconds = 1;
     int repetitions = 5, k = 1, chains = 0;
     bool per_thread = false, huge = false;
@@ -348,6 +349,8 @@ int main(int argc, char **argv) {
         kind = argv[++i];
       else if (arg == "--bytes")
         bytes = std::stoull(argv[++i]);
+      else if (arg == "--read-chunk-bytes")
+        read_chunk_bytes = std::stoull(argv[++i]);
       else if (arg == "--seconds")
         seconds = std::stod(argv[++i]);
       else if (arg == "--repetitions")
@@ -379,6 +382,8 @@ int main(int argc, char **argv) {
       return 2;
     const bool stream = triad || triad_nt;
     const bool copyk = copy || copy_nt;
+    if (read_chunk_bytes && (!readk || read_chunk_bytes < 512 || read_chunk_bytes % 512))
+      return 2;
     // Independent accumulator chains: 12 for the compute peaks and 8 for the sweep
     // unless --chains asks otherwise (only the BF16 dot product and the sweep).
     const int chains_eff = chains ? chains : (sweep ? 8 : 12);
@@ -399,6 +404,7 @@ int main(int argc, char **argv) {
     Link *links = nullptr, *cursor = nullptr;
     std::vector<double *> own; // per-thread arrays of the read kernel
     std::vector<double> own_reference;
+    std::vector<std::size_t> own_offsets;
     std::size_t per_thread_bytes = 0;
     if (stream || sweep || copyk) {
       // The sweep walks 8 doubles per chain, so n must be a multiple of that too.
@@ -428,6 +434,7 @@ int main(int argc, char **argv) {
       bytes = per_thread_bytes * workers;
       own.assign(workers, nullptr);
       own_reference.assign(workers, 0);
+      own_offsets.assign(workers, 0);
 #pragma omp parallel
       {
         int t = omp_get_thread_num();
@@ -544,6 +551,29 @@ int main(int argc, char **argv) {
           const int t = omp_get_thread_num();
           const double *p = own[t];
           const std::size_t m = per_thread_bytes / sizeof(double);
+          if (read_chunk_bytes) {
+            // Bound the tail of a timed window even for multi-GiB per-thread
+            // shards. Keep the cursor across windows so the entire allocation
+            // is streamed, rather than repeatedly reading a cached prefix.
+            std::size_t offset = own_offsets[t];
+            std::uint64_t elements = 0;
+            double acc = 0, reference = 0;
+            auto pattern_prefix = [](std::size_t count) {
+              const auto rem = count % 17;
+              return double(count / 17) * 136 + double(rem) * double(rem ? rem - 1 : 0) / 2;
+            };
+            do {
+              const auto chunk = std::min(m - offset, read_chunk_bytes / sizeof(double));
+              acc += read_passes(p + offset, chunk, 1);
+              reference += double(chunk) + .001 * (pattern_prefix(offset + chunk) - pattern_prefix(offset));
+              elements += chunk;
+              offset = (offset + chunk) % m;
+            } while (clock_ns() < deadline);
+            own_offsets[t] = offset;
+            total += elements * sizeof(double);
+            sum += acc;
+            expected += reference;
+          } else {
           std::uint64_t passes = 0;
           double acc = 0;
           // About 4 MiB between clock reads: one pass for arrays of that size or
@@ -557,6 +587,7 @@ int main(int argc, char **argv) {
           total += passes * per_thread_bytes;
           sum += acc;
           expected += double(passes) * own_reference[t];
+          }
         }
         checksum = sum;
         valid &= std::isfinite(sum) &&
@@ -756,7 +787,7 @@ int main(int argc, char **argv) {
         : vbf16    ? "avx512_bf16_" + std::to_string(chains_eff) + "_chains"
         : triad_nt || copy_nt ? "native_avx512_nt_stores"
         : idle     ? "idle_sleep"
-        : readk    ? "native_avx512_read_8_accumulators"
+        : readk    ? (read_chunk_bytes ? "native_avx512_read_8_accumulators_chunked" : "native_avx512_read_8_accumulators")
         : sweep    ? "avx512_" + std::to_string(chains_eff) + "_independent_chains"
         : latency  ? "random_dependent_cachelines"
                    : "native_avx512";
@@ -767,6 +798,7 @@ int main(int argc, char **argv) {
               << "\",\"threads\":" << workers
               << ",\"working_set_bytes\":" << (memory_kind ? bytes : 0)
               << ",\"per_thread_bytes\":" << per_thread_bytes
+              << ",\"read_chunk_bytes\":" << read_chunk_bytes
               << ",\"hugepages\":" << (huge ? 1 : 0) << ",\"k\":" << k
               << ",\"chains\":" << ((sweep || vbf16) ? chains_eff : 0)
               << ",\"counters\":" << (counters.read().ok ? "true" : "false")

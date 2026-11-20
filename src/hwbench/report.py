@@ -602,6 +602,8 @@ def memory_ceiling(
         working_set_gib=float(best.working_set_gib),
         source_campaign=best.campaign_id,
         cv_percent=None if pd.isna(best.cv_percent) else float(best.cv_percent),
+        bytes_source="modeled",
+        cores=112 if scope == "2S" else 56,
     )
 
 
@@ -1023,7 +1025,9 @@ def ridge_table(ext: pd.DataFrame, thesis: pd.DataFrame, unc: pd.DataFrame | Non
     rows = []
     for key, label in [("fp64", "AVX-512 FP64"), ("fp32", "AVX-512 FP32"), ("avx512_bf16", "AVX-512 BF16"), ("vnni_int8", "VNNI INT8"), ("amx_bf16", "AMX BF16"), ("amx_int8", "AMX INT8")]:
         c = compute_ceiling(ext, key, "flat", 56)
-        rows.append({"path": label, "peak (TOP/s)": c.gops / 1000, **{f"{n} ({m.gbs:.0f} GB/s)": _ridge(c.gops, m.gbs) for n, m in tiers.items()}})
+        rows.append({"path": label, "peak (TOP/s)": c.gops / 1000,
+                     **{f"{n} ({m.gbs:.0f} GB/s)": _ridge(compute_ceiling(ext, key, m.mode, 56).gops, m.gbs)
+                        for n, m in tiers.items()}})
     return pd.DataFrame(rows)
 
 
@@ -2218,6 +2222,8 @@ COUNTED_GEMM_LABELS = ("u_gemm_conv", "u_gemm_atlas")
 COUNTED_SWEEP_LABEL = "u_sweep_c12"
 COUNTED_CEILING_LABELS = ("u_copy_ceiling", "u1_read", "u1_triad", "u1_copy_nt", "u3_read_capacity",
                           "u3_triad_capacity", "u3_triad_nt_capacity")
+CACHE_ROOFLINE_STREAMS = "cache-ucapacity-20261031T192305Z"
+CACHE_ROOFLINE_GEMM = "cache-uatlas-20261031T192329Z"
 
 
 def measured_bytes(d: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
@@ -2261,7 +2267,9 @@ def counted_gemm_frame(unc: pd.DataFrame, labels=COUNTED_GEMM_LABELS, shape: str
     columns as ``gemm_points`` where they overlap, so the workload-point helpers accept it.
     """
 
-    d = unc[unc.benchmark.eq("onednn_gemm_sweep") & unc.notes.isin(labels) & unc.accepted]
+    d = unc[unc.benchmark.eq("onednn_gemm_sweep") & unc.notes.isin(labels) & unc.accepted
+            & unc.socket_scope.eq("single") & unc.socket.eq(0) & unc.threads.eq(56)
+            & (unc.memory_socket.isna() | unc.memory_socket.eq(0))]
     if d.empty:
         return pd.DataFrame()
     d = with_config(_with_measured(d))
@@ -2364,13 +2372,15 @@ def counted_sweep_points(unc: pd.DataFrame, label: str = COUNTED_SWEEP_LABEL) ->
     return out
 
 
-def measured_memory_ceiling(unc: pd.DataFrame, mode: str, tier: str, access: str = "read", gib: float | None = None):
+def measured_memory_ceiling(unc: pd.DataFrame, mode: str, tier: str, access: str = "read", gib: float | None = None,
+                            *, bytes_source: str | None = None, campaign: str | None = None):
     """Bandwidth ceiling in measured bytes: the best counted 56-core stream of ``access``.
 
     Taken from the counted ceilings (``COUNTED_CEILING_LABELS``) on socket 0; Flat at 8 GiB,
     Cache at ``gib`` (default 16 GiB, resident).  The rate is measured bytes over the window,
     the same bytes that place the counted points.  Raises ``LookupError`` when nothing was
-    counted, so callers can fall back to ``memory_ceiling``.
+    counted. Pass a byte source and campaign when matching workload points to a
+    specific measurement. Otherwise prefer controller counts before ranking kernels.
     """
 
     from hwbench.roofline import MemoryCeiling
@@ -2379,12 +2389,17 @@ def measured_memory_ceiling(unc: pd.DataFrame, mode: str, tier: str, access: str
     kernel = unc.benchmark.map(BANDWIDTH_KERNELS)
     d = unc[unc.memory_mode.eq(mode) & unc.memory_target.eq(tier) & unc.notes.isin(COUNTED_CEILING_LABELS)
             & kernel.isin(ACCESS_KERNELS[access]) & unc.threads.eq(56) & unc.socket.eq(0) & unc.accepted
+            & unc.socket_scope.eq("single")
             & (unc.memory_socket.isna() | unc.memory_socket.eq(0))
             & unc.working_set_bytes.div(2**30).sub(gib).abs().lt(0.5)]
-    if d.empty:
-        raise LookupError(f"no counted bandwidth for {mode}/{tier}/{access} at {gib} GiB")
+    if campaign is not None:
+        d = d[d.campaign_id.eq(campaign)]
     d = _with_measured(d).assign(kernel=kernel)
-    d = d[d.measured_gbs.notna()]
+    d = d[d.measured_gbs.gt(0)]
+    if bytes_source is None and d.bytes_source.eq("uncore_cas").any():
+        bytes_source = "uncore_cas"
+    if bytes_source is not None:
+        d = d[d.bytes_source.eq(bytes_source)]
     if d.empty:
         raise LookupError(f"no measured bytes for {mode}/{tier}/{access} at {gib} GiB")
     med = d.groupby(["kernel", "campaign_id"]).agg(gbs=("measured_gbs", "median"), cv=("measured_gbs", _cv),
@@ -2394,7 +2409,20 @@ def measured_memory_ceiling(unc: pd.DataFrame, mode: str, tier: str, access: str
         kind="measured_peak", tier=tier, kernel=best.kernel, gbs=float(best.gbs), scope="1S", mode=mode,
         working_set_gib=gib, source_campaign=best.campaign_id, cv_percent=None if pd.isna(best.cv) else float(best.cv),
         note=f"bytes measured ({best.source})",
+        bytes_source=best.source,
+        cores=56,
     )
+
+
+def cache_roofline_evidence(unc: pd.DataFrame):
+    """Matched Cache streams and GEMMs from the same node and measurement session type."""
+    references = [
+        measured_memory_ceiling(unc, "cache", "effective_cache", access, pool,
+                                bytes_source="uncore_cas", campaign=CACHE_ROOFLINE_STREAMS)
+        for pool, access in ((16, "read"), (96, "best"))
+    ]
+    gemm = counted_gemm_frame(unc[unc.campaign_id.eq(CACHE_ROOFLINE_GEMM)], labels=("u_gemm_atlas",))
+    return references, gemm[gemm.bytes_source.eq("uncore_cas")]
 
 
 def ceiling_or_modeled(unc: pd.DataFrame | None, ext: pd.DataFrame, thesis: pd.DataFrame, mode: str, tier: str,
@@ -2422,7 +2450,8 @@ def measured_phase_regions(counted: pd.DataFrame, decode=(1, 16), prefill=(256, 
     at = c.groupby("m").intensity.median()
     if not {decode[0], decode[1], prefill[0], prefill[1]} <= set(at.index):
         return []
-    return [(at.loc[lo] / pad, at.loc[hi] * pad, label) for (lo, hi), label in ((decode, "decode"), (prefill, "prefill"))]
+    return [(at.loc[lo:hi].min() / pad, at.loc[lo:hi].max() * pad, label)
+            for (lo, hi), label in ((decode, "decode"), (prefill, "prefill"))]
 
 
 # ------------------------------------------------- Cache mode: turbostat (and perf, once installed)

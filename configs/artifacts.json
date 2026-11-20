@@ -1,12 +1,12 @@
 {
   "figures": {
     "00_master_analysis": [
-      "compute_efficiency",
       "memory_scaling",
+      "power_and_clocks",
       "cache_capacity",
-      "headline_roofline",
-      "gemm_efficiency",
-      "placement"
+      "placement",
+      "roofline_bf16",
+      "roofline_int8"
     ],
     "01_platform_and_methodology": [
       "repeat_runs"
@@ -34,6 +34,7 @@
     "05_roofline_atlas": [
       "atlas_flat_1s",
       "atlas_cache_1s",
+      "atlas_configurations_1s",
       "atlas_fp64_sweep",
       "atlas_gemm_bf16",
       "atlas_gemm_int8",
@@ -49,12 +50,21 @@
       "cache_capacity_counters",
       "uncore_coupling",
       "energy_roofline"
+    ],
+    "07_bandwidth_configuration": [
+      "historical_placement",
+      "core_split",
+      "capacity_bandwidth",
+      "power_bandwidth"
     ]
   },
   "formats": [
     "svg",
     "png"
   ],
+  "retired_notebook_figures": {
+    "00_master_analysis": ["compute_efficiency", "headline_roofline", "gemm_efficiency"]
+  },
   "retired_root_figures": [
     "roofline_overview_single",
     "roofline_overview_dual",

@@ -371,7 +371,7 @@ def cache_mode(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"{', '.join(f'{g:.0f}' for g in sizes if g <= 64)} GiB). Against Flat HBM Triad ({hbm['triad']:.0f} GB/s) "
             f"it retains {fractions} GiB. Cache mode therefore does **not** match Flat HBM while the working set fits "
             "in the 64 GiB memory-side cache. A direct-mapped cache with conflict misses would behave like this; that is an "
-            "inference, because no cache hit-rate counter is readable.",
+            "inference, for those legacy launches. The later counted launch observes the miss fraction directly from the lookup and fill events.",
         ),
         Claim(
             "cache_resident_model",
@@ -467,12 +467,12 @@ def latency(ext: pd.DataFrame, theory: Theory, root: Path = ROOT) -> list[Claim]
             "latency_translation",
             bool(ddr_tail[4] > ddr_tail[2] > ddr_tail[1] and hbm_tail[4] > hbm_tail[1] and flat_ddr.loc[128] - ddr_tail[1] < 0.2 * ddr_tail[1]
                  and (far.loc[128] - far.loc[16]) > 3 * (flat_ddr.loc[128] - flat_ddr.loc[16])),
-            f"Address translation does not explain the rise of Cache-mode latency. On Flat DDR the chase costs {ddr_tail[1]:.0f}, {ddr_tail[2]:.0f} and "
+            f"The Flat DDR chase costs {ddr_tail[1]:.0f}, {ddr_tail[2]:.0f} and "
             f"{ddr_tail[4]:.0f} ns at 1, 2 and 4 GiB and then {flat_ddr.loc[16]:.0f}, {flat_ddr.loc[32]:.0f}, {flat_ddr.loc[64]:.0f}, {flat_ddr.loc[96]:.0f} and "
             f"{flat_ddr.loc[128]:.0f} ns at 16 to 128 GiB: it keeps creeping up, as second-level TLB misses with 2 MiB pages would give (inferred, no TLB "
             f"counter was read), but by {flat_ddr.loc[128] - flat_ddr.loc[16]:.0f} ns from 16 to 128 GiB, against {far.loc[128] - far.loc[16]:.0f} ns in Cache mode. "
             f"Flat HBM goes from {hbm_tail[1]:.0f} ns at 1 GiB to {flat_hbm.loc[16]:.0f}, {flat_hbm.loc[32]:.0f} and {flat_hbm.loc[48]:.0f} ns at 16, 32 and 48 GiB. "
-            "The rise of the far latency in Cache mode is therefore the memory-side cache, not the page tables.",
+            "Translation alone is unlikely to account for the larger change in Cache mode.",
         ),
     ]
 
@@ -629,7 +629,7 @@ def placement(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"This repeat (separate campaign, 5 s windows, CV {at56[at56.kernel.eq('read') & at56.memory_target.eq('hbm')].cv_remote.min():.1f}–"
             f"{at56[at56.kernel.eq('read') & at56.memory_target.eq('hbm')].cv_remote.max():.1f}%) confirms the first campaign's "
             f"{hbm_r.remote:.0f} GB/s ({_pct(hbm_r.remote_over_local)}, CV {first_cv.min():.0f}–{first_cv.max():.0f}%) and gives the figure to quote. Link bandwidth alone does not explain it; "
-            "the uncore counters of notebook 06 show the mechanism: at 56 threads every remote HBM line is read about twice from memory and crosses UPI "
+            "the uncore counters of notebook 06 show about twice the controller reads and UPI flits per useful line "
             "about twice (claim `remote_duplicate_reads`).",
         ),
         Claim(
@@ -718,7 +718,7 @@ def ridges(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory) -> list[Clai
             f"On HBM ({hbm.gbs:.0f} GB/s, {hbm.kernel}) the ridge is {r[('fp64', 'hbm')]:.1f} FLOP/B for FP64, "
             f"{r[('amx_bf16', 'hbm')]:.0f} op/B for AMX BF16 and {r[('amx_int8', 'hbm')]:.0f} op/B for AMX INT8; on DDR "
             f"({ddr.gbs:.0f} GB/s, {ddr.kernel}) {r[('fp64', 'ddr')]:.1f}, {r[('amx_bf16', 'ddr')]:.0f} and {r[('amx_int8', 'ddr')]:.0f}. "
-            "These are the read-only ceilings, the ones the headline roofline, Table 2 and the decode bound use. Ridge points are "
+            "These historical read-only references use useful modeled traffic. The principal figures use the counted read references. Historical ridges are "
             "order-of-magnitude statements: bytes are modeled and the HBM ceiling is a 56-core figure. The ERT reference envelope of the atlas "
             f"takes the fastest kernel instead ({ert.kernel}, {ert.gbs:.0f} GB/s on HBM), which moves the HBM ridges "
             f"{1 - hbm.gbs / ert.gbs:.0%} to the left.",
@@ -786,18 +786,18 @@ def decode_bound(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, unc: p
                 and 30 < tokens["hbm"] < 38
                 and 14 < tokens["ddr"] < 18
             ),
-            f"Modeled decode bound: {spec['label']} has {theory.model_parameters() / 1e9:.2f} billion weights, {gigabytes:.1f} GB in BF16, "
-            f"streamed once per generated token. At the measured read ceiling that is {hbm.gbs:.0f} GB/s ÷ {gigabytes:.1f} GB ≈ "
+            f"Full-parameter streaming scenario: {spec['label']} has {theory.model_parameters() / 1e9:.2f} billion parameters, {gigabytes:.1f} GB in BF16. "
+            f"Reading that volume once per token at the empirical stream reference gives {hbm.gbs:.0f} GB/s ÷ {gigabytes:.1f} GB ≈ "
             f"{tokens['hbm']:.0f} tokens/s per socket on HBM against {ddr.gbs:.0f} GB/s ÷ {gigabytes:.1f} GB ≈ {tokens['ddr']:.0f} tokens/s on DDR "
-            f"({tokens['hbm'] / tokens['ddr']:.2f}×). This is an upper bound for one sequence: it counts the embedding table, "
-            f"which a step reads one row of ({_pct(embedding)} of the weights, so the bound is that much conservative), and ignores the KV cache, activations and the library's per-call cost.",
+            f"({tokens['hbm'] / tokens['ddr']:.2f}×). This is a bandwidth-normalized scenario. It includes the full input embedding table "
+            f"({_pct(embedding)} of the parameters, accessed by row in decode) and omits KV traffic, activations and execution overhead.",
         ),
         Claim(
             "decode_far_below_ridge",
             bool(150 < gap["hbm"] < 260 and gap["ddr"] > gap["hbm"]),
             f"A decode step (M = 1) has a {source} intensity of {intensity:.2f} operations per byte, about {gap['hbm']:.0f}× below the AMX BF16 ridge on HBM "
             f"({ridge(amx.gops, hbm.gbs):.0f} op/B) and {gap['ddr']:.0f}× below it on DDR ({ridge(amx.gops, ddr.gbs):.0f} op/B). "
-            "Decode is memory-bound by two orders of magnitude, so the AMX peak does not limit it; batching raises intensity in proportion to M."
+            "This places the projection on the bandwidth side of the AMX reference model. Batching increases weight reuse, with a rate of increase that depends on actual traffic."
             + (" The intensity is that of the plain BF16 GEMM at the memory controllers (Flat HBM) and the ceilings are the counted read streams." if measured else ""),
         ),
         Claim(
@@ -806,18 +806,14 @@ def decode_bound(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, unc: p
                  and frac[("Flat HBM", "bf16")] < frac[("Flat DDR", "bf16")]
                  and (conv.loc[("Flat HBM", "bf16")].gbs <= conv.loc[("Flat HBM", "bf16")].modeled_gbs if measured
                       else plain4.loc["hbm"].counted_gbs <= plain64 <= plain4.loc["hbm"].modeled_gbs * 1.01)),
-            f"What a decode step achieves (14336×4096, M=1, {pool_text}): {conv.loc[('Flat HBM', 'bf16')].gbs:.0f} GB/s for plain BF16 and "
+            f"Decode-like projection (14336×4096, M=1, {pool_text}): {conv.loc[('Flat HBM', 'bf16')].gbs:.0f} GB/s for plain BF16 and "
             f"{conv.loc[('Flat HBM', 'int8')].gbs:.0f} GB/s for INT8 on HBM ({_pct(frac[('Flat HBM', 'bf16')])} and {_pct(frac[('Flat HBM', 'int8')])} of the read "
             f"ceiling), against {conv.loc[('Flat DDR', 'bf16')].gbs:.0f} and {conv.loc[('Flat DDR', 'int8')].gbs:.0f} GB/s on DDR ({_pct(frac[('Flat DDR', 'bf16')])} and "
             f"{_pct(frac[('Flat DDR', 'int8')])}). The library streams DDR at {_pct(frac[('Flat DDR', 'bf16')])} of the read ceiling but leaves {_pct(1 - frac[('Flat HBM', 'bf16')])} of HBM unused, so HBM beats DDR by "
-            f"{ratio['bf16']:.2f}× (BF16) and {ratio['int8']:.2f}× (INT8) for this GEMM, not the {tokens['hbm'] / tokens['ddr']:.2f}× of the read kernel. If every "
-            f"weight streamed at this rate, Llama-3.1-8B would decode at most {conv.loc[('Flat HBM', 'bf16')].tokens_per_s:.0f} tokens/s per socket in BF16 and "
-            f"{conv.loc[('Flat HBM', 'int8')].tokens_per_s:.0f} in INT8 on HBM ({conv.loc[('Flat DDR', 'bf16')].tokens_per_s:.0f} and "
-            f"{conv.loc[('Flat DDR', 'int8')].tokens_per_s:.0f} on DDR), against {tokens['hbm']:.0f} from the read ceiling; the 4096×4096 projections stream "
-            f"slower, so the whole model would be slower still. "
+            f"{ratio['bf16']:.2f}× (BF16) and {ratio['int8']:.2f}× (INT8) in measured traffic rate. The read kernel's ratio is {tokens['hbm'] / tokens['ddr']:.2f}×. "
             + (
                 f"With the weights prepacked once (converged 16× pool), BF16 streams {pk.loc['Flat HBM'].gbs:.0f} GB/s on HBM "
-                f"({_pct(pk.loc['Flat HBM'].of_read_ceiling)} of the read ceiling, {pk.loc['Flat HBM'].tokens_per_s:.0f} tokens/s) and "
+                f"({_pct(pk.loc['Flat HBM'].of_read_ceiling)} of the read reference) and "
                 f"{pk.loc['Flat DDR'].gbs:.0f} GB/s on DDR ({_pct(pk.loc['Flat DDR'].of_read_ceiling)})."
                 if pk_converged
                 else f"Prepacked BF16 was measured only with a 4× pool: {pk.loc['Flat HBM'].gbs:.0f} GB/s modeled and "
@@ -1191,10 +1187,10 @@ def repeatability(ext: pd.DataFrame, thesis: pd.DataFrame) -> list[Claim]:
             f"On Flat HBM the first one-second window of a 56-core stream is faster than the rest: {_pct(float(at56.median()['hbm']) - 1, 1)} in the "
             f"median over {int(at56.size()['hbm'])} configurations (up to {_pct(float(at56.max()['hbm']) - 1)}), against "
             f"{_pct(float(at56.median()['ddr']) - 1, 1)} on DDR. It appears only with many cores ({_pct(float(hbm_by_threads.loc[14]) - 1, 1)} at 14 "
-            f"threads, {_pct(float(hbm_by_threads.loc[28]) - 1, 1)} at 28), the regime in which the clock falls while HBM streams. The counters of notebook 06 measure the cause: after the idle setup the package "
+            f"threads, {_pct(float(hbm_by_threads.loc[28]) - 1, 1)} at 28), the regime in which the clock falls while HBM streams. The counted control in notebook 06 shows the corresponding power and frequency transient: after the idle setup the package "
             "may run above its 350 W limit for about a second, and in that window the uncore clock, and HBM bandwidth with it, is higher (claim "
             "`first_window_uncore`). The five-window median moves by at most "
-            f"{_pct(float(hbm56.median_shift.abs().max()), 1)}; Table 1 also lists the sustained median without the first window, and the "
+            f"{_pct(float(hbm56.median_shift.abs().max()), 1)}; the uncertainty table also lists the median without the first window, and the "
             "min–max range of HBM rows is mostly this transient.",
         ),
     ]
@@ -1296,7 +1292,7 @@ def uncore_remote(unc: pd.DataFrame) -> list[Claim]:
             bool(hbm56.ctrl_over_modeled > 1.5 and hbm56.upi_flits_per_line > 1.5 * ddr_flits.median() and clean.ctrl_over_modeled.between(0.98, 1.03).all()
                  and rc.dir_updates_per_line.max() < 0.01 and rc[rc.index.get_level_values("kernel") == "read"].ctrl_write_per_read.max() < 0.01
                  and hbm56_flits < peak_flits_ddr and hbm56.serving_power_limited < 0.05 and hbm56.serving_uncore_ghz > 2.4),
-            f"Remote HBM collapses at 56 threads because its lines are fetched about twice: the kernel receives {hbm56.gbs:.0f} GB/s, the HBM controllers "
+            f"Remote HBM throughput collapses at 56 threads and is accompanied by excess physical traffic: the kernel receives {hbm56.gbs:.0f} GB/s, the HBM controllers "
             f"of socket 1 read {hbm56.ctrl_over_modeled:.2f}× those bytes and UPI carries {hbm56.upi_flits_per_line:.1f} data flits per delivered line "
             f"against {ddr_flits.median():.1f} for a clean remote read. At 14 and 28 threads the same remote HBM read is clean "
             f"({hbm_low.ctrl_over_modeled.min():.2f}–{hbm_low.ctrl_over_modeled.max():.2f}× at the controllers, {hbm_low.gbs.min():.0f}–{hbm_low.gbs.max():.0f} GB/s), "
@@ -1402,16 +1398,15 @@ def data_pattern_claims(dp: pd.DataFrame) -> list[Claim]:
             bool(high.gbs.min() > 1.05 * low.gbs.max() and high.uncore_ghz.min() > 1.04 * low.uncore_ghz.max()
                  and hbm.pkg_w.sub(350).abs().max() < 5 and hbm.power_limited.min() > 0.95
                  and h.per_ghz.std() / h.per_ghz.mean() < 0.02 and ddr.gbs.max() / ddr.gbs.min() < 1.005),
-            f"The data pattern moves the HBM read ceiling through the power limit, now measured (STREAMGAP E6): with constant or zero data the 56-core read "
+            f"Data pattern changes HBM read throughput and uncore frequency under active package power limiting (STREAMGAP E6). With constant or zero data the 56-core read "
             f"sustains {_span(high.gbs, 0)} GB/s with the uncore at {_span(high.uncore_ghz)} GHz, with random or the thesis data {_span(low.gbs, 0)} GB/s at "
             f"{_span(low.uncore_ghz)} GHz, while the package draws {_span(hbm.pkg_w, 0)} W and has its frequency clipped for power in "
             f"{_span(hbm.power_limited * 100, 0)}% of the PCU cycles in every case. Random-looking data costs more energy per byte (the same power for {_pct(1 - low.gbs.median() / high.gbs.median())} fewer bytes), "
-            "so under the limit the mesh runs slower; per uncore GHz every "
+            "at package scope. Per uncore GHz every "
             f"one of the {len(h)} HBM launches moves {h.per_ghz.min():.0f}–{h.per_ghz.max():.0f} GB/s whatever its data"
             + (f" (including the campaign's first launch, {first.gbs.iloc[0]:.0f} GB/s at {first.pkg_w.iloc[0]:.0f} W after the idle setup)" if len(first) else "")
             + f". DDR shows no dependence: {_span(ddr.gbs, 1)} GB/s for all four patterns, uncore {_span(ddr.uncore_ghz)} GHz, at the same power limit. "
-            "The thesis read ceiling is therefore a random-data figure set by the power limit; model weights are not constants, so it is the relevant one "
-            "(real weights were not tested).",
+            "The pattern intervention establishes a throughput effect at this configuration. The division of power within the package and the limiting mesh or controller resources remain unresolved.",
         ),
     ]
 
@@ -1485,7 +1480,7 @@ def uncore_streams(unc: pd.DataFrame, theory: Theory, ext: pd.DataFrame | None =
             f"after the idle setup the running average over RAPL's {theory.power['pl1_window_s']:.0f}-second window lets it exceed PL1 ({pl1:.0f} W) "
             f"until the average catches up, which here, after the counting session's longer setup, takes into window 2 ({_span(hbm_fw.pkg_w_second, 0)} W)"
             + (f"; in the campaigns without the session window 2 is already sustained (within {_pct(float(second.second_ratio.sub(1).abs().median()), 1)} of windows 3–5 "
-               f"in the median, so Table 1's sustained median, which drops only window 1, moves by at most {_pct(float(second.drop1_over_drop2.sub(1).abs().max()), 1)})"
+               f"in the median, so the sustained estimator dropping only window 1, moves by at most {_pct(float(second.drop1_over_drop2.sub(1).abs().max()), 1)})"
                if second is not None else "")
             + f". DDR streams get the same power burst ({df_.pkg_w_first:.0f} W) without moving more "
             f"(first/rest {df_.gbs_ratio:.3f} for read; {ddr_fw.gbs_ratio.min():.3f}–{ddr_fw.gbs_ratio.max():.3f} over the DDR streams): DDR bandwidth is set by the "
@@ -1573,7 +1568,7 @@ def turbostat_matches_perf(unc: pd.DataFrame) -> list[Claim]:
 def measured_intensity(unc: pd.DataFrame, shape: str = "14336x4096") -> list[Claim]:
     """Measured against modeled intensity of the counted GEMM re-run (Flat controllers)."""
 
-    cg = report.counted_gemm_frame(unc, shape=shape)
+    cg = report.counted_gemm_frame(unc, labels=("u_gemm_conv",), shape=shape)
     cg = cg[cg.memory_mode.eq("flat")] if len(cg) else cg
     if cg.empty:
         return []
@@ -1590,10 +1585,11 @@ def measured_intensity(unc: pd.DataFrame, shape: str = "14336x4096") -> list[Cla
              and hbm.intensity.loc[4096] < 0.4 * hbm.intensity_modeled.loc[4096] and (i8.measured_over_modeled < 1).all()),
         f"Measured at the memory controllers, the 14336×4096 GEMM moves {_span(small.measured_over_modeled)}× the modeled bytes for decode-sized batches "
         f"(M ≤ 64, every precision and layout, both tiers): the modeled intensity is right to within {_pct(1 / small.measured_over_modeled.min() - 1)}, "
-        f"slightly low because a few percent of the weights are served on chip. From M = 128 the library re-reads the weights: plain BF16 moves "
+        f"slightly low, consistent with some on-chip reuse. From M = 128 plain BF16 moves "
         f"{_span(big.measured_over_modeled)}× the modeled bytes, and its measured intensity stops at {_span(hbm.intensity.loc[[1024, 2048, 4096]], 0)} op/B "
         f"(M = 1024–4096) instead of rising to {hbm.intensity_modeled.loc[4096]:.0f}. INT8 at M = 128–512 moves fewer bytes than modeled "
-        f"({_span(i8.measured_over_modeled)}×; its int32 output stays on chip). On the measured axis decode spans {d_lo:.1f}–{d_hi:.0f} op/B and prefill "
+        f"({_span(i8.measured_over_modeled)}×). Extra BF16 traffic is consistent with repeated transfers or packing and scratch traffic. CAS counts aggregate reads and writes without identifying tensors. "
+        f"On the measured axis decode-like batches span {d_lo:.1f}–{d_hi:.0f} op/B and prefill-like batches "
         f"{p_lo:.0f}–{p_hi:.0f} op/B (Flat HBM, BF16), against {hbm.intensity_modeled.loc[256]:.0f}–{hbm.intensity_modeled.loc[4096]:.0f} op/B modeled.",
     )]
 
@@ -1623,11 +1619,11 @@ def decode_energy(ext: pd.DataFrame, thesis: pd.DataFrame, theory: Theory, unc: 
     return [Claim(
         "decode_energy",
         bool(holds),
-        "At the measured streaming rate of a decode step, one Llama-3.1-8B token costs the computing socket (package and DRAM, RAPL) "
-        + "; ".join(parts) + ", and the whole node (both sockets, RAPL) " + "; ".join(node) + f". The package sits at its limit in every case, so the energy per token follows the streaming rate and the DRAM's own "
+        "In the full-parameter streaming scenario at the projection's measured rate, equivalent energy per token at the computing socket (package and DRAM, RAPL) is "
+        + "; ".join(parts) + ", and the whole node (both sockets, RAPL) " + "; ".join(node) + f". The package sits at its limit in every case, and the projected energy per token follows the streaming rate and the DRAM domain's "
         f"power: DDR costs {ddr_b / hbm_b:.1f}× HBM per BF16 token (it streams slower and its DIMMs draw {pw_ddr - pw_hbm:.0f} W more), INT8 needs "
         f"{hbm_i / hbm_b:.2f}× the BF16 energy on HBM, and a model spilled out of the HBM cache costs the most. "
-        "This is the bound if every weight streamed at the 14336×4096 rate; the rest of the model streams slower.",
+        "The conversion assumes a uniform 14336×4096 rate and omits the rest of inference.",
     )]
 
 
@@ -1659,22 +1655,21 @@ def cache_tag_claims(cc: pd.DataFrame, other_launch_gbs: float | None = None, ot
             bool(monotone and r8.hit_rate > 0.85 and r64.hit_rate < 0.6 and r128.hit_rate < 0.2 and rate_vs_hit > 0.8
                  and abs(float(cc.served_over_counted.median()) - 1) < 0.02 and cc.served_over_counted.between(0.95, 1.03).all() and (read.far_gbs > 0).all()
                  and cc.served_over_modeled.between(0.95, 1.05).all() and cc[cc.working_set_gib.eq(8.0)].served_over_modeled.between(0.97, 1.03).all()),
-            "Counted at the memory-side cache's tags (the HBM controllers' lookup events, one 64-byte lookup per line requested), the hit rate of a 56-core read falls steadily with the working set and "
+            "Estimated from base HBM lookup and DDR fill counts, the hit rate of a 56-core read falls steadily with the working set and "
             f"the cache never holds a set that fits it: {_pct(float(r8.hit_rate))} at 8 GiB, "
             + ", ".join(f"{_pct(float(read.hit_rate[g]))} at {g:.0f}" for g in sizes[1:3]) + f", {_pct(float(r64.hit_rate))} at the 64 GiB capacity, "
             f"{_pct(float(read.hit_rate[96.0]))} at 96 and {_pct(float(r128.hit_rate))} at 128 GiB; Triad and non-temporal Triad follow within "
             f"{_pct(float((cc.pivot(index='working_set_gib', columns='kernel', values='hit_rate').sub(read.hit_rate, axis=0)).abs().max().max()))} points. A direct-mapped cache "
             "whose pages land on random physical addresses keeps a page only when no other page of the set shares its slot, e^(−W/64 GiB): "
             + ", ".join(f"{_pct(float(model[g]))}" for g in sizes) + f" at {', '.join(f'{g:.0f}' for g in sizes)} GiB, against the measured "
-            + ", ".join(f"{_pct(float(read.hit_rate[g]))}" for g in sizes) + ": the same decline, a few points higher up to the capacity, so this is the conflict-miss mechanism inferred before, "
-            f"now counted. The rate follows the hit rate (correlation {rate_vs_hit:.2f} for the read kernel): the 56-core read delivers {r8.gbs:.0f} GB/s at 8 GiB and {r64.gbs:.0f} GB/s at the capacity, "
+            + ", ".join(f"{_pct(float(read.hit_rate[g]))}" for g in sizes) + ": the same decline, a few points higher up to the capacity, consistent with the earlier conflict-miss hypothesis. The rate follows the hit rate (correlation {rate_vs_hit:.2f} for the read kernel): the 56-core read delivers {r8.gbs:.0f} GB/s at 8 GiB and {r64.gbs:.0f} GB/s at the capacity, "
             f"with {r8.far_gbs:.0f} and {r64.far_gbs:.0f} GB/s of DDR fills behind them. The cache's served bytes equal the cores' own DRAM line counts: {cc.served_over_counted.median():.3f}× pooled "
             f"({_span(cc.served_over_counted, 3)}× over the {len(cc)} kernel and size points, medians of five 1 s windows), so the earlier Cache points, which used the line counts, stand. Hits plus misses are the lines the kernel requested: {_span(cc.served_over_modeled, 3)}× the modeled bytes over all points and "
             f"{_span(cc[cc.working_set_gib.eq(8.0)].served_over_modeled, 3)}× at the resident 8 GiB point"
             + (" (inside the 0.98–1.02 the plan asked for)." if cc[cc.working_set_gib.eq(8.0)].served_over_modeled.between(0.98, 1.02).all()
                else f" (outside the 0.98–1.02 the plan asked for: the lowest kernel, {cc[cc.working_set_gib.eq(8.0)].sort_values('served_over_modeled').iloc[0].kernel.replace('_', ' ')}, "
                     f"sits {_pct(float(1 - cc[cc.working_set_gib.eq(8.0)].served_over_modeled.min()), 1)} below the model).")
-            + (f" This is one launch: an earlier launch of the same part (`{other_launch}`) placed its pages differently and read {other_launch_gbs:.0f} GB/s at 56 GiB where this one reads "
+            + (f" This is one launch: an earlier launch of the same part (`{other_launch}`) had no equivalent hit counts and read {other_launch_gbs:.0f} GB/s at 56 GiB where this one reads "
                f"{float(read.gbs[56.0]):.0f} (part `ucacherep` repeats it)." if other_launch_gbs else ""),
         ),
         Claim(
@@ -1714,15 +1709,13 @@ def cache_launch_claims(spread: pd.DataFrame, curve: pd.DataFrame) -> list[Claim
     return [Claim(
         "cache_launch_spread",
         bool(hit_range < 0.03 and rate_spread < 0.08 and r56 > 2.5 * now_r56 and inferred > now_h56 + 0.2),
-        f"The hit rate repeats from launch to launch within a day and not between days. Over {counted.campaign_id.nunique()} launches of the same part on hbm13 within two hours, the hit rate of the 56-core read "
+        f"The hit rate repeats within the day. The earlier launch has throughput but lacks a hit measurement. Over {counted.campaign_id.nunique()} launches of the same part on hbm13 within two hours, the hit rate of the 56-core read "
         f"and Triad at 8, 32 and 56 GiB agrees to {100 * float(hit_range):.1f} points at most and the rates to {_pct(float(rate_spread), 1)}: "
         + "; ".join(f"{k} {g:.0f} GiB {_pct(float(h.min()))}–{_pct(float(h.max()))} hit at {r.min():.0f}–{r.max():.0f} GB/s"
                     for (k, g), h, r in ((key, grp.hit_rate, grp.gbs) for key, grp in per) if k == "read") + ". "
         f"The launch of 2026-10-20 (`{';'.join(sorted(earlier.campaign_id.unique()))}`, turbostat only, no tag counters) read {r56:.0f} GB/s at 56 GiB where these read {now_r56:.0f} ({r56 / now_r56:.1f}×) "
         f"and Triad {t56:.0f} against {now_t56:.0f} ({t56 / now_t56:.1f}×): on the rate-against-hit-rate relation of the counted launch, {r56:.0f} GB/s is a hit rate of about {_pct(inferred)} at 56 GiB "
-        f"against {_pct(float(now_h56))} now (an inference, since that launch did not count the tags). That is what a difference in where the node's physical pages happen to lie would do to a direct-mapped "
-        "cache, and it is the explanation the counters now support for the between-campaign spread of Cache mode (claim `campaign_spread`), but the counters cannot show it for the earlier launch: "
-        "a Cache capacity curve is a measurement of the node's page placement as much as of the cache, and near the capacity another day differed by a factor of three here.",
+        f"against {_pct(float(now_h56))} now (an inference, since that launch did not count the tags). Physical-page conflicts are a plausible explanation. The older run lacks direct evidence of its hit rate or page mapping.",
     )]
 
 
@@ -1745,11 +1738,11 @@ def cache_latency_claims(lat: pd.DataFrame, flat_far: pd.DataFrame | None = None
         ddr = flat_far[flat_far.config.eq("flat_ddr")].sort_values("working_set_gib")
         if len(ddr) > 1:
             control = (f" The Flat control, the same chase on plain DDR, rises {ddr.latency_ns.iloc[-1] - ddr.latency_ns.iloc[0]:.0f} ns over the same sizes "
-                       "(claim `latency_translation`), so none of the rise is address translation.")
+                       "(claim `latency_translation`), making translation alone an unlikely explanation.")
     return [Claim(
         "cache_latency_far_counted",
         holds,
-        f"The far-latency rise of Cache mode is the miss rate. A one-core chase over {first.gib:.0f} to {last.gib:.0f} GiB (part `ucachelat`), counted at the memory-side cache with the idle node's background "
+        f"Cache-mode far latency rises with its measured miss fraction. A one-core chase over {first.gib:.0f} to {last.gib:.0f} GiB (part `ucachelat`), counted at the memory-side cache with the idle node's background "
         f"subtracted, hits {_pct(float(first.hit_rate))} of its lookups at {first.gib:.0f} GiB and {_pct(float(last.hit_rate))} at {last.gib:.0f} GiB while its latency rises from {first.latency_ns:.0f} to "
         f"{last.latency_ns:.0f} ns; across the {len(lat)} sizes the latency is a straight line of the miss rate (R² {r2:.3f}): {intercept:.0f} ns when every lookup hits and {slope:.0f} ns more per unit of miss rate, "
         f"so a miss costs about {intercept + slope:.0f} ns against {intercept:.0f} for a hit." + control,
@@ -1776,8 +1769,8 @@ def cache_gemm_claims(gt: pd.DataFrame, cc: pd.DataFrame) -> list[Claim]:
     return [Claim(
         "cache_spilled_gemm_counted",
         holds,
-        f"Counted at the memory-side cache's tags, the decode GEMM (14336×4096, M = 1–64) hits {_span(res.hit_rate.map(lambda x: 100 * x), 0)}% of its lookups with the 16 GiB pool and "
-        f"{_span(spill.hit_rate.map(lambda x: 100 * x), 0)}% with the 96 GiB pool, the same as the streams of the same launch at those sizes ({_pct(float(at16.hit_rate['read']))} for the read kernel at 16 GiB, "
+        f"From base CAS lookup and fill counts, the decode-like GEMM (14336×4096, M = 1–64) hits {_span(res.hit_rate.map(lambda x: 100 * x), 0)}% of its lookups with the 16 GiB pool and "
+        f"{_span(spill.hit_rate.map(lambda x: 100 * x), 0)}% with the 96 GiB pool, close to the streams in the separate capacity launch at those sizes ({_pct(float(at16.hit_rate['read']))} for the read kernel at 16 GiB, "
         f"{_span(at96.hit_rate.map(lambda x: 100 * x), 0)}% for read, Triad and non-temporal Triad at 96 GiB). A higher hit rate is therefore not why a spilled GEMM can out-stream the read-only kernel: "
         f"what differs between the kernels is the DDR fill rate they reach at that hit rate: {fill_rate['read']:.0f} GB/s for the read kernel, {gemm96.far_gbs['bf16']:.0f} for the BF16 GEMM and "
         f"{gemm96.far_gbs['int8']:.0f} for the INT8 one, {fill_rate['triad']:.0f} for Triad, and the delivered rate is that fill rate over the miss rate. The spilled BF16 GEMM moves {gemm96.gbs['bf16']:.0f} GB/s "
@@ -1785,7 +1778,7 @@ def cache_gemm_claims(gt: pd.DataFrame, cc: pd.DataFrame) -> list[Claim]:
         "each kernel keeps DDR busy with fills, not of how often the cache hits. Why a read stream with private arrays and eight accumulators fills DDR more slowly than a GEMM is not in these counters. "
         f"The bytes the cache serves equal the modeled bytes of a decode GEMM to {_span(small.served_over_modeled, 3)}× and the cores' DRAM line counts to {_span(small.served_over_counted, 3)}×, but at M = 256 "
         f"BF16 they are {_span(big.served_over_counted, 2)}× the line counts (consistent with the cores' write estimate over-counting at M = 256, as on Flat) and {_span(big.served_over_modeled, 2)}× the modeled bytes "
-        "(the library re-reads weights): the Cache points of the roofline place prefill batches with the cache's served bytes only where the part `uatlas` was re-run with the Cache counters.",
+        "These counters do not identify which tensors moved. The Cache GEMM atlas uses lookup bytes from `uatlas`.",
     )]
 
 
@@ -1988,16 +1981,16 @@ def energy_flat_vs_cache(unc: pd.DataFrame, theory: Theory) -> list[Claim]:
         holds,
         "Work that touches no memory costs the same energy in both modes: the 56-core compute peaks draw "
         f"{_span(peak_ratio, 3)}× as much energy per operation in Cache mode as in Flat (six ISA paths, computing socket). Memory decides the rest. "
-        f"A decode step (M = 1) costs {d1['Flat HBM']:.1f} J per token on Flat HBM, {d1['Cache, 16 GiB']:.1f} J on Cache with the model resident in the HBM cache "
-        f"({d1['Cache, 16 GiB'] / d1['Flat HBM']:.2f}×), {d1['Flat DDR']:.1f} J on Flat DDR ({d1['Flat DDR'] / d1['Flat HBM']:.2f}×) and {d1['Cache, 96 GiB']:.1f} J when it is "
-        f"spilled ({d1['Cache, 96 GiB'] / d1['Flat HBM']:.2f}×); with both sockets counted {d1n['Flat HBM']:.1f}, {d1n['Cache, 16 GiB']:.1f}, {d1n['Flat DDR']:.1f} and "
+        f"In a uniform full-parameter streaming scenario, M = 1 gives {d1['Flat HBM']:.1f} J per token on Flat HBM, {d1['Cache, 16 GiB']:.1f} J on Cache with a 16 GiB pool "
+        f"({d1['Cache, 16 GiB'] / d1['Flat HBM']:.2f}×), {d1['Flat DDR']:.1f} J on Flat DDR ({d1['Flat DDR'] / d1['Flat HBM']:.2f}×) and {d1['Cache, 96 GiB']:.1f} J at 96 GiB "
+        f" ({d1['Cache, 96 GiB'] / d1['Flat HBM']:.2f}×); with both sockets counted {d1n['Flat HBM']:.1f}, {d1n['Cache, 16 GiB']:.1f}, {d1n['Flat DDR']:.1f} and "
         f"{d1n['Cache, 96 GiB']:.1f} J. From M = 1024 up the configurations are within {_pct(float(spread.max() - 1))} of each other "
-        f"({_span(prefill.stack(), 2)} J per token at the computing socket): prefill is compute-bound and the memory mode no longer matters. "
+        f"({_span(prefill.stack(), 2)} J per token at the computing socket): the tested higher-batch projection is less sensitive to memory tier. "
         f"The FP64 sweep shows the same as an energy roofline: at K = {sweep.x.min():.0f} (the lowest intensity) pJ per operation ranges "
         f"{lo.min():.0f}–{lo.max():.0f} across the four tiers (Flat HBM {lo['Flat HBM']:.0f}, Cache resident {lo['Cache, 16 GiB']:.0f}, Flat DDR {lo['Flat DDR']:.0f}, "
         f"Cache spilled {lo['Cache, 96 GiB']:.0f}), and at K = {sweep.x.max():.0f} they converge to {hi.min():.0f}–{hi.max():.0f} pJ. "
-        "Cache bytes (the intensity axis of the Cache sweep and the Cache GEMM points) are the cores' DRAM line counts until the tag counters are measured; "
-        "the energy figures themselves do not depend on them.",
+        "Cache intensities use lookup bytes for the counted atlas and core offcore-response bytes in the earlier campaigns. "
+        "Energy estimates use the measured time, work and power.",
     )]
 
 
@@ -2108,7 +2101,7 @@ def dual_energy(unc_flat: pd.DataFrame, unc_cache: pd.DataFrame | None, theory: 
         f"{hbm_b.tokens_dual:.1f} tokens/s at {hbm_b.j_per_token_node_dual:.1f} J ({hbm_b.j_per_token_wall_dual:.1f} J at the wall, {hbm_b.j_per_token_node_dyn_dual:.1f} J once the idle floor is out); "
         f"Flat DDR {ddr_b.j_per_token_node_single:.1f} against {ddr_b.j_per_token_node_dual:.1f} J, INT8 on HBM {hbm_i.j_per_token_node_single:.1f} against {hbm_i.j_per_token_node_dual:.1f} J. "
         f"The node figure with both sockets working equals the computing-socket figure of one ({hbm_b.j_per_token_socket_single:.1f} J on HBM BF16, within "
-        f"{_pct(float(((decode.j_per_token_node_dual / decode.j_per_token_socket_single) - 1).abs().max()), 1)} in every decode case): the per-socket energy of notebook 00 Table 5 is the right per-token cost of "
+        f"{_pct(float(((decode.j_per_token_node_dual / decode.j_per_token_socket_single) - 1).abs().max()), 1)} in every decode case): the single-socket energy is close to the dual-socket per-token scenario for "
         f"a node that uses both sockets, and one socket alone costs the node {hbm_b.j_per_token_node_single / hbm_b.j_per_token_node_dual:.2f}× as much. The AMX BF16 peak shows the compute case: "
         f"{peak.rate_dual / 1e3:.0f} TOP/s on two sockets for {peak.node_w_dual:.0f} W against {peak.rate_single / 1e3:.0f} TOP/s for {peak.node_w_single:.0f} W." + cache_text
         + " Tokens per second add only if the two sockets serve independent streams (two replicas); a model sharded across them would add communication this measurement does not include.",

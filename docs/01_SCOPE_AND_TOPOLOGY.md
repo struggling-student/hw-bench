@@ -55,12 +55,4 @@ which energy and counter measurements are possible.
 
 ## What the Roofline means here
 
-Every plotted envelope is an empirical **upper bound** built from separately measured
-bandwidth and compute kernels; it is not a strict bound on every application. Three
-kinds of ceiling are never mixed without saying so: *theoretical* (vendor or derived,
-`configs/theory.toml`), *measured peak* (a dedicated kernel) and *measured achievable*
-(a library GEMM at a representative matrix shape). Operation rates use FLOP/s or
-integer-op/s with a multiply and an add counted as two; intensity is operations per
-modeled byte. HBM hit
-rates, energy and controller-counter traffic are not inferred. See
-[Methods and data](03_METHODS_AND_DATA.md) for the operation and traffic models.
+The empirical envelopes use dedicated bandwidth and compute workloads at the specified scope. Projection figures use useful operations per counted byte and separate BF16 floating-point from INT8 integer throughput. Theoretical references use stated frequency and per-cycle assumptions. Library-achieved rates describe the observed GEMM, including its layout and overhead. See [methods and data](03_METHODS_AND_DATA.md) for the traffic conventions and [the figure selection](THESIS_FIGURES_AND_TABLES.md) for each reference.

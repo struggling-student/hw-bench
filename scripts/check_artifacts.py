@@ -17,6 +17,10 @@ for notebook, names in manifest["figures"].items():
             if not path.exists() or path.stat().st_size < 1000:
                 raise SystemExit(f"Missing or empty export: {path}")
 if args.clean_retired:
+    for notebook, names in manifest.get("retired_notebook_figures", {}).items():
+        for name in names:
+            for fmt in manifest["formats"]:
+                (ROOT / "figures" / notebook / f"{name}.{fmt}").unlink(missing_ok=True)
     for name in manifest["retired_root_figures"]:
         for fmt in ["html", "svg", "png"]:
             (ROOT / "figures" / f"{name}.{fmt}").unlink(missing_ok=True)

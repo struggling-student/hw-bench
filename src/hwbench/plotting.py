@@ -129,6 +129,7 @@ def roofline_figure(
     point_labels: bool = False,
     open_label: str = "hollow: first sweep at M ≤ 32, weight pool too small (bytes overstated)",
     x_title: str = "Operations per byte of memory traffic (modeled)",
+    y_title: str = "TOP/s",
 ):
     """Memory slopes, compute plateaus and achieved points on one log-log plane.
 
@@ -142,7 +143,6 @@ def roofline_figure(
     if x_range is None:
         x_range = _auto_range(compute, memory, points)
     fig = go.Figure()
-    x = np.geomspace(*x_range, 400)
     top = max((c.gops for c in compute), default=1.0)
     for lo, hi, label in regions or []:
         fig.add_vrect(x0=lo, x1=hi, fillcolor=GRID, opacity=0.55, line_width=0, layer="below")
@@ -152,6 +152,9 @@ def roofline_figure(
         )
     for m in memory:
         key = config_key(m.mode or "flat", m.tier)
+        corner = ridge(top, m.gbs)
+        x = sorted({*x_range, *([corner] if x_range[0] < corner < x_range[1] else [])})
+        x = np.array(x)
         slope = np.minimum(m.gbs * x, top)
         where = f" @{m.working_set_gib:.0f} GiB" if m.mode == "cache" and m.working_set_gib else ""
         fig.add_scatter(
@@ -165,28 +168,32 @@ def roofline_figure(
                 f"<br>campaign {m.source_campaign}<extra></extra>"
             ),
         )
-    bandwidths = [m.gbs for m in memory] or [1.0]
+    bandwidths = [m.gbs for m in memory]
     placed: list[tuple[str, float]] = []  # (side, log10 y) of labels already on the right edge
     for c in compute:
         color = PATH_COLORS.get(c.path, INK_2)
-        r_fast, r_slow = ridge(c.gops, max(bandwidths)), ridge(c.gops, min(bandwidths))
+        r_fast, r_slow = ((ridge(c.gops, max(bandwidths)), ridge(c.gops, min(bandwidths)))
+                          if bandwidths else (x_range[0], x_range[0]))
         hover = (
             f"{c.path} ({c.kind})<br>{c.gops / 1000:.2f} TOP/s"
             f"<br>{c.ghz or float('nan'):.2f} GHz · campaign {c.source_campaign}<extra></extra>"
         )
-        if r_slow > r_fast:
+        if max(r_fast, x_range[0]) < min(r_slow, x_range[1]):
             fig.add_scatter(
                 x=[max(r_fast, x_range[0]), min(r_slow, x_range[1])], y=[c.gops / 1000] * 2, mode="lines",
                 line=dict(color=color, width=1.5, dash=KIND_DASH[c.kind]), opacity=0.35, showlegend=False,
                 hovertemplate=hover,
             )
-        fig.add_scatter(
-            x=[max(r_slow, x_range[0]), x_range[1]], y=[c.gops / 1000] * 2, mode="lines",
-            line=dict(color=color, width=2.2, dash=KIND_DASH[c.kind]), showlegend=False, hovertemplate=hover,
-        )
+        if r_slow < x_range[1]:
+            fig.add_scatter(
+                x=[max(r_slow, x_range[0]), x_range[1]], y=[c.gops / 1000] * 2, mode="lines",
+                line=dict(color=color, width=2.2, dash=KIND_DASH[c.kind]), showlegend=False, hovertemplate=hover,
+            )
+        if r_fast >= x_range[1]:
+            continue
         label = {
-            "theoretical": f"{PATH_LABELS.get(c.path, c.path)} vendor at {c.ghz or 0:.1f} GHz {c.gops / 1000:.1f}",
-            "measured_peak": f"{PATH_LABELS.get(c.path, c.path)} {c.gops / 1000:.1f} TOP/s",
+            "theoretical": f"{PATH_LABELS.get(c.path, c.path)} derived at {c.ghz or 0:.1f} GHz {c.gops / 1000:.1f}",
+            "measured_peak": f"{PATH_LABELS.get(c.path, c.path)} {c.gops / 1000:.1f} {y_title}",
             "measured_achievable": f"{PATH_LABELS.get(c.path, c.path)} nn.Linear, plain weights {c.gops / 1000:.1f}",
         }[c.kind]
         ly = np.log10(c.gops / 1000)
@@ -236,7 +243,7 @@ def roofline_figure(
             textfont=dict(size=11, color=INK_2),
             customdata=[[q.bytes_source, q.provenance.get("campaign", "")] for q in members],
             hovertemplate=(
-                "%{text}<br>%{y:.3f} TOP/s · %{x:.2f} op/B<br>%{customdata[0]} · %{customdata[1]}<extra></extra>"
+                f"%{{text}}<br>%{{y:.3f}} {y_title} · %{{x:.2f}} op/B<br>%{{customdata[0]}} · %{{customdata[1]}}<extra></extra>"
             ),
         )
     if any_open:
@@ -244,7 +251,7 @@ def roofline_figure(
             x=[None], y=[None], mode="markers", name=open_label,
             marker=dict(symbol="circle-open", size=9, color=MUTED, line=dict(color=MUTED, width=2)),
         )
-    style(fig, title, x_title, "TOP/s", height)
+    style(fig, title, x_title, y_title, height)
     fig.update_xaxes(type="log", range=[np.log10(x_range[0]), np.log10(x_range[1])], dtick=1, tickformat="~g")
     fig.update_yaxes(type="log", dtick=1, tickformat="~g")
     fig.update_layout(margin=dict(l=85, r=40, t=95, b=125))
@@ -380,6 +387,8 @@ def memory_scaling_figure(read: pd.DataFrame, clock: pd.DataFrame):
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07, row_heights=[0.68, 0.32])
     for cfg in ["flat_ddr", "flat_hbm", "cache"]:
         part = read[read.config.eq(cfg)].sort_values("threads")
+        if part.empty:
+            continue
         clk = clock[clock.config.eq(cfg)].sort_values("threads")
         color = CONFIG_COLORS[cfg]
         fig.add_scatter(
@@ -874,7 +883,7 @@ def cache_power_figure(cs: pd.DataFrame):
     return fig
 
 
-def cache_capacity_counters_figure(cc: pd.DataFrame, capacity_gib: float = 64.0):
+def cache_capacity_counters_figure(cc: pd.DataFrame, capacity_gib: float = 64.0, *, diagnostics: bool = True):
     """Cache mode at 56 cores against the working set: traffic, hit rate, DRAM power, clocks.
 
     ``cc`` is ``report.cache_capacity_table``.  Top left: measured traffic (filled), the kernel's
@@ -886,7 +895,10 @@ def cache_capacity_counters_figure(cc: pd.DataFrame, capacity_gib: float = 64.0)
     """
 
     pkg = f"package {cc.pkg_w.min():.0f}–{cc.pkg_w.max():.0f} W throughout"
-    fig = make_subplots(rows=2, cols=2, subplot_titles=("Traffic", "Hit rate of the memory-side cache", f"DRAM power ({pkg})", "Clocks"),
+    titles = ("Traffic", "Hit rate of the memory-side cache")
+    if diagnostics:
+        titles += (f"DRAM power ({pkg})", "Clocks")
+    fig = make_subplots(rows=2 if diagnostics else 1, cols=2, subplot_titles=titles,
                         horizontal_spacing=0.1, vertical_spacing=0.16)
     color = CONFIG_COLORS["cache"]
     counted_hits = cc.hit_rate.notna().any()
@@ -899,34 +911,39 @@ def cache_capacity_counters_figure(cc: pd.DataFrame, capacity_gib: float = 64.0)
         x = part.working_set_gib
         fig.add_scatter(x=x, y=part.measured_gbs, mode="lines+markers", name=f"{label} · measured", legendgroup=label,
                         line=dict(color=color, width=1.5), marker=marker, row=1, col=1)
-        fig.add_scatter(x=x, y=part.gbs, mode="markers", name=f"{label} · modeled", legendgroup=label,
-                        marker=dict(size=9, symbol=f"{symbol}-open", color=color, line=dict(color=color, width=2)), row=1, col=1)
+        if diagnostics:
+            fig.add_scatter(x=x, y=part.gbs, mode="markers", name=f"{label} · modeled", legendgroup=label,
+                            marker=dict(size=9, symbol=f"{symbol}-open", color=color, line=dict(color=color, width=2)), row=1, col=1)
         if part.far_gbs.notna().any():
             fig.add_scatter(x=x, y=part.far_gbs, mode="lines+markers", name=f"{label} · far (DDR)", legendgroup=label,
                             line=dict(color=CONFIG_COLORS["flat_ddr"], width=1.5, dash="dot"), marker=dict(size=7, symbol=symbol, color=CONFIG_COLORS["flat_ddr"]), row=1, col=1)
         if counted_hits:
             fig.add_scatter(x=x, y=100 * part.hit_rate, mode="lines+markers", name=label, legendgroup=label, showlegend=False,
                             line=dict(color=color, width=1.5), marker=marker, row=1, col=2)
+        if not diagnostics:
+            continue
         fig.add_scatter(x=x, y=part.ram_w, mode="lines+markers", name=f"{label} · DRAM", legendgroup=label, showlegend=False,
                         line=dict(color=color, width=1.5), marker=marker, row=2, col=1)
         fig.add_scatter(x=x, y=part.core_ghz, mode="lines+markers", name=label, legendgroup=label, showlegend=False,
                         line=dict(color=color, width=1.5), marker=marker, row=2, col=2)
         fig.add_scatter(x=x, y=part.uncore_ghz, mode="lines+markers", name=f"{label} · uncore", legendgroup=label, showlegend=False,
                         line=dict(color=MUTED, width=1.5, dash="dot"), marker=dict(size=7, symbol=symbol, color=MUTED), row=2, col=2)
-    if counted_hits:
+    if counted_hits and diagnostics:
         grid = np.geomspace(cc.working_set_gib.min(), cc.working_set_gib.max(), 40)
-        fig.add_scatter(x=grid, y=100 * np.exp(-grid / capacity_gib), mode="lines", name="random placement, e^(−W/C)", showlegend=True,
+        fig.add_scatter(x=grid, y=100 * np.exp(-grid / capacity_gib), mode="lines", name="Illustrative random-placement model", showlegend=True,
                         line=dict(color=MUTED, width=1.5, dash="dash"), row=1, col=2)
-    for row, col in ((1, 1), (1, 2), (2, 1), (2, 2)):
+    style(fig, "Cache mode · 56 cores on socket 0 · dashed line at 64 GiB", "", "", 880 if diagnostics else 540)
+    panels = ((1, 1), (1, 2), (2, 1), (2, 2)) if diagnostics else ((1, 1), (1, 2))
+    for row, col in panels:
         fig.add_vline(x=capacity_gib, line=dict(color=MUTED, width=1, dash="dash"), row=row, col=col)
         fig.update_xaxes(title_text="Working set (GiB)", type="log", tickmode="array", tickvals=[8, 16, 32, 64, 128],
                          ticktext=["8", "16", "32", "64", "128"], row=row, col=col)
-    style(fig, "Cache mode against the working set · 56 cores, socket 0 · dashed line: HBM cache of one socket (64 GiB)", "", "", 880)
     fig.update_yaxes(title_text="GB/s", row=1, col=1)
     fig.update_yaxes(title_text="Lookups that hit (%)", range=[0, 100], row=1, col=2)
-    fig.update_yaxes(title_text="W", row=2, col=1)
-    fig.update_yaxes(title_text="GHz (colour core, grey dotted uncore)", row=2, col=2)
-    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.12, font=dict(size=12)))
+    if diagnostics:
+        fig.update_yaxes(title_text="W", row=2, col=1)
+        fig.update_yaxes(title_text="GHz (colour core, grey dotted uncore)", row=2, col=2)
+    fig.update_layout(legend=dict(orientation="h", x=0, y=-0.21 if not diagnostics else -0.12, font=dict(size=12)))
     return fig
 
 

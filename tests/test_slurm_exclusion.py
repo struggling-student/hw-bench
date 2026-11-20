@@ -1,4 +1,4 @@
-"""Every route into Slurm must keep the Flat node out of reach."""
+"""Cache submissions exclude Flat; the explicit Flat search pins its own node."""
 
 import re
 from pathlib import Path
@@ -43,7 +43,12 @@ def test_every_sbatch_template_pins_partition_exclusion_and_whole_node():
             for line in template.read_text().splitlines()
             if line.startswith("#SBATCH ")
         }
-        assert f"--exclude={FLAT_NODE}" in directives, template
+        if template.name == "bandwidth_search.sbatch":
+            text = template.read_text()
+            assert '"$(hostname -s)" == "${HW_BENCH_SEARCH_NODE}"' in text
+            assert 'HW_BENCH_SEARCH_NODE:?' in text
+        else:
+            assert f"--exclude={FLAT_NODE}" in directives, template
         assert "--partition=cresco8_hbm" in directives, template
         assert "--exclusive" in directives and "--mem=0" in directives, template
 
@@ -54,6 +59,11 @@ def test_every_slurm_invocation_in_scripts_excludes_the_flat_node():
         for line in logical_lines(script):
             if SLURM_COMMANDS.search(line):
                 found += 1
+                if script.name == "submit_bandwidth_search.sh":
+                    assert '--nodelist="${HW_BENCH_SEARCH_NODE}"' in line
+                    assert "--exclusive --mem=0" in line
+                    assert "slurm/bandwidth_search.sbatch" in line
+                    continue
                 assert f"--exclude={FLAT_NODE}" in line.replace('"', ""), (
                     f"{script.name}: Slurm call without --exclude={FLAT_NODE}: {line}"
                 )

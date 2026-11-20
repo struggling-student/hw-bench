@@ -1,5 +1,7 @@
 # Closing the measurement gaps with perf, RAPL and ipmitool on hbm13 and hbm14
 
+This dated plan records what was known before the October 31 runs. See the [final gap plan](EXPERIMENTAL_GAP_PLAN.md) for outcomes and current priorities.
+
 ## Context
 
 Privileged counters (`sudo -n perf stat*`, `turbostat`, `ipmitool sensor`) are now usable on both

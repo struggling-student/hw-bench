@@ -136,6 +136,24 @@ def test_audit_keeps_points_without_a_ceiling():
     assert audit.limiting.iloc[0] == "none" and not audit.exceeds.iloc[0]
 
 
+def test_cache_audit_matches_working_set_and_traffic_basis():
+    memory = [MemoryCeiling("measured_peak", "effective_cache", kernel, gbs, "1S", "cache", pool,
+                            bytes_source=source, source_campaign=campaign)
+              for kernel, gbs, pool, source, campaign in [
+                  ("read", 550, 16, "pmu_ocr", "older"), ("read", 517, 16, "uncore_cas", "counted"),
+                  ("triad", 175, 96, "uncore_cas", "counted"),
+              ]]
+    points = [WorkloadPoint(str(pool), "bf16", "amx_bf16", 200, 1, source, "cache",
+                            scope=scope, memory_target="effective_cache", provenance={"pool_gib": pool})
+              for pool, scope, source in [(16, "1S", "uncore_cas"), (96, "1S", "uncore_cas"),
+                                           (32, "1S", "uncore_cas"), (16, "2S", "uncore_cas"),
+                                           (96, "1S", "pmu_ocr")]]
+    audit = audit_points(points, memory, [])
+    assert audit.ceiling_gbs.iloc[:2].tolist() == [517, 175]
+    assert audit.above_reference.tolist() == [False, True, False, False, False]
+    assert audit.ceiling_gbs.iloc[2:].isna().all()
+
+
 def test_ceilings_on_committed_data_are_the_max_of_their_kernels():
     root = Path(__file__).resolve().parents[1]
     if not (root / "data/processed/measurements.csv").exists():

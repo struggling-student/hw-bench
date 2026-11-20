@@ -1,10 +1,8 @@
-"""Roofline objects: ceilings, workload points, envelope and ridge.
+"""Roofline quantities with stated reference origins and measurement scope.
 
-A ceiling is a bound with a stated origin.  *Theoretical* ceilings come from
-``configs/theory.toml``; *measured peak* ceilings are the best sustained rate a
-dedicated kernel reached; *measured achievable* ceilings come from library
-kernels (oneDNN GEMM) at realistic shapes.  Mixing the three on one plot is
-fine, but never without saying which is which.
+Theoretical references use ``configs/theory.toml``. Measured peaks are rates of
+dedicated kernels, and measured-achievable references describe observed library
+GEMMs. These references can be compared on a plot with their origins identified.
 """
 
 from __future__ import annotations
@@ -62,6 +60,8 @@ class MemoryCeiling:
     source_campaign: str | None = None
     note: str = ""
     cv_percent: float | None = None
+    bytes_source: Literal["modeled", "pmu_ocr", "uncore_cas"] | None = None
+    cores: int | None = None
 
 
 @dataclass
@@ -116,24 +116,33 @@ def audit_points(
 ) -> pd.DataFrame:
     """Compare every achieved point with the roofline built from its own ceilings.
 
-    The bound of a point is ``min(compute, bandwidth * intensity)`` using the ceiling of
-    its memory tier and ISA path.  A point *exceeds* its roofline when it lies above the
-    bound by more than the larger of its own and the ceiling's run-to-run spread
-    (coefficient of variation).  Points whose tier or path has no ceiling are reported
-    with ``bound_gops`` empty rather than dropped.
+    The reference is ``min(compute, bandwidth * intensity)`` with matching tier, mode,
+    scope, traffic basis, Cache working set, and ISA path. Retain the available term
+    if a matching reference for the other term is missing. ``above_reference`` reports
+    every crossing. ``exceeds`` also applies a descriptive tolerance based on the
+    larger within-launch coefficient of variation of the point and limiting reference.
     """
 
     rows = []
     for p in points:
-        mem = next(
-            (m for m in memory if m.tier == p.memory_target and m.mode == p.mode and m.scope == p.scope),
-            None,
-        )
+        pool = p.provenance.get("pool_gib")
+        matching_memory = [
+            m for m in memory
+            if m.tier == p.memory_target and m.mode == p.mode and m.scope == p.scope
+            and (m.bytes_source is None or m.bytes_source == p.bytes_source)
+            and (m.cores is None or p.cores is None or m.cores == p.cores)
+            and (p.mode != "cache" or pool is None or m.working_set_gib is None
+                 or abs(m.working_set_gib - pool) < 0.5)
+        ]
+        if len(matching_memory) > 1:
+            raise ValueError(f"multiple bandwidth references match {p.name}")
+        mem = matching_memory[0] if matching_memory else None
         cmp_ = next(
             (
                 c
                 for c in compute
                 if c.kind == "measured_peak" and c.path == p.isa_path and c.mode == p.mode and c.scope == p.scope
+                and (p.cores is None or p.cores == c.cores)
             ),
             None,
         )
@@ -154,13 +163,19 @@ def audit_points(
                 series=p.provenance.get("series", p.isa_path),
                 intensity=p.intensity,
                 gops=p.gops,
+                bytes_source=p.bytes_source,
+                campaign=p.provenance.get("campaign"),
+                working_set_gib=pool,
                 bandwidth_gbs=p.gops / p.intensity,
                 bound_gops=bound,
                 ceiling_gbs=mem.gbs if mem else math.nan,
                 ceiling_kernel=mem.kernel if mem else "",
+                ceiling_campaign=mem.source_campaign if mem else None,
+                ceiling_working_set_gib=mem.working_set_gib if mem else None,
                 limiting=limiting,
                 ratio=ratio,
                 tolerance_percent=tolerance,
+                above_reference=bool(ratio > 1),
                 exceeds=bool(ratio == ratio and ratio > 1 + tolerance / 100),
                 unconverged=bool(p.provenance.get("open", False)),
             )
@@ -281,7 +296,7 @@ def primary_memory_ceiling(table: pd.DataFrame, mode: str, tier: str, scope: str
         table.memory_mode.eq(mode)
         & table.tier.eq(tier)
         & table.scope.eq(scope)
-        & table.threads.isin([56, 112])
+        & table.threads.eq(112 if scope == "2S" else 56)
     ]
     if part.empty:
         return None
@@ -297,4 +312,7 @@ def primary_memory_ceiling(table: pd.DataFrame, mode: str, tier: str, scope: str
         if pd.isna(best.working_set_gib)
         else float(best.working_set_gib),
         source_campaign=best.campaign_id,
+        cv_percent=None if pd.isna(best.cv_percent) else float(best.cv_percent),
+        bytes_source="modeled",
+        cores=int(best.threads),
     )

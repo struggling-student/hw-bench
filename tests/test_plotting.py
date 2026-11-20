@@ -33,7 +33,7 @@ def test_roofline_labels_ceilings_on_the_line_and_keeps_symbols_per_series():
     ]
     fig = plotting.roofline_figure(compute, memory, points)
     texts = [a.text for a in fig.layout.annotations]
-    assert any("AMX BF16 100.0 TOP/s" in t for t in texts) and any("vendor at 1.9 GHz" in t for t in texts)
+    assert any("AMX BF16 100.0 TOP/s" in t for t in texts) and any("derived at 1.9 GHz" in t for t in texts)
     symbols = {t.name: t.marker.symbol for t in fig.data if t.mode == "markers" and t.name}
     assert len(set(symbols.values())) == 1  # same series, same symbol on both tiers
     unnamed = [t for t in fig.data if t.mode == "lines" and t.name is None]

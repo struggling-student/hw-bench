@@ -63,6 +63,14 @@ def test_phase_regions_need_both_ends():
     assert report.measured_phase_regions(frame) == []
 
 
+def test_phase_regions_include_interior_extrema():
+    frame = report.counted_gemm_frame(pd.DataFrame([
+        _row(m=m, operations=1e11 * intensity, ctrl_bytes=1e11)
+        for m, intensity in [(1, 1), (16, 16), (256, 182), (1024, 507), (4096, 483)]
+    ]))
+    assert report.measured_phase_regions(frame, pad=1)[1] == (182, 507, "prefill")
+
+
 def test_measured_ceiling_and_fallback():
     stream = dict(benchmark="stream_read", notes="u1_read", working_set_bytes=8 * 2**30, dtype=None, n=0, k=0, m=0)
     d = pd.DataFrame([_row(**stream, ctrl_bytes=5.46e11, elapsed_seconds=1.0), _row(**stream, ctrl_bytes=5.40e11, elapsed_seconds=1.0)])
@@ -72,3 +80,15 @@ def test_measured_ceiling_and_fallback():
         report.measured_memory_ceiling(d, "flat", "ddr")
     with pytest.raises(LookupError):
         report.measured_memory_ceiling(d, "cache", "effective_cache")
+
+
+def test_cache_stream_reference_prefers_cas_over_a_faster_older_ocr_launch():
+    stream = dict(memory_mode="cache", memory_target="effective_cache", benchmark="stream_read",
+                  notes="u3_read_capacity", working_set_bytes=16 * 2**30)
+    d = pd.DataFrame([_row(**stream, counted_bytes=5.52e11, campaign_id="old"),
+                      _row(**stream, served_bytes=5.17e11, campaign_id="new")])
+    c = report.measured_memory_ceiling(d, "cache", "effective_cache", gib=16)
+    assert c.gbs == pytest.approx(517) and c.bytes_source == "uncore_cas" and c.source_campaign == "new"
+    with pytest.raises(LookupError):
+        report.measured_memory_ceiling(d, "cache", "effective_cache", gib=16,
+                                       campaign="old", bytes_source="uncore_cas")
